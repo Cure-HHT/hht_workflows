@@ -1,0 +1,256 @@
+name: Slack notify (route by event/env, post via bot token)
+description: >
+  Looks up a routing key (event[, env]) in the caller's slack-channels.yml,
+  resolves channel name(s) -> channel ID(s) via Slack conversations.list,
+  self-joins each public channel (idempotent), and posts a chat.postMessage
+  to each. Supports single-channel or multi-channel fan-out (leaf may be a
+  string or a list). Designed to be called from any Cure-HHT repo whose
+  workflow has already done actions/checkout (so slack-channels.yml is on
+  disk).
+
+  Required Slack bot scopes on the supplied token:
+    - chat:write
+    - channels:read   (conversations.list)
+    - channels:join   (conversations.join — public channel self-heal)
+    - groups:read     (only if any routed channel is private)
+
+inputs:
+  event:
+    description: >
+      Top-level routing key (e.g. deploy-success, deploy-failure,
+      android-build-success, maintenance-overdue). Looked up in the
+      routing-file's `routing` map.
+    required: true
+  env:
+    description: >
+      Optional sub-key for per-environment routing (e.g. dev, qa, uat,
+      prod). When provided, the lookup is routing.<event>.<env>; when
+      omitted, the lookup is routing.<event> (flat).
+    required: false
+    default: ""
+  text:
+    description: Slack mrkdwn message body. Caller composes mention prefix.
+    required: true
+  slack-token:
+    description: Slack bot OAuth token (xoxb-...).
+    required: true
+  routing-file:
+    description: Path to routing YAML, relative to caller's workspace.
+    required: false
+    default: .github/slack-channels.yml
+
+outputs:
+  channel-ids:
+    description: Comma-separated list of channel IDs the message was posted to.
+    value: ${{ steps.post.outputs.channel-ids }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve route, self-join, and post
+      id: post
+      shell: bash
+      env:
+        EVENT: ${{ inputs.event }}
+        ENV_KEY: ${{ inputs.env }}
+        TEXT: ${{ inputs.text }}
+        SLACK_TOKEN: ${{ inputs.slack-token }}
+        ROUTING_FILE: ${{ inputs.routing-file }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$ROUTING_FILE" ]; then
+          echo "::error::routing-file '$ROUTING_FILE' not found in caller workspace. Did the caller run actions/checkout?"
+          exit 1
+        fi
+
+        # PyYAML — same pattern as validate-build-paths.yml in the
+        # callisto repo. --user bypasses PEP 668's externally-managed
+        # marker on ubuntu-latest. yq's runner preinstall is undocumented
+        # and image-version-dependent, so we don't depend on it.
+        pip install --user --quiet pyyaml
+
+        # 1. Resolve the routing leaf to a list of role keys.
+        # The leaf can be a string (single channel) or a list (fan-out).
+        # We normalize to a JSON array for the rest of the step.
+        ROLE_KEYS_JSON=$(python3 -c '
+        import json, sys, yaml
+        path, event, env_key = sys.argv[1], sys.argv[2], sys.argv[3]
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        routing = (data.get("routing") or {}).get(event)
+        if routing is None:
+            print(json.dumps({"error": f"event '\''{event}'\'' not found in routing"}))
+            sys.exit(0)
+        if env_key:
+            if not isinstance(routing, dict):
+                print(json.dumps({"error": f"event '\''{event}'\'' is not env-keyed but env='\''{env_key}'\'' was given"}))
+                sys.exit(0)
+            leaf = routing.get(env_key)
+            if leaf is None:
+                print(json.dumps({"error": f"no entry for env '\''{env_key}'\'' under event '\''{event}'\''"}))
+                sys.exit(0)
+        else:
+            if isinstance(routing, dict):
+                print(json.dumps({"error": f"event '\''{event}'\'' is env-keyed but no env was given"}))
+                sys.exit(0)
+            leaf = routing
+        keys = leaf if isinstance(leaf, list) else [leaf]
+        print(json.dumps({"keys": keys}))
+        ' "$ROUTING_FILE" "$EVENT" "$ENV_KEY")
+
+        if echo "$ROLE_KEYS_JSON" | jq -e '.error' >/dev/null 2>&1; then
+          err=$(echo "$ROLE_KEYS_JSON" | jq -r '.error')
+          echo "::error::Routing resolution failed in $ROUTING_FILE: $err"
+          exit 1
+        fi
+
+        # 2. Resolve each role key to a channel name via the
+        # `channels:` map.
+        CHANNEL_NAMES_JSON=$(python3 -c '
+        import json, sys, yaml
+        path, role_keys_json = sys.argv[1], sys.argv[2]
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        channels = data.get("channels") or {}
+        keys = json.loads(role_keys_json).get("keys", [])
+        out = []
+        missing = []
+        for k in keys:
+            v = channels.get(k)
+            if not v:
+                missing.append(k)
+            else:
+                # Strip leading "#" — Slack API matches by bare name.
+                out.append(v.lstrip("#"))
+        print(json.dumps({"names": out, "missing": missing}))
+        ' "$ROUTING_FILE" "$ROLE_KEYS_JSON")
+
+        if [ "$(echo "$CHANNEL_NAMES_JSON" | jq -r '.missing | length')" != "0" ]; then
+          missing=$(echo "$CHANNEL_NAMES_JSON" | jq -r '.missing | join(", ")')
+          echo "::error::Role key(s) missing from channels map in $ROUTING_FILE: $missing"
+          exit 1
+        fi
+
+        CHANNEL_NAMES=$(echo "$CHANNEL_NAMES_JSON" | jq -r '.names[]')
+
+        # 3. Resolve channel name -> channel ID via Slack
+        # conversations.list. Cache the channel list once per step rather
+        # than once per fan-out target (avoids re-paginating). Bot needs
+        # channels:read (and groups:read for private channels).
+        all_channels_json=$(mktemp)
+        echo "[]" > "$all_channels_json"
+
+        cursor=""
+        while :; do
+          url='https://slack.com/api/conversations.list?limit=200&types=public_channel,private_channel'
+          if [ -n "$cursor" ]; then
+            url="${url}&cursor=$(printf '%s' "$cursor" | jq -sRr @uri)"
+          fi
+          resp=$(curl -sS --max-time 15 \
+            -H "Authorization: Bearer $SLACK_TOKEN" "$url")
+
+          # Validate JSON before invoking jq. Transient non-JSON
+          # (proxy 502 HTML, empty body, rate-limit page) would
+          # otherwise crash with a raw jq parse error rather than a
+          # controlled ::error::.
+          if ! printf '%s' "$resp" | jq -e . >/dev/null 2>&1; then
+            echo "::error::Slack conversations.list returned non-JSON response (transient proxy or empty body?)."
+            echo "Response head: $(printf '%s' "$resp" | head -c 200)"
+            exit 1
+          fi
+
+          if [ "$(echo "$resp" | jq -r '.ok')" != "true" ]; then
+            err=$(echo "$resp" | jq -r '.error // "unknown"')
+            echo "::error::Slack conversations.list failed: $err. Bot may need 'channels:read' (and 'groups:read' for private channels). Reinstall the app at api.slack.com/apps after adding."
+            exit 1
+          fi
+
+          # Append this page's channels to the cache.
+          jq -s '.[0] + .[1].channels' "$all_channels_json" \
+            <(echo "$resp") > "${all_channels_json}.next"
+          mv "${all_channels_json}.next" "$all_channels_json"
+
+          cursor=$(echo "$resp" | jq -r '.response_metadata.next_cursor // ""')
+          [ -z "$cursor" ] && break
+        done
+
+        # 4. For each target channel name, look up its ID, self-join,
+        # and post.
+        posted_ids=()
+        while IFS= read -r name; do
+          [ -z "$name" ] && continue
+          channel_id=$(jq -r --arg n "$name" \
+            '.[] | select(.name == $n) | .id' "$all_channels_json" \
+            | head -n1)
+
+          if [ -z "$channel_id" ]; then
+            echo "::error::Channel '#$name' not found in any conversations.list page. Renamed/deleted, or bot's app not installed in this workspace?"
+            exit 1
+          fi
+
+          # Idempotent public-channel self-join. Private channels
+          # need a one-time /invite — conversations.join doesn't
+          # apply to them. We tolerate "method_not_supported_for_channel_type"
+          # so private-channel callers don't fail here.
+          join_resp=$(curl -sS --max-time 15 -X POST \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "channel=$channel_id" \
+            'https://slack.com/api/conversations.join')
+
+          if ! printf '%s' "$join_resp" | jq -e . >/dev/null 2>&1; then
+            echo "::error::Slack conversations.join returned non-JSON response."
+            echo "Response head: $(printf '%s' "$join_resp" | head -c 200)"
+            exit 1
+          fi
+
+          join_ok=$(echo "$join_resp" | jq -r '.ok')
+          if [ "$join_ok" != "true" ]; then
+            join_err=$(echo "$join_resp" | jq -r '.error // "unknown"')
+            case "$join_err" in
+              method_not_supported_for_channel_type|already_in_channel)
+                : # ok — private channel or already member
+                ;;
+              *)
+                echo "::error::Slack conversations.join failed for #$name ($channel_id): $join_err"
+                exit 1
+                ;;
+            esac
+          fi
+
+          # 5. Post the message. We pass payload as JSON to preserve
+          # newlines and avoid bash quoting issues with mrkdwn.
+          payload=$(jq -n \
+            --arg ch "$channel_id" \
+            --arg txt "$TEXT" \
+            '{channel: $ch, text: $txt}')
+
+          post_resp=$(curl -sS --max-time 15 -X POST \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data "$payload" \
+            'https://slack.com/api/chat.postMessage')
+
+          if ! printf '%s' "$post_resp" | jq -e . >/dev/null 2>&1; then
+            echo "::error::Slack chat.postMessage returned non-JSON response."
+            echo "Response head: $(printf '%s' "$post_resp" | head -c 200)"
+            exit 1
+          fi
+
+          post_ok=$(echo "$post_resp" | jq -r '.ok')
+          if [ "$post_ok" != "true" ]; then
+            post_err=$(echo "$post_resp" | jq -r '.error // "unknown"')
+            echo "::error::Slack chat.postMessage failed for #$name ($channel_id): $post_err"
+            exit 1
+          fi
+
+          echo "Posted to #$name ($channel_id)"
+          posted_ids+=("$channel_id")
+        done <<< "$CHANNEL_NAMES"
+
+        # CSV-join posted IDs for the action output. Subshell so the
+        # IFS change doesn't leak into anything that runs after.
+        ( IFS=,; echo "channel-ids=${posted_ids[*]:-}" >> "$GITHUB_OUTPUT" )
+
+        rm -f "$all_channels_json"
