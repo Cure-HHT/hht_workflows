@@ -100,6 +100,20 @@ Pin to `@main` for auto-update (a fix in this repo lands in all
 consumers on their next workflow run). Pin to `@<commit-sha>` or
 `@<tag>` if you need stability against unintended changes here.
 
+## Related Repos
+
+| Repo | What it holds |
+| --- | --- |
+| `hht_workflows` (this repo, public) | Shared GitHub Actions composite actions; required-check workflows |
+| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) (private) | Org-wide GCP infrastructure (Terraform, IAM, service accounts); customer-identifying configuration |
+
+### Current consumers
+
+| Repo | Visibility | Wired up |
+| --- | --- | --- |
+| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) | private | 2026-05-09 (CUR-1317) |
+| [`event_sourcing`](https://github.com/Cure-HHT/event_sourcing) | public | 2026-05-09 (CUR-1317) |
+
 ## License
 
 AGPLv3 — see [LICENSE](LICENSE).
