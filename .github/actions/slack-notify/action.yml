@@ -29,8 +29,22 @@ inputs:
     required: false
     default: ""
   text:
-    description: Slack mrkdwn message body. Caller composes mention prefix.
+    description: >
+      Slack mrkdwn message body. Caller composes mention prefix.
+      Always sent — when `blocks` is also provided, this becomes the
+      notification fallback / accessibility text per Slack's
+      recommended pattern, while `blocks` controls in-channel rendering.
     required: true
+  blocks:
+    description: >
+      Optional Slack Block Kit `blocks` payload as a JSON-encoded
+      string (e.g. `'[{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]'`).
+      When provided, the post uses this for in-channel rendering and
+      keeps `text` as the notification fallback. Use this for
+      structured content (Block Kit table, rich_text, dividers, etc.)
+      where mrkdwn alone is too limited.
+    required: false
+    default: ""
   slack-token:
     description: Slack bot OAuth token (xoxb-...).
     required: true
@@ -54,6 +68,7 @@ runs:
         EVENT: ${{ inputs.event }}
         ENV_KEY: ${{ inputs.env }}
         TEXT: ${{ inputs.text }}
+        BLOCKS: ${{ inputs.blocks }}
         SLACK_TOKEN: ${{ inputs.slack-token }}
         ROUTING_FILE: ${{ inputs.routing-file }}
       run: |
@@ -221,10 +236,31 @@ runs:
 
           # 5. Post the message. We pass payload as JSON to preserve
           # newlines and avoid bash quoting issues with mrkdwn.
-          payload=$(jq -n \
-            --arg ch "$channel_id" \
-            --arg txt "$TEXT" \
-            '{channel: $ch, text: $txt}')
+          # When `blocks` is provided we send `text` + `blocks` together:
+          # `blocks` controls in-channel rendering while `text` is Slack's
+          # documented notification fallback / accessibility string. Validate
+          # the blocks JSON up front so a malformed payload fails this step
+          # with a clear error rather than crashing inside jq.
+          if [ -n "$BLOCKS" ]; then
+            if ! printf '%s' "$BLOCKS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              # Single quotes around 'blocks' rather than backticks — a
+              # backtick in a double-quoted bash string is command
+              # substitution and would try to execute `blocks`.
+              echo "::error::'blocks' input must be a JSON-encoded array (got something else or invalid JSON)."
+              echo "First 200 chars: $(printf '%s' "$BLOCKS" | head -c 200)"
+              exit 1
+            fi
+            payload=$(jq -n \
+              --arg ch "$channel_id" \
+              --arg txt "$TEXT" \
+              --argjson blks "$BLOCKS" \
+              '{channel: $ch, text: $txt, blocks: $blks}')
+          else
+            payload=$(jq -n \
+              --arg ch "$channel_id" \
+              --arg txt "$TEXT" \
+              '{channel: $ch, text: $txt}')
+          fi
 
           post_resp=$(curl -sS --max-time 15 -X POST \
             -H "Authorization: Bearer $SLACK_TOKEN" \

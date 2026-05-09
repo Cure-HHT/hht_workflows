@@ -27,13 +27,14 @@ secret rotation.
 
 ## Inputs
 
-| Name           | Required | Default                          | Purpose                                                                                |
-|----------------|----------|----------------------------------|----------------------------------------------------------------------------------------|
-| `event`        | yes      | —                                | Top-level routing key in `routing.<event>`.                                            |
-| `env`          | no       | `""`                             | Sub-key for per-environment routing (`routing.<event>.<env>`).                         |
-| `text`         | yes      | —                                | Slack mrkdwn body. Caller composes `@here`/`@channel` mentions and any URLs.           |
-| `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                          |
-| `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                   |
+| Name           | Required | Default                          | Purpose                                                                                                                       |
+|----------------|----------|----------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `event`        | yes      | —                                | Top-level routing key in `routing.<event>`.                                                                                   |
+| `env`          | no       | `""`                             | Sub-key for per-environment routing (`routing.<event>.<env>`).                                                                |
+| `text`         | yes      | —                                | Slack mrkdwn body. When `blocks` is also supplied, this becomes the notification fallback / accessibility text.               |
+| `blocks`       | no       | `""`                             | Optional Slack Block Kit `blocks` JSON string. When present, controls in-channel rendering; `text` is kept as the fallback.   |
+| `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                                                                 |
+| `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                                                          |
 
 ## Outputs
 
@@ -103,6 +104,28 @@ For an event with no env axis (e.g. android-build-success), simply omit
   with:
     event: android-build-success
     text: ":robot_face: Android build deployed: ..."
+    slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+```
+
+For richer rendering — Block Kit table, dividers, rich_text, etc. —
+pass `blocks` as a JSON string. `text` is still required and is sent
+as the notification fallback / accessibility string. The action
+validates that `blocks` parses as a JSON array before posting:
+
+```yaml
+- uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<sha>
+  with:
+    event: deploy-success
+    env: ${{ inputs.sponsor-env }}
+    text: "Cloud Run Deploy Succeeded — see Slack for details"
+    blocks: |
+      [
+        {"type":"section","text":{"type":"mrkdwn","text":"*Cloud Run Deploy Succeeded*"}},
+        {"type":"table","rows":[
+          [{"type":"raw_text","text":"env"},     {"type":"raw_text","text":"qa"}],
+          [{"type":"raw_text","text":"version"}, {"type":"raw_text","text":"1.0.26"}]
+        ]}
+      ]
     slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
 
