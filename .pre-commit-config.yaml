@@ -26,12 +26,15 @@ repos:
         args: [--maxkb=500]
 
   # Secret scanning — same gitleaks version pinned in
-  # secrets-scan/action.yml. Catches secrets locally before they ever
-  # reach a PR.
+  # .github/actions/secrets-scan/action.yml. Runs at both pre-commit
+  # (catch secrets while editing) and pre-push (last line of defence
+  # before they reach a remote, including for force-pushes that
+  # bypass per-commit hooks).
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.29.0
     hooks:
       - id: gitleaks
+        stages: [pre-commit, pre-push]
 
   # Markdown linting — keep README and docs consistent.
   - repo: https://github.com/igorshubovych/markdownlint-cli
