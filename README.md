@@ -107,6 +107,48 @@ Pin to `@main` for auto-update (a fix in this repo lands in all
 consumers on their next workflow run). Pin to `@<commit-sha>` or
 `@<tag>` if you need stability against unintended changes here.
 
+## Local hooks (pre-commit framework)
+
+This repo and its consumers standardize on the
+[pre-commit framework](https://pre-commit.com) for local git hooks.
+Hook configuration is in `.pre-commit-config.yaml`; thin wrappers in
+`.githooks/` invoke the framework via `core.hooksPath`. Cure-HHT-specific
+hooks that aren't appropriate for a public hooks repo live in `hooks/`
+(currently empty; will be populated as cross-cutting needs emerge).
+
+### Setup
+
+After cloning, run once per clone:
+
+```sh
+scripts/setup.sh
+```
+
+This sets `core.hooksPath = .githooks` (shared across all worktrees of
+the clone) and pre-populates the hook environments. It requires
+`pre-commit` on PATH; if absent, the script prints install instructions
+and exits.
+
+### What runs
+
+- `pre-commit/pre-commit-hooks` — trailing-whitespace, end-of-file-fixer, check-merge-conflict, check-yaml, check-added-large-files
+- `gitleaks/gitleaks` — secret scanning (mirrors the org-required CI Security check)
+- `igorshubovych/markdownlint-cli` — markdown linting
+- `rhysd/actionlint` — GitHub Actions YAML validation
+
+### Manual run
+
+```sh
+pre-commit run --all-files       # everything
+pre-commit run gitleaks          # one hook
+```
+
+### Bypass (NOT recommended)
+
+```sh
+git commit --no-verify
+```
+
 ## Related Repos
 
 | Repo | What it holds |
