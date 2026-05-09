@@ -19,8 +19,15 @@ ruleset's required status checks:
 | [`secrets-scan`](.github/actions/secrets-scan/) | `Security - Check for Secrets` |
 | [`validation-summary`](.github/actions/validation-summary/) | `Validation Summary` |
 
-Each composite action is paired with a thin wrapper workflow that
-dogfoods it on this repo's own PRs.
+Each of these is paired with a thin wrapper workflow that dogfoods it
+on this repo's own PRs.
+
+Plus one notification action consumed *inside* deploy/build workflows
+(not a required check, no wrapper here — see its README for usage):
+
+| Action | Purpose |
+| --- | --- |
+| [`slack-notify`](.github/actions/slack-notify/) | Resolves channel routing from caller's `slack-channels.yml` and posts via Slack `chat.postMessage` |
 
 ## Consuming from another Cure-HHT repo
 
