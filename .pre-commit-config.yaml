@@ -1,0 +1,48 @@
+# Pre-commit hooks for cure-hht/hht_workflows.
+#
+# This repo is the canonical home for shared Cure-HHT-specific hooks
+# (the `hooks/` directory; currently empty pending the first cross-cutting
+# hook). Other Cure-HHT repos pull their hook list from a mix of public
+# pre-commit-hooks repos and (in time) `hooks/` here.
+#
+# Setup:
+#   scripts/setup.sh      # configures core.hooksPath and warms cache
+#
+# Manual run:
+#   pre-commit run --all-files
+
+default_stages: [pre-commit]
+
+repos:
+  # Universal hygiene — formatting + obvious-foot-gun guards.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+  # Secret scanning — same gitleaks version pinned in
+  # secrets-scan/action.yml. Catches secrets locally before they ever
+  # reach a PR.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.29.0
+    hooks:
+      - id: gitleaks
+
+  # Markdown linting — keep README and docs consistent.
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.42.0
+    hooks:
+      - id: markdownlint
+        args: [--ignore, .github/]
+
+  # GitHub Actions YAML validation — catches workflow syntax errors,
+  # bad expressions, missing inputs, etc. before push.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
