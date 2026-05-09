@@ -1,0 +1,54 @@
+# Security - Check for Secrets — composite action.
+#
+# Runs gitleaks against the consumer repo's full git history.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file).
+# Consumer repos invoke this from a thin workflow wrapper:
+#   uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@main
+# The wrapper sets the job's `name:` to "Security - Check for Secrets"
+# so the resulting check matches the org-level ruleset's required
+# context.
+
+name: 'Security - Check for Secrets'
+description: 'Scan repository history for committed secrets via gitleaks'
+
+inputs:
+  gitleaks-version:
+    description: 'Gitleaks version (override default pin)'
+    required: false
+    default: '8.29.0'
+
+runs:
+  using: 'composite'
+  steps:
+    # Caller must `actions/checkout@v4` with `fetch-depth: 0` before
+    # invoking this action — gitleaks needs full history to scan.
+    - name: Install gitleaks
+      shell: bash
+      env:
+        GITLEAKS_VERSION: ${{ inputs.gitleaks-version }}
+      run: |
+        set -euo pipefail
+        for i in 1 2 3; do
+          if wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"; then
+            break
+          fi
+          echo "Download attempt $i failed, retrying..."
+          sleep 5
+        done
+        tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        sudo mv gitleaks /usr/local/bin/
+        rm "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        gitleaks version
+
+    - name: Scan for secrets
+      shell: bash
+      run: |
+        set -euo pipefail
+        if gitleaks detect --verbose --no-banner --redact --log-level info; then
+          echo "No secrets detected"
+        else
+          echo "::error::Gitleaks detected secrets in the repository"
+          echo "Remove all secrets before merging. Use Doppler / env vars."
+          exit 1
+        fi

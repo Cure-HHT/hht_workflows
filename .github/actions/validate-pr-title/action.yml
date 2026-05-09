@@ -1,0 +1,41 @@
+# Validate PR Title — composite action.
+#
+# Asserts that the PR title contains the required traceability prefix
+# (`[CUR-XXX]` or `[Dependabot]`). Squash-merges use the PR title
+# verbatim as the main-branch commit subject, so this guards downstream
+# traceability across the org.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file).
+# Consumer repos invoke this from a thin workflow wrapper:
+#   uses: Cure-HHT/hht_workflows/.github/actions/validate-pr-title@main
+# The wrapper sets the job's `name:` to "Validate PR Title" so the
+# resulting check matches the org-level ruleset's required context.
+
+name: 'Validate PR Title'
+description: 'Assert PR title contains [CUR-XXX] or [Dependabot] traceability prefix'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate PR title
+      shell: bash
+      env:
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+      run: |
+        set -euo pipefail
+        echo "PR #${PR_NUMBER}: ${PR_TITLE}"
+
+        if echo "$PR_TITLE" | grep -qE '\[CUR-[0-9]+\]|\[Dependabot\]'; then
+          echo "PR title contains accepted prefix ([CUR-XXX] or [Dependabot])"
+          exit 0
+        fi
+
+        echo "::error::PR title missing [CUR-XXX] reference"
+        echo ""
+        echo "Squash merge uses the PR title verbatim as the commit message."
+        echo "Required format: [CUR-XXX] Description of changes"
+        echo "(Dependabot-authored PRs may use the [Dependabot] prefix instead.)"
+        echo "Edit the PR title at: ${PR_URL}"
+        exit 1
