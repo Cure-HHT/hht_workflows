@@ -8,11 +8,17 @@ description: >
   workflow has already done actions/checkout (so slack-channels.yml is on
   disk).
 
+  When the event is a deploy-success (or `pin: true` is set explicitly),
+  the posted message is also pinned in the channel and the bot's previous
+  pinned message for the same (repo, event_type) is unpinned, so the
+  channel's pin slot always reflects the current deployed version per env.
+
   Required Slack bot scopes on the supplied token:
     - chat:write
     - channels:read   (conversations.list)
     - channels:join   (conversations.join — public channel self-heal)
     - groups:read     (only if any routed channel is private)
+    - pins:write      (only when pinning is enabled — see `pin` input)
 
 inputs:
   event:
@@ -45,6 +51,17 @@ inputs:
       where mrkdwn alone is too limited.
     required: false
     default: ""
+  pin:
+    description: >
+      Pin the posted message in the channel and unpin the bot's prior
+      pinned message for the same (repo, event_type). Default ("") is
+      auto-on when `event` matches `deploy-success` or
+      `deploy-success-*`; set to "true" or "false" to override.
+      Requires `pins:write` on the bot token. Pin/unpin errors are
+      soft-failed (::warning::) so a Slack-side hiccup never turns a
+      successful deploy red.
+    required: false
+    default: ""
   slack-token:
     description: Slack bot OAuth token (xoxb-...).
     required: true
@@ -57,6 +74,19 @@ outputs:
   channel-ids:
     description: Comma-separated list of channel IDs the message was posted to.
     value: ${{ steps.post.outputs.channel-ids }}
+  message-tss:
+    description: >
+      Comma-separated chat.postMessage `ts` values, in the same order as
+      `channel-ids`. Useful for follow-up Slack API calls (threading,
+      reactions, etc.).
+    value: ${{ steps.post.outputs.message-tss }}
+  pin-status:
+    description: >
+      Comma-separated per-channel pin outcome, aligned with
+      `channel-ids`. One of `pinned`, `skipped` (pinning disabled for
+      this call), or `soft-failed` (pinning attempted but the Slack
+      API returned an error; deploy stays green).
+    value: ${{ steps.post.outputs.pin-status }}
 
 runs:
   using: composite
@@ -69,6 +99,7 @@ runs:
         ENV_KEY: ${{ inputs.env }}
         TEXT: ${{ inputs.text }}
         BLOCKS: ${{ inputs.blocks }}
+        PIN_INPUT: ${{ inputs.pin }}
         SLACK_TOKEN: ${{ inputs.slack-token }}
         ROUTING_FILE: ${{ inputs.routing-file }}
       run: |
@@ -149,7 +180,61 @@ runs:
 
         CHANNEL_NAMES=$(echo "$CHANNEL_NAMES_JSON" | jq -r '.names[]')
 
-        # 3. Resolve channel name -> channel ID via Slack
+        # 3. Decide whether to pin. Empty PIN_INPUT means "auto": on
+        # for events matching deploy-success or deploy-success-*; off
+        # otherwise. Explicit "true"/"false" overrides.
+        case "$PIN_INPUT" in
+          "")
+            if printf '%s' "$EVENT" | grep -qE '^deploy-success(-.*)?$'; then
+              PIN_ENABLED=true
+            else
+              PIN_ENABLED=false
+            fi
+            ;;
+          true)  PIN_ENABLED=true ;;
+          false) PIN_ENABLED=false ;;
+          *)
+            echo "::error::'pin' input must be 'true', 'false', or empty (got '$PIN_INPUT')."
+            exit 1
+            ;;
+        esac
+
+        # When pinning, derive a stable Slack metadata `event_type`
+        # scoped per-(repo, env) so the "previous pin" we unpin is
+        # unambiguous even if two repos route to the same channel.
+        # Slack requires event_type to be alphanumeric + underscores,
+        # <=50 chars; we sanitize the repo name's basename
+        # (Cure-HHT/hht_diary_callisto -> hht_diary_callisto).
+        EVENT_TYPE_META=""
+        EVENT_PAYLOAD_JSON=""
+        if [ "$PIN_ENABLED" = "true" ]; then
+          repo_slug=$(printf '%s' "${GITHUB_REPOSITORY##*/}" \
+            | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+          env_suffix=""
+          if [ -n "$ENV_KEY" ]; then
+            env_slug=$(printf '%s' "$ENV_KEY" \
+              | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+            env_suffix="_${env_slug}"
+          fi
+          EVENT_TYPE_META="deploy_success_${repo_slug}${env_suffix}"
+          if [ ${#EVENT_TYPE_META} -gt 50 ]; then
+            echo "::warning::Derived Slack metadata event_type '$EVENT_TYPE_META' exceeds Slack's 50-char limit; pinning disabled for this call."
+            PIN_ENABLED=false
+          else
+            ts_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            EVENT_PAYLOAD_JSON=$(jq -n \
+              --arg repo    "$GITHUB_REPOSITORY" \
+              --arg env     "$ENV_KEY" \
+              --arg actor   "$GITHUB_ACTOR" \
+              --arg run_id  "$GITHUB_RUN_ID" \
+              --arg run_url "$run_url" \
+              --arg ts_iso  "$ts_iso" \
+              '{repo: $repo, env: $env, actor: $actor, run_id: $run_id, run_url: $run_url, ts_iso: $ts_iso}')
+          fi
+        fi
+
+        # 4. Resolve channel name -> channel ID via Slack
         # conversations.list. Cache the channel list once per step rather
         # than once per fan-out target (avoids re-paginating). Bot needs
         # channels:read (and groups:read for private channels).
@@ -190,9 +275,11 @@ runs:
           [ -z "$cursor" ] && break
         done
 
-        # 4. For each target channel name, look up its ID, self-join,
-        # and post.
+        # 5. For each target channel name, look up its ID, self-join,
+        # post, and (when enabled) pin + unpin prior.
         posted_ids=()
+        posted_tss=()
+        posted_pin_status=()
         while IFS= read -r name; do
           [ -z "$name" ] && continue
           channel_id=$(jq -r --arg n "$name" \
@@ -234,13 +321,12 @@ runs:
             esac
           fi
 
-          # 5. Post the message. We pass payload as JSON to preserve
-          # newlines and avoid bash quoting issues with mrkdwn.
-          # When `blocks` is provided we send `text` + `blocks` together:
-          # `blocks` controls in-channel rendering while `text` is Slack's
-          # documented notification fallback / accessibility string. Validate
-          # the blocks JSON up front so a malformed payload fails this step
-          # with a clear error rather than crashing inside jq.
+          # 6. Build and post the message. `text` is always sent;
+          # `blocks` and `metadata` are added when applicable. Each
+          # piece is grafted onto the JSON via jq's `+ {key: val}` so
+          # we don't have to juggle nested conditionals in shell.
+          # Validate blocks JSON up front so a malformed payload fails
+          # the step with a clear error rather than crashing inside jq.
           if [ -n "$BLOCKS" ]; then
             if ! printf '%s' "$BLOCKS" | jq -e 'type == "array"' >/dev/null 2>&1; then
               # Single quotes around 'blocks' rather than backticks — a
@@ -250,16 +336,25 @@ runs:
               echo "First 200 chars: $(printf '%s' "$BLOCKS" | head -c 200)"
               exit 1
             fi
-            payload=$(jq -n \
-              --arg ch "$channel_id" \
-              --arg txt "$TEXT" \
-              --argjson blks "$BLOCKS" \
-              '{channel: $ch, text: $txt, blocks: $blks}')
-          else
-            payload=$(jq -n \
-              --arg ch "$channel_id" \
-              --arg txt "$TEXT" \
-              '{channel: $ch, text: $txt}')
+          fi
+
+          payload=$(jq -n \
+            --arg ch "$channel_id" \
+            --arg txt "$TEXT" \
+            '{channel: $ch, text: $txt}')
+
+          if [ -n "$BLOCKS" ]; then
+            payload=$(printf '%s' "$payload" \
+              | jq --argjson blks "$BLOCKS" '. + {blocks: $blks}')
+          fi
+
+          if [ "$PIN_ENABLED" = "true" ]; then
+            md_json=$(jq -n \
+              --arg et "$EVENT_TYPE_META" \
+              --argjson ep "$EVENT_PAYLOAD_JSON" \
+              '{event_type: $et, event_payload: $ep}')
+            payload=$(printf '%s' "$payload" \
+              | jq --argjson md "$md_json" '. + {metadata: $md}')
           fi
 
           post_resp=$(curl -sS --max-time 15 -X POST \
@@ -281,12 +376,102 @@ runs:
             exit 1
           fi
 
-          echo "Posted to #$name ($channel_id)"
+          post_ts=$(echo "$post_resp" | jq -r '.ts')
+          echo "Posted to #$name ($channel_id) ts=$post_ts"
           posted_ids+=("$channel_id")
+          posted_tss+=("$post_ts")
+
+          # 7. Pin the new message and unpin prior matches. All
+          # pin/unpin failures are soft (::warning::, continue) so a
+          # successful deploy never goes red on a Slack-side blip.
+          pin_outcome="skipped"
+          if [ "$PIN_ENABLED" = "true" ]; then
+            pin_outcome="pinned"
+
+            # 7a. Add the new pin.
+            pin_resp=$(curl -sS --max-time 15 -X POST \
+              -H "Authorization: Bearer $SLACK_TOKEN" \
+              -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "channel=$channel_id" \
+              --data-urlencode "timestamp=$post_ts" \
+              'https://slack.com/api/pins.add') || pin_resp=""
+
+            if ! printf '%s' "$pin_resp" | jq -e . >/dev/null 2>&1; then
+              echo "::warning::Slack pins.add returned non-JSON response for #$name ($channel_id). Message posted but not pinned."
+              echo "Response head: $(printf '%s' "$pin_resp" | head -c 200)"
+              pin_outcome="soft-failed"
+            else
+              pin_ok=$(echo "$pin_resp" | jq -r '.ok')
+              if [ "$pin_ok" != "true" ]; then
+                pin_err=$(echo "$pin_resp" | jq -r '.error // "unknown"')
+                # already_pinned is a no-op success — same ts is
+                # already pinned, leave it alone.
+                case "$pin_err" in
+                  already_pinned) : ;;
+                  *)
+                    echo "::warning::Slack pins.add failed for #$name ($channel_id): $pin_err. Bot may need 'pins:write' scope. Message posted but not pinned."
+                    pin_outcome="soft-failed"
+                    ;;
+                esac
+              fi
+            fi
+
+            # 7b. Unpin prior matches — only if the new pin landed,
+            # so a failure in 7a doesn't empty the channel's pin slot.
+            if [ "$pin_outcome" = "pinned" ]; then
+              list_resp=$(curl -sS --max-time 15 -G \
+                -H "Authorization: Bearer $SLACK_TOKEN" \
+                --data-urlencode "channel=$channel_id" \
+                'https://slack.com/api/pins.list') || list_resp=""
+
+              if ! printf '%s' "$list_resp" | jq -e . >/dev/null 2>&1; then
+                echo "::warning::Slack pins.list returned non-JSON response for #$name ($channel_id). Prior pin (if any) not removed."
+              elif [ "$(echo "$list_resp" | jq -r '.ok')" != "true" ]; then
+                list_err=$(echo "$list_resp" | jq -r '.error // "unknown"')
+                echo "::warning::Slack pins.list failed for #$name ($channel_id): $list_err. Prior pin (if any) not removed."
+              else
+                # Match prior pins by metadata.event_type. Skip the
+                # ts we just posted (defence-in-depth — pins.list
+                # might race the just-added pin into view).
+                prior_tss=$(echo "$list_resp" | jq -r \
+                  --arg et "$EVENT_TYPE_META" \
+                  --arg new_ts "$post_ts" \
+                  '.items[]
+                   | select(.type == "message")
+                   | select(.message.metadata.event_type == $et)
+                   | select(.message.ts != $new_ts)
+                   | .message.ts')
+
+                while IFS= read -r prior_ts; do
+                  [ -z "$prior_ts" ] && continue
+                  unpin_resp=$(curl -sS --max-time 15 -X POST \
+                    -H "Authorization: Bearer $SLACK_TOKEN" \
+                    -H 'Content-Type: application/x-www-form-urlencoded' \
+                    --data-urlencode "channel=$channel_id" \
+                    --data-urlencode "timestamp=$prior_ts" \
+                    'https://slack.com/api/pins.remove') || unpin_resp=""
+
+                  if ! printf '%s' "$unpin_resp" | jq -e . >/dev/null 2>&1; then
+                    echo "::warning::Slack pins.remove returned non-JSON response for #$name ts=$prior_ts."
+                  elif [ "$(echo "$unpin_resp" | jq -r '.ok')" != "true" ]; then
+                    unpin_err=$(echo "$unpin_resp" | jq -r '.error // "unknown"')
+                    # no_pin = somebody else already unpinned — fine.
+                    if [ "$unpin_err" != "no_pin" ]; then
+                      echo "::warning::Slack pins.remove failed for #$name ts=$prior_ts: $unpin_err."
+                    fi
+                  else
+                    echo "Unpinned prior $EVENT_TYPE_META message in #$name (ts=$prior_ts)"
+                  fi
+                done <<< "$prior_tss"
+              fi
+            fi
+          fi
+          posted_pin_status+=("$pin_outcome")
         done <<< "$CHANNEL_NAMES"
 
-        # CSV-join posted IDs for the action output. Subshell so the
-        # IFS change doesn't leak into anything that runs after.
-        ( IFS=,; echo "channel-ids=${posted_ids[*]:-}" >> "$GITHUB_OUTPUT" )
+        # CSV-join outputs. Subshell so the IFS change doesn't leak.
+        ( IFS=,; echo "channel-ids=${posted_ids[*]:-}"          >> "$GITHUB_OUTPUT" )
+        ( IFS=,; echo "message-tss=${posted_tss[*]:-}"          >> "$GITHUB_OUTPUT" )
+        ( IFS=,; echo "pin-status=${posted_pin_status[*]:-}"    >> "$GITHUB_OUTPUT" )
 
         rm -f "$all_channels_json"
