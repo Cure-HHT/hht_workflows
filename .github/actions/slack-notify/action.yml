@@ -10,8 +10,8 @@ description: >
 
   When the event is a deploy-success (or `pin: true` is set explicitly),
   the posted message is also pinned in the channel and the bot's previous
-  pinned message for the same (repo, event_type) is unpinned, so the
-  channel's pin slot always reflects the current deployed version per env.
+  pinned message for the same (repo, env) is unpinned, so the channel's
+  pin slot always reflects the current deployed version per env.
 
   Required Slack bot scopes on the supplied token:
     - chat:write
@@ -54,12 +54,12 @@ inputs:
   pin:
     description: >
       Pin the posted message in the channel and unpin the bot's prior
-      pinned message for the same (repo, event_type). Default ("") is
-      auto-on when `event` matches `deploy-success` or
-      `deploy-success-*`; set to "true" or "false" to override.
-      Requires `pins:write` on the bot token. Pin/unpin errors are
-      soft-failed (::warning::) so a Slack-side hiccup never turns a
-      successful deploy red.
+      pinned message for the same (repo, env). Default ("") is auto-on
+      when `event` matches `deploy-success` or `deploy-success-*`; set
+      to "true" or "false" to override. Requires `pins:write` on the
+      bot token. Pin/unpin errors are soft-failed (::warning::) so a
+      Slack-side hiccup never turns a successful deploy red; the
+      `pin-status` output reports the per-channel outcome.
     required: false
     default: ""
   slack-token:
@@ -83,9 +83,12 @@ outputs:
   pin-status:
     description: >
       Comma-separated per-channel pin outcome, aligned with
-      `channel-ids`. One of `pinned`, `skipped` (pinning disabled for
-      this call), or `soft-failed` (pinning attempted but the Slack
-      API returned an error; deploy stays green).
+      `channel-ids`. One of `pinned` (new pin added and any
+      strictly-older prior pin for the same metadata event_type was
+      removed), `skipped` (pinning disabled for this call), or
+      `soft-failed` (any of pins.add / pins.list / pins.remove
+      returned an error; the deploy stays green and the channel may
+      still have stale prior pins).
     value: ${{ steps.post.outputs.pin-status }}
 
 runs:
@@ -208,12 +211,18 @@ runs:
         EVENT_TYPE_META=""
         EVENT_PAYLOAD_JSON=""
         if [ "$PIN_ENABLED" = "true" ]; then
+          # Slug: lowercase, then collapse any run of non-alphanumerics
+          # to a single underscore and trim leading/trailing underscores.
+          # Keeps the derived event_type stable and minimizes hitting
+          # Slack's 50-char metadata event_type cap.
           repo_slug=$(printf '%s' "${GITHUB_REPOSITORY##*/}" \
-            | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')
           env_suffix=""
           if [ -n "$ENV_KEY" ]; then
             env_slug=$(printf '%s' "$ENV_KEY" \
-              | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')
             env_suffix="_${env_slug}"
           fi
           EVENT_TYPE_META="deploy_success_${repo_slug}${env_suffix}"
@@ -418,28 +427,44 @@ runs:
 
             # 7b. Unpin prior matches — only if the new pin landed,
             # so a failure in 7a doesn't empty the channel's pin slot.
+            # Any failure beyond this point (pins.list, pins.remove)
+            # flips pin_outcome to soft-failed so the caller's
+            # `pin-status` output reflects an incomplete cleanup.
             if [ "$pin_outcome" = "pinned" ]; then
               list_resp=$(curl -sS --max-time 15 -G \
                 -H "Authorization: Bearer $SLACK_TOKEN" \
                 --data-urlencode "channel=$channel_id" \
                 'https://slack.com/api/pins.list') || list_resp=""
 
+              list_ok=true
               if ! printf '%s' "$list_resp" | jq -e . >/dev/null 2>&1; then
                 echo "::warning::Slack pins.list returned non-JSON response for #$name ($channel_id). Prior pin (if any) not removed."
+                list_ok=false
               elif [ "$(echo "$list_resp" | jq -r '.ok')" != "true" ]; then
                 list_err=$(echo "$list_resp" | jq -r '.error // "unknown"')
                 echo "::warning::Slack pins.list failed for #$name ($channel_id): $list_err. Prior pin (if any) not removed."
+                list_ok=false
+              fi
+
+              if [ "$list_ok" = "false" ]; then
+                pin_outcome="soft-failed"
               else
-                # Match prior pins by metadata.event_type. Skip the
-                # ts we just posted (defence-in-depth — pins.list
-                # might race the just-added pin into view).
+                # Race-safe: only unpin strictly-older pins. With two
+                # concurrent deploy-success runs the older posts ts_A
+                # and the newer posts ts_B > ts_A; each run sees both
+                # in pins.list, but each only removes ts entries with
+                # ts < its own. Without this, the older run would
+                # unpin the newer run's just-posted pin and vice
+                # versa, leaving the channel with no matching pin.
+                # Slack ts is "1234567890.123456" — `tonumber` parses
+                # it as a float for numeric comparison.
                 prior_tss=$(echo "$list_resp" | jq -r \
                   --arg et "$EVENT_TYPE_META" \
                   --arg new_ts "$post_ts" \
                   '.items[]
                    | select(.type == "message")
                    | select(.message.metadata.event_type == $et)
-                   | select(.message.ts != $new_ts)
+                   | select((.message.ts | tonumber) < ($new_ts | tonumber))
                    | .message.ts')
 
                 while IFS= read -r prior_ts; do
@@ -453,11 +478,14 @@ runs:
 
                   if ! printf '%s' "$unpin_resp" | jq -e . >/dev/null 2>&1; then
                     echo "::warning::Slack pins.remove returned non-JSON response for #$name ts=$prior_ts."
+                    pin_outcome="soft-failed"
                   elif [ "$(echo "$unpin_resp" | jq -r '.ok')" != "true" ]; then
                     unpin_err=$(echo "$unpin_resp" | jq -r '.error // "unknown"')
-                    # no_pin = somebody else already unpinned — fine.
+                    # no_pin = somebody else already unpinned — fine,
+                    # not a soft-fail.
                     if [ "$unpin_err" != "no_pin" ]; then
                       echo "::warning::Slack pins.remove failed for #$name ts=$prior_ts: $unpin_err."
+                      pin_outcome="soft-failed"
                     fi
                   else
                     echo "Unpinned prior $EVENT_TYPE_META message in #$name (ts=$prior_ts)"

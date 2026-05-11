@@ -35,7 +35,7 @@ secret rotation.
 | `env`          | no       | `""`                             | Sub-key for per-environment routing (`routing.<event>.<env>`).                                                                |
 | `text`         | yes      | —                                | Slack mrkdwn body. When `blocks` is also supplied, this becomes the notification fallback / accessibility text.               |
 | `blocks`       | no       | `""`                             | Optional Slack Block Kit `blocks` JSON string. When present, controls in-channel rendering; `text` is kept as the fallback.   |
-| `pin`          | no       | `""`                             | Pin the posted message and unpin the prior pin for the same `(repo, event_type)`. Empty = auto-on for `deploy-success*` events; `"true"`/`"false"` overrides. See [Slack message pinning](#slack-message-pinning). |
+| `pin`          | no       | `""`                             | Pin the posted message and unpin the prior pin for the same `(repo, env)`. Empty = auto-on for `deploy-success*` events; `"true"`/`"false"` overrides. See [Slack message pinning](#slack-message-pinning). |
 | `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                                                                 |
 | `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                                                          |
 
@@ -137,10 +137,10 @@ validates that `blocks` parses as a JSON array before posting:
 ## Slack message pinning
 
 When pinning is on, the posted message is pinned in each routed
-channel and the bot's prior pinned message for the same
-`(repo, event_type)` is unpinned. The intent is that a per-env Slack
-channel always has one pinned message showing the current deployed
-version for that env, regardless of how the deploy was triggered.
+channel and the bot's prior pinned message for the same `(repo, env)`
+is unpinned. The intent is that a per-env Slack channel always has
+one pinned message showing the current deployed version for that env,
+regardless of how the deploy was triggered.
 
 **When it runs.** Auto-on for any `event` matching `deploy-success` or
 `deploy-success-*`. Force on/off with `pin: "true"` / `pin: "false"`.
@@ -160,17 +160,25 @@ event_payload:
 ```
 
 `repo_slug` is the basename of `github.repository`, lowercased, with
-non-alphanumerics collapsed to `_`. So two repos posting to the same
-channel keep separate pin slots, and (within a repo) each env keeps
-its own slot.
+runs of non-alphanumerics collapsed to a single `_` and leading/trailing
+underscores trimmed. So two repos posting to the same channel keep
+separate pin slots, and (within a repo) each env keeps its own slot.
 
 **Order is pin-then-unpin.** A failure adding the new pin leaves the
 prior pin in place rather than emptying the channel's pin slot.
 
+**Race-safe unpin.** Only pins with a strictly older `ts` than the
+just-posted message are unpinned. Two concurrent deploy-success runs
+will not race each other's pins out of existence — whichever wins the
+ts ordering keeps its pin, and the other one's pin gets cleaned up by
+the next deploy.
+
 **Failures are soft.** `pins.add`, `pins.list`, and `pins.remove`
 errors emit `::warning::` annotations and let the step stay green —
 the deploy already succeeded; a Slack-side hiccup shouldn't paint it
-red. Check `pin-status` to see if you got `soft-failed`.
+red. Any failure beyond the initial `pins.add` (or `pins.add` itself)
+flips that channel's `pin-status` to `soft-failed`, so callers can
+detect an incomplete pin cycle.
 
 **Required scope.** `pins:write` on the bot token (only when pinning
 is on).
