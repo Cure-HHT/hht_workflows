@@ -1,5 +1,5 @@
 # Cure-HHT composite-action library — tech-team review required for any change.
-# Per HHT-OPS-composite-action-library D (Cure-HHT/hht_admin/spec/ops-secrets-architecture.md, added in PR -1.1).
+# Per HHT-OPS-composite-action-library/D (Cure-HHT/hht_admin/spec/ops-secrets-architecture.md, added in PR -1.1).
 
 # Default: tech-team review for everything in this repo.
 * @Cure-HHT/cure-hht-tech-team
