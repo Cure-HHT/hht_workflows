@@ -18,6 +18,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gcp-wif-auth-smoke:
+    # Implements: HHT-OPS-identity-over-keys/A
+    #   End-to-end verification of the WIF handshake via the composite action.
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required by the WIF auth exchange
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auth to GCP via gcp-wif-auth
+        uses: ./.github/actions/gcp-wif-auth
+        with:
+          workload_identity_provider: ${{ vars.SMOKE_WIF_PROVIDER }}
+          service_account: ${{ vars.SMOKE_WIF_SA }}
+      - name: Verify the SA is active in gcloud
+        run: |
+          set -euo pipefail
+          gcloud auth list --filter=status:ACTIVE --format='value(account)' \
+            | grep -qF "${{ vars.SMOKE_WIF_SA }}" \
+            || { echo "WIF auth did not produce the expected active account"; gcloud auth list; exit 1; }
+          echo "WIF handshake verified: ${{ vars.SMOKE_WIF_SA }} is active."
+
   no-op:
     # Placeholder job; concrete action smoke-tests added by PRs that
     # introduce each action. Keeps the workflow non-empty until then.
