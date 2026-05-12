@@ -163,6 +163,28 @@ git commit --no-verify
 | [`hht_admin`](https://github.com/Cure-HHT/hht_admin) | private | 2026-05-09 (CUR-1317) |
 | [`event_sourcing`](https://github.com/Cure-HHT/event_sourcing) | public | 2026-05-09 (CUR-1317) |
 
+## Reference
+
+Brief definitions for the jargon that pops up in this repo. Each entry
+links to an authoritative third-party source for depth.
+
+| Term | One-liner | More |
+| --- | --- | --- |
+| **ADC** (Application Default Credentials) | GCP's discovery mechanism that lets libraries find credentials via env vars / files — what `google-github-actions/auth` sets up. | [GCP docs](https://cloud.google.com/docs/authentication/application-default-credentials) |
+| **attribute condition** (WIF) | A boolean expression on an OIDC token's claims that gates which workflow tokens a WIF provider will accept (e.g. `attribute.repository == "Cure-HHT/hht_workflows"`). | [GCP docs](https://cloud.google.com/iam/docs/workload-identity-federation#conditions) |
+| **branch protection** | GitHub feature that constrains pushes/merges to a branch via required reviews, required status checks, and similar rules. | [GitHub docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) |
+| **CODEOWNERS** | File at `.github/CODEOWNERS` declaring which team/user must review changes to specific paths. | [GitHub docs](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) |
+| **composite action** | A GitHub Action assembled from multiple `runs.steps`, invokable from a workflow via `uses:`. This repo is entirely composite actions. | [GitHub docs](https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action) |
+| **Doppler** | Secret-manager SaaS. The Cure-HHT source of truth for runtime secrets; CI fetches at job time via OIDC, never via static tokens. | [Doppler docs](https://docs.doppler.com/docs/about) |
+| **gitleaks** | Open-source scanner that detects committed secrets via regex patterns. Used by the `secrets-scan` action. | [gitleaks](https://github.com/gitleaks/gitleaks) |
+| **IAM** (Identity & Access Management) | GCP's permission model: a member (user, SA, or principalSet) holds a role on a resource. | [GCP docs](https://cloud.google.com/iam/docs/overview) |
+| **OIDC** (OpenID Connect) | Identity protocol layered on OAuth 2.0; how a workflow proves to a third party "I'm GitHub Actions running in repo X". | [GitHub OIDC docs](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) |
+| **principalSet** (GCP) | IAM identifier representing a *set* of identities (e.g. all workflow runs from one repo) that can impersonate a service account via WIF. | [GCP docs](https://cloud.google.com/iam/docs/principal-identifiers#principal-sets) |
+| **service account** (GCP) | A non-human identity that workloads use to call GCP APIs. WIF lets GitHub workflows impersonate one without long-lived keys. | [GCP docs](https://cloud.google.com/iam/docs/service-account-overview) |
+| **SHA pinning** | Referencing a GitHub Action by its commit SHA (not branch or tag). The org-recommended posture for third-party actions. | [GitHub hardening guide](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions) |
+| **status check** | A pass/fail result a CI job reports back to GitHub; branch protection can require named checks to pass before merge. | [GitHub docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks) |
+| **WIF** (Workload Identity Federation) | GCP mechanism that lets external identities (GitHub Actions, AWS, etc.) impersonate GCP service accounts via short-lived tokens — no JSON keys. | [GCP docs](https://cloud.google.com/iam/docs/workload-identity-federation) |
+
 ## License
 
 AGPLv3 — see [LICENSE](LICENSE).
