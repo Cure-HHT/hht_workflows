@@ -29,6 +29,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  doppler-oidc-auth:
+    # Implements: HHT-OPS-identity-over-keys/B
+    #   End-to-end readiness check of the Doppler OIDC handshake via the composite action.
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required by the Doppler OIDC exchange
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Doppler secrets via doppler-oidc-auth
+        uses: ./.github/actions/doppler-oidc-auth
+        with:
+          doppler_identity_id: ${{ vars.READINESS_DOPPLER_IDENTITY_ID }}
+          doppler_project: ${{ vars.READINESS_DOPPLER_PROJECT }}
+          doppler_config: ${{ vars.READINESS_DOPPLER_CONFIG }}
+      - name: Verify the readiness secret is present and correct
+        # The composite action injects all secrets in (project, config) as
+        # masked env vars. We read READINESS_OK directly from env. If the
+        # OIDC exchange or fetch failed, this var is unset and the job fails.
+        # We never print the value itself — even masked, echoing fetched
+        # secrets sets a bad precedent for downstream callers copying this
+        # pattern. Length is enough to distinguish unset vs wrong-value.
+        run: |
+          set -euo pipefail
+          if [ -z "${READINESS_OK:-}" ]; then
+            echo "Doppler readiness check failed: READINESS_OK is unset (fetch did not run or secret not present in target config)"
+            exit 1
+          fi
+          if [ "${READINESS_OK}" != "yes" ]; then
+            echo "Doppler readiness check failed: READINESS_OK does not match expected value (got ${#READINESS_OK}-char value, contents not printed)"
+            exit 1
+          fi
+          echo "Doppler OIDC handshake verified; readiness secret was fetched and matches expected value."
+
   gcp-wif-auth:
     # Implements: HHT-OPS-identity-over-keys/A
     #   End-to-end readiness check of the WIF handshake via the composite action.

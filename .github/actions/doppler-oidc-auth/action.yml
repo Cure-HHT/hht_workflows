@@ -1,0 +1,42 @@
+name: Doppler OIDC auth (org-standard)
+description: >
+  Wraps dopplerhq/secrets-fetch-action@v2.0.0 with the Cure-HHT defaults so
+  callers cannot accidentally use a static DOPPLER_TOKEN. Pin this action by
+  SHA from consumer workflows; never by branch or tag.
+
+inputs:
+  doppler_project:
+    description: >
+      Doppler project slug, e.g. 'admin', 'sponsor-callisto'. Pass via
+      vars.<NAME> from caller; do NOT hardcode.
+    required: true
+  doppler_config:
+    description: >
+      Doppler config slug within the project, e.g. 'dev', 'qa', 'prd'. The
+      minted token is scoped to this one config. Pass via vars.<NAME> from
+      caller; do NOT hardcode.
+    required: true
+  doppler_identity_id:
+    description: >
+      UUID of the Doppler service-account identity to authenticate as. The
+      identity must be configured in Doppler dashboard to accept the caller's
+      repository as a source AND have access to the requested project. Pass
+      via vars.<NAME> from caller; do NOT hardcode.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-identity-over-keys/B
+    #   CI -> Doppler auth via OIDC; no static DOPPLER_TOKEN anywhere.
+    # Implements: HHT-OPS-one-source-of-truth-per-secret-value/A,B
+    #   Doppler remains the canonical home for Kind-2 values; this wrapper
+    #   only fetches; it never mirrors values to a second store.
+    - name: Fetch Doppler secrets via OIDC
+      uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534  # v2.0.0
+      with:
+        auth-method: oidc
+        doppler-identity-id: ${{ inputs.doppler_identity_id }}
+        doppler-project: ${{ inputs.doppler_project }}
+        doppler-config: ${{ inputs.doppler_config }}
+        inject-env-vars: true
