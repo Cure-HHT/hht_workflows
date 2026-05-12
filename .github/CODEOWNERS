@@ -1,14 +1,11 @@
-# Cure-HHT composite-action library — code-owner review required for any
-# change. Owners: the cure-hht-tech-team group AND @faisyrs as a named
-# individual (either can approve; space-separated = OR semantics in
-# CODEOWNERS, GitHub will accept a review from any listed owner).
+# Cure-HHT composite-action library — tech-team review required for any change.
 # Per HHT-OPS-composite-action-library/D (Cure-HHT/hht_admin/spec/ops-secrets-architecture.md, added in PR -1.1).
 
-# Default: any listed owner can approve.
-* @Cure-HHT/cure-hht-tech-team @faisyrs
+# Default: tech-team review for everything in this repo.
+* @Cure-HHT/cure-hht-tech-team
 
 # Composite actions specifically — explicit and redundant for clarity.
-/.github/actions/ @Cure-HHT/cure-hht-tech-team @faisyrs
+/.github/actions/ @Cure-HHT/cure-hht-tech-team
 
-# Workflows in this repo — same owners.
-/.github/workflows/ @Cure-HHT/cure-hht-tech-team @faisyrs
+# Workflows in this repo — tech-team review.
+/.github/workflows/ @Cure-HHT/cure-hht-tech-team
