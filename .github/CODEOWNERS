@@ -1,0 +1,11 @@
+# Cure-HHT composite-action library — tech-team review required for any change.
+# Per HHT-OPS-composite-action-library D (Cure-HHT/hht_admin/spec/ops-secrets-architecture.md, added in PR -1.1).
+
+# Default: tech-team review for everything in this repo.
+* @Cure-HHT/cure-hht-tech-team
+
+# Composite actions specifically — explicit and redundant for clarity.
+/.github/actions/ @Cure-HHT/cure-hht-tech-team
+
+# Workflows in this repo — tech-team review.
+/.github/workflows/ @Cure-HHT/cure-hht-tech-team
