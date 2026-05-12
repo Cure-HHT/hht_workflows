@@ -13,9 +13,9 @@ create a circular dependency.
   - Dismiss stale approvals on new commits: enabled
   - Require review from Code Owners: enabled
 - Require status checks to pass before merging
-  - Required checks: one entry per job in `readiness-checks.yml`, by exact `workflow-name / job-name`:
-    - `Readiness Checks / gcp-wif-auth` (real WIF handshake readiness check)
-    - `Readiness Checks / no-op` (placeholder; replace with real jobs as PR -1.2 and -1.3 add them)
+  - Required checks: one entry per job in `readiness-checks.yml`, by the bare **job name** (NOT `workflow-name / job-name` — that's what the UI displays, but the check-run is stored under just the job name on the commit; matching is by the stored name):
+    - `gcp-wif-auth` (real WIF handshake readiness check)
+    - `no-op` (placeholder; replace with real jobs as PR -1.2 and -1.3 add them)
 - Require conversation resolution before merging: enabled
 - Enforce all the above settings on admins: enabled (`enforce_admins=true`)
 - Push restrictions: not used. The require-a-pull-request rule already prevents
@@ -36,17 +36,19 @@ ignored by the GitHub API.
       -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
       -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
       -F 'required_status_checks[strict]=true' \
-      -F 'required_status_checks[contexts][]=Readiness Checks / gcp-wif-auth' \
-      -F 'required_status_checks[contexts][]=Readiness Checks / no-op' \
+      -F 'required_status_checks[contexts][]=gcp-wif-auth' \
+      -F 'required_status_checks[contexts][]=no-op' \
       -F required_conversation_resolution=true \
       -F enforce_admins=true \
       -F restrictions=null
 
-The `contexts[]` entry must match the exact check name GitHub reports
-for each required job, which has the form `workflow-name / job-name`.
-As jobs are added (PR -1.2 adds `gcp-wif-auth`, PR -1.3 adds
-`doppler-oidc-auth`), append more `-F 'required_status_checks[contexts][]=...'`
-entries.
+The `contexts[]` entry must match the bare check-run name GitHub stores
+on the commit — which is the **job name** alone. (The UI displays
+`<workflow-name> / <job-name>` and sometimes appends `(<event>)`, but
+those are display affordances; the stored name and the matcher use the
+bare job name only.) As jobs are added, append more
+`-F 'required_status_checks[contexts][]=...'` entries with the new
+bare job names.
 
 ## Why not Terraform
 
