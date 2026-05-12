@@ -13,9 +13,9 @@ create a circular dependency.
   - Dismiss stale approvals on new commits: enabled
   - Require review from Code Owners: enabled
 - Require status checks to pass before merging
-  - Required checks: one entry per job in `smoke-test-actions.yml`, by exact `workflow-name / job-name`:
-    - `Smoke test composite actions / gcp-wif-auth-smoke` (real WIF handshake verification)
-    - `Smoke test composite actions / no-op` (placeholder; replace with real jobs as PR -1.2 and -1.3 add them)
+  - Required checks: one entry per job in `readiness-checks.yml`, by exact `workflow-name / job-name`:
+    - `Readiness Checks / gcp-wif-auth` (real WIF handshake readiness check)
+    - `Readiness Checks / no-op` (placeholder; replace with real jobs as PR -1.2 and -1.3 add them)
 - Require conversation resolution before merging: enabled
 - Enforce all the above settings on admins: enabled (`enforce_admins=true`)
 - Push restrictions: not used. The require-a-pull-request rule already prevents
@@ -36,16 +36,16 @@ ignored by the GitHub API.
       -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
       -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
       -F 'required_status_checks[strict]=true' \
-      -F 'required_status_checks[contexts][]=Smoke test composite actions / gcp-wif-auth-smoke' \
-      -F 'required_status_checks[contexts][]=Smoke test composite actions / no-op' \
+      -F 'required_status_checks[contexts][]=Readiness Checks / gcp-wif-auth' \
+      -F 'required_status_checks[contexts][]=Readiness Checks / no-op' \
       -F required_conversation_resolution=true \
       -F enforce_admins=true \
       -F restrictions=null
 
 The `contexts[]` entry must match the exact check name GitHub reports
 for each required job, which has the form `workflow-name / job-name`.
-As jobs are added (PR -1.2 adds `gcp-wif-auth-smoke`, PR -1.3 adds
-`doppler-oidc-auth-smoke`), append more `-F 'required_status_checks[contexts][]=...'`
+As jobs are added (PR -1.2 adds `gcp-wif-auth`, PR -1.3 adds
+`doppler-oidc-auth`), append more `-F 'required_status_checks[contexts][]=...'`
 entries.
 
 ## Why not Terraform

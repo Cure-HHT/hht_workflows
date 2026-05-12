@@ -42,8 +42,8 @@ that reads ADC work without any further setup.
 Consumers that need the raw token can read `steps.<id>.outputs.access_token`
 (when `token_format: access_token`) or `steps.<id>.outputs.id_token`
 (when `token_format: id_token`) — useful for cases where ADC isn't a fit
-or for smoke-testing the WIF handshake without depending on a CLI being
-installed.
+or for readiness-checking the WIF handshake without depending on a CLI
+being installed.
 
 ## Why this exists
 

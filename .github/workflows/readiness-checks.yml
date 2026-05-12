@@ -1,35 +1,37 @@
-name: Smoke test composite actions
+name: Readiness Checks
 
-# Runs on push to any branch that touches a composite action, and on PRs.
-# Each composite action SHOULD add a job here that exercises its happy
-# path against a real (or stubbed) backend. The workflow itself is the
-# canonical test surface for actions in this repo.
+# Per-action readiness checks for the composite actions in this repo.
+# Each action SHOULD add a job here that exercises its happy path against
+# real (or stubbed) backends — verifying the action + its environmental
+# prerequisites (WIF binding, OIDC handshake, etc.) are wired up correctly
+# before the action can be safely consumed downstream. This workflow is the
+# canonical PR-gate for action releases.
 
 on:
   # push: limited to `main` only. Without a branch filter, push fires on every
   # feature-branch commit AND pull_request fires for the same PR commit, and
   # GitHub disambiguates by appending `(push)` / `(pull_request)` to the check
   # name. Branch protection's required-check name is the bare form
-  # (`Smoke test composite actions / no-op`), so the suffix would prevent it
-  # from ever resolving. Restricting push to main eliminates the collision:
-  # on PRs only pull_request fires (bare name); on main only push fires (also
-  # bare name, after merge — informational, not gating).
+  # (`Readiness Checks / no-op`), so the suffix would prevent it from ever
+  # resolving. Restricting push to main eliminates the collision: on PRs only
+  # pull_request fires (bare name); on main only push fires (also bare name,
+  # after merge — informational, not gating).
   push:
     branches: [main]
     paths:
       - '.github/actions/**'
-      - '.github/workflows/smoke-test-actions.yml'
+      - '.github/workflows/readiness-checks.yml'
   pull_request: {}    # always run on PR so the required status check always reports
   workflow_dispatch: {}
 
 concurrency:
-  group: smoke-test-actions-${{ github.ref }}
+  group: readiness-checks-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  gcp-wif-auth-smoke:
+  gcp-wif-auth:
     # Implements: HHT-OPS-identity-over-keys/A
-    #   End-to-end verification of the WIF handshake via the composite action.
+    #   End-to-end readiness check of the WIF handshake via the composite action.
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required by the WIF auth exchange
@@ -63,9 +65,9 @@ jobs:
           echo "WIF handshake verified: minted a ${#TOKEN}-char access token (value not printed)"
 
   no-op:
-    # Placeholder job; concrete action smoke-tests added by PRs that
-    # introduce each action. Keeps the workflow non-empty until then.
+    # Placeholder job; per-action readiness jobs added by PRs that introduce
+    # each action. Keeps the workflow non-empty until all real jobs land.
     runs-on: ubuntu-latest
     steps:
       - name: Placeholder
-        run: echo "Smoke-test workflow ready; per-action jobs land in subsequent PRs."
+        run: echo "Readiness Checks workflow ready; per-action jobs land in subsequent PRs."
