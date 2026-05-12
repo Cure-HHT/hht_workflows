@@ -32,13 +32,22 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.SMOKE_WIF_PROVIDER }}
           service_account: ${{ vars.SMOKE_WIF_SA }}
-      - name: Verify the SA is active in gcloud
+      - name: Verify the WIF token mint succeeded
         run: |
           set -euo pipefail
-          gcloud auth list --filter=status:ACTIVE --format='value(account)' \
-            | grep -qF "${{ vars.SMOKE_WIF_SA }}" \
-            || { echo "WIF auth did not produce the expected active account"; gcloud auth list; exit 1; }
-          echo "WIF handshake verified: ${{ vars.SMOKE_WIF_SA }} is active."
+          # google-github-actions/auth sets up Application Default Credentials
+          # via env vars (GOOGLE_APPLICATION_CREDENTIALS, etc.) — it does NOT
+          # add the SA to gcloud's account list. So `gcloud auth list` would be
+          # empty here even on success. The right end-to-end test is to call
+          # an operation that requires a valid ADC + impersonation: minting an
+          # access token. That round-trips through the WIF provider exchange.
+          TOKEN=$(gcloud auth print-access-token --quiet)
+          if [ -z "$TOKEN" ] || [ "${#TOKEN}" -lt 20 ]; then
+            echo "WIF token mint failed: token empty or too short (${#TOKEN} chars)"
+            echo "ADC env vars:"; env | grep -E "^(GOOGLE_|CLOUDSDK_)" || true
+            exit 1
+          fi
+          echo "WIF handshake verified: minted a ${#TOKEN}-char access token (value not printed)"
 
   no-op:
     # Placeholder job; concrete action smoke-tests added by PRs that
