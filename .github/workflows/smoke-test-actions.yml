@@ -6,7 +6,16 @@ name: Smoke test composite actions
 # canonical test surface for actions in this repo.
 
 on:
+  # push: limited to `main` only. Without a branch filter, push fires on every
+  # feature-branch commit AND pull_request fires for the same PR commit, and
+  # GitHub disambiguates by appending `(push)` / `(pull_request)` to the check
+  # name. Branch protection's required-check name is the bare form
+  # (`Smoke test composite actions / no-op`), so the suffix would prevent it
+  # from ever resolving. Restricting push to main eliminates the collision:
+  # on PRs only pull_request fires (bare name); on main only push fires (also
+  # bare name, after merge — informational, not gating).
   push:
+    branches: [main]
     paths:
       - '.github/actions/**'
       - '.github/workflows/smoke-test-actions.yml'
