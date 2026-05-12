@@ -1,0 +1,61 @@
+name: GCP WIF auth (org-standard)
+description: >
+  Authenticates the current workflow job to GCP via Workload Identity
+  Federation by impersonating the requested service account. Wraps
+  google-github-actions/auth@v2 with the Cure-HHT defaults so callers
+  cannot accidentally use long-lived JSON keys. Pin this action by SHA
+  from consumer workflows; never by branch or tag.
+
+inputs:
+  workload_identity_provider:
+    description: >
+      Full resource name of the WIF provider, e.g.
+      projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>.
+      Pass the value from the relevant Terraform output; do NOT hardcode.
+    required: true
+  service_account:
+    description: >
+      Email of the GCP service account to impersonate. The WIF binding in
+      hht_admin/terraform must permit the caller's repository to impersonate
+      this SA (per attribute.repository condition).
+    required: true
+  token_format:
+    description: >
+      'access_token' (default) or 'id_token'. Use 'id_token' when the
+      consumer needs to authenticate to a Cloud Run service or similar.
+    required: false
+    default: 'access_token'
+  audience:
+    description: >
+      Optional OIDC audience override. Defaults to the WIF provider's
+      expected audience; set only when the target service requires a custom
+      one (e.g., authenticating to a specific Cloud Run service URL).
+    required: false
+    default: ''
+
+outputs:
+  access_token:
+    description: >
+      The minted access token when token_format == 'access_token'.
+      Forwarded from google-github-actions/auth@v2's auth_token output.
+    value: ${{ steps.gcp.outputs.access_token }}
+  id_token:
+    description: >
+      The minted ID token when token_format == 'id_token'.
+    value: ${{ steps.gcp.outputs.id_token }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-identity-over-keys/A
+    #   Cloud authentication via WIF; no SA JSON keys anywhere.
+    - name: Authenticate to Google Cloud
+      id: gcp
+      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2.1.13
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+        token_format: ${{ inputs.token_format }}
+        audience: ${{ inputs.audience }}
+        create_credentials_file: true
+        export_environment_variables: true
