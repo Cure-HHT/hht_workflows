@@ -42,8 +42,8 @@ jobs:
         id: auth
         uses: ./.github/actions/gcp-wif-auth
         with:
-          workload_identity_provider: ${{ vars.SMOKE_WIF_PROVIDER }}
-          service_account: ${{ vars.SMOKE_WIF_SA }}
+          workload_identity_provider: ${{ vars.READINESS_WIF_PROVIDER }}
+          service_account: ${{ vars.READINESS_WIF_SA }}
       - name: Verify the WIF token mint produced an access token
         env:
           # Pass the secret via env, never as an inline ${{ }} on the shell line.
