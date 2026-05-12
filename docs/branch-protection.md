@@ -21,19 +21,27 @@ create a circular dependency.
 
 ## How to apply
 
-Apply via GitHub UI (Settings -> Branches -> Add rule) or via gh CLI:
+Apply via GitHub UI (Settings -> Branches -> Add rule) or via gh CLI.
+
+Note: `gh api` `-F` flags require bracket notation for nested JSON keys.
+Dot-notation (`a.b=value`) is sent as a literal flat key and silently
+ignored by the GitHub API.
 
     gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
-      -F required_pull_request_reviews.required_approving_review_count=1 \
-      -F required_pull_request_reviews.require_code_owner_reviews=true \
-      -F required_pull_request_reviews.dismiss_stale_reviews=true \
-      -F required_status_checks.strict=true \
-      -F required_status_checks.contexts[]="Smoke test composite actions" \
+      -F 'required_pull_request_reviews[required_approving_review_count]=1' \
+      -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
+      -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
+      -F 'required_status_checks[strict]=true' \
+      -F 'required_status_checks[contexts][]=Smoke test composite actions / no-op' \
       -F required_conversation_resolution=true \
       -F enforce_admins=false \
       -F restrictions=null
 
-(Adjust the contexts list as jobs are added by PR -1.2 and PR -1.3.)
+The `contexts[]` entry must match the exact check name GitHub reports
+for each required job, which has the form `workflow-name / job-name`.
+As jobs are added (PR -1.2 adds `gcp-wif-auth-smoke`, PR -1.3 adds
+`doppler-oidc-auth-smoke`), append more `-F 'required_status_checks[contexts][]=...'`
+entries.
 
 ## Why not Terraform
 
