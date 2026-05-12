@@ -37,7 +37,7 @@ outputs:
   access_token:
     description: >
       The minted access token when token_format == 'access_token'.
-      Forwarded from google-github-actions/auth@v2's auth_token output.
+      Forwarded from google-github-actions/auth@v2's access_token output.
     value: ${{ steps.gcp.outputs.access_token }}
   id_token:
     description: >

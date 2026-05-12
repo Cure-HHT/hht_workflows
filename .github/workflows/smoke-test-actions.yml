@@ -28,23 +28,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Auth to GCP via gcp-wif-auth
+        id: auth
         uses: ./.github/actions/gcp-wif-auth
         with:
           workload_identity_provider: ${{ vars.SMOKE_WIF_PROVIDER }}
           service_account: ${{ vars.SMOKE_WIF_SA }}
-      - name: Verify the WIF token mint succeeded
+      - name: Verify the WIF token mint produced an access token
+        env:
+          # Pass the secret via env, never as an inline ${{ }} on the shell line.
+          TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
           set -euo pipefail
-          # google-github-actions/auth sets up Application Default Credentials
-          # via env vars (GOOGLE_APPLICATION_CREDENTIALS, etc.) — it does NOT
-          # add the SA to gcloud's account list. So `gcloud auth list` would be
-          # empty here even on success. The right end-to-end test is to call
-          # an operation that requires a valid ADC + impersonation: minting an
-          # access token. That round-trips through the WIF provider exchange.
-          TOKEN=$(gcloud auth print-access-token --quiet)
-          if [ -z "$TOKEN" ] || [ "${#TOKEN}" -lt 20 ]; then
-            echo "WIF token mint failed: token empty or too short (${#TOKEN} chars)"
-            echo "ADC env vars:"; env | grep -E "^(GOOGLE_|CLOUDSDK_)" || true
+          # The composite action's access_token output is non-empty iff the
+          # full WIF handshake succeeded (GitHub OIDC -> GCP STS exchange ->
+          # SA impersonation -> access token mint). No CLI dependency: we
+          # read the action's output directly. This keeps the test honest
+          # about what the action does (configures ADC) without coupling to
+          # whatever the runner image happens to preinstall.
+          if [ -z "${TOKEN:-}" ] || [ "${#TOKEN}" -lt 20 ]; then
+            echo "WIF token mint failed: access_token empty or too short (${#TOKEN} chars)"
+            echo "ADC env vars (no values, names only):"
+            env | grep -oE "^(GOOGLE_|CLOUDSDK_)[A-Z_]+" || true
             exit 1
           fi
           echo "WIF handshake verified: minted a ${#TOKEN}-char access token (value not printed)"
