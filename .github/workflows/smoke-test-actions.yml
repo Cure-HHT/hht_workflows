@@ -1,0 +1,30 @@
+name: Smoke test composite actions
+
+# Runs on push to any branch that touches a composite action, and on PRs.
+# Each composite action SHOULD add a job here that exercises its happy
+# path against a real (or stubbed) backend. The workflow itself is the
+# canonical test surface for actions in this repo.
+
+on:
+  push:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/smoke-test-actions.yml'
+  pull_request:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/smoke-test-actions.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write   # required by gcp-wif-auth and doppler-oidc-auth (added in PR -1.2, -1.3)
+
+jobs:
+  no-op:
+    # Placeholder job; concrete action smoke-tests added by PRs that
+    # introduce each action. Keeps the workflow non-empty until then.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "Smoke-test workflow ready; per-action jobs land in subsequent PRs."
