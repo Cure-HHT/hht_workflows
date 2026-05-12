@@ -9,9 +9,9 @@ create a circular dependency.
 ## Required settings
 
 - Require a pull request before merging
-  - Require approvals: 1
+  - Require approvals: **0** during the bootstrap phase (raise to 1 alongside re-enabling Code Owner review — see note below)
   - Dismiss stale approvals on new commits: enabled
-  - Require review from Code Owners: enabled
+  - Require review from Code Owners: **disabled** (see note below)
 - Require status checks to pass before merging
   - Required checks: one entry per job in `readiness-checks.yml`, by the bare **job name** (NOT `workflow-name / job-name` — that's what the UI displays, but the check-run is stored under just the job name on the commit; matching is by the stored name):
     - `gcp-wif-auth` (real WIF handshake readiness check)
@@ -32,8 +32,8 @@ Dot-notation (`a.b=value`) is sent as a literal flat key and silently
 ignored by the GitHub API.
 
     gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
-      -F 'required_pull_request_reviews[required_approving_review_count]=1' \
-      -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
+      -F 'required_pull_request_reviews[required_approving_review_count]=0' \
+      -F 'required_pull_request_reviews[require_code_owner_reviews]=false' \
       -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
       -F 'required_status_checks[strict]=true' \
       -F 'required_status_checks[contexts][]=gcp-wif-auth' \
@@ -49,6 +49,30 @@ those are display affordances; the stored name and the matcher use the
 bare job name only.) As jobs are added, append more
 `-F 'required_status_checks[contexts][]=...'` entries with the new
 bare job names.
+
+## Deferred: review enforcement
+
+Both `required_approving_review_count` (=0) and `require_code_owner_reviews`
+(=false) are intentionally relaxed until consumer repos (`hht_diary`,
+`hht_diary_callisto`, etc.) actually pin and depend on these composite
+actions in production workflows. Until then, no deploy chain depends on
+this repo, so the marginal safety from forcing review on every change
+is outweighed by the friction of single-person admin authoring during
+the bootstrap phase. Required *status checks* (smoke tests + secret
+scan + PR title) still gate every merge.
+
+`.github/CODEOWNERS` remains in the repo as a documented intent
+declaration; only the *enforcement* is paused. Re-enable both
+requirements when the first consumer repo lands a workflow that
+`uses:` an action from here on a deployment path:
+
+    gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
+      ... \
+      -F 'required_pull_request_reviews[required_approving_review_count]=1' \
+      -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
+      ...
+
+(or update the full block above and re-apply).
 
 ## Why not Terraform
 
