@@ -13,11 +13,14 @@ create a circular dependency.
   - Dismiss stale approvals on new commits: enabled
   - Require review from Code Owners: enabled
 - Require status checks to pass before merging
-  - Required checks:
-    - `Smoke test composite actions / *` (every job in smoke-test-actions.yml)
+  - Required checks: one entry per job in `smoke-test-actions.yml`, by exact `workflow-name / job-name`:
+    - `Smoke test composite actions / no-op` (placeholder; replace with real jobs as PR -1.2 and -1.3 add them)
 - Require conversation resolution before merging: enabled
-- Do not allow bypassing the above settings: enabled
-- Restrict pushes that create matching branches: enabled (only admins)
+- Enforce all the above settings on admins: enabled (`enforce_admins=true`)
+- Push restrictions: not used. The require-a-pull-request rule already prevents
+  direct pushes to `main` by non-admins; combined with `enforce_admins=true`,
+  even admins must go through PR review. An explicit push-restriction list
+  becomes useful only with a larger team than this repo currently has.
 
 ## How to apply
 
@@ -34,7 +37,7 @@ ignored by the GitHub API.
       -F 'required_status_checks[strict]=true' \
       -F 'required_status_checks[contexts][]=Smoke test composite actions / no-op' \
       -F required_conversation_resolution=true \
-      -F enforce_admins=false \
+      -F enforce_admins=true \
       -F restrictions=null
 
 The `contexts[]` entry must match the exact check name GitHub reports

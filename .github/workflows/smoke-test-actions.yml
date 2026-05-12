@@ -10,15 +10,12 @@ on:
     paths:
       - '.github/actions/**'
       - '.github/workflows/smoke-test-actions.yml'
-  pull_request:
-    paths:
-      - '.github/actions/**'
-      - '.github/workflows/smoke-test-actions.yml'
+  pull_request: {}    # always run on PR so the required status check always reports
   workflow_dispatch: {}
 
-permissions:
-  contents: read
-  id-token: write   # required by gcp-wif-auth and doppler-oidc-auth (added in PR -1.2, -1.3)
+concurrency:
+  group: smoke-test-actions-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   no-op:
