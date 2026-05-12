@@ -11,7 +11,7 @@ create a circular dependency.
 - Require a pull request before merging
   - Require approvals: 1
   - Dismiss stale approvals on new commits: enabled
-  - Require review from Code Owners: enabled
+  - Require review from Code Owners: **disabled** (see note below)
 - Require status checks to pass before merging
   - Required checks: one entry per job in `readiness-checks.yml`, by the bare **job name** (NOT `workflow-name / job-name` — that's what the UI displays, but the check-run is stored under just the job name on the commit; matching is by the stored name):
     - `gcp-wif-auth` (real WIF handshake readiness check)
@@ -33,7 +33,7 @@ ignored by the GitHub API.
 
     gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
       -F 'required_pull_request_reviews[required_approving_review_count]=1' \
-      -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
+      -F 'required_pull_request_reviews[require_code_owner_reviews]=false' \
       -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
       -F 'required_status_checks[strict]=true' \
       -F 'required_status_checks[contexts][]=gcp-wif-auth' \
@@ -49,6 +49,28 @@ those are display affordances; the stored name and the matcher use the
 bare job name only.) As jobs are added, append more
 `-F 'required_status_checks[contexts][]=...'` entries with the new
 bare job names.
+
+## Deferred: Code Owner review requirement
+
+`require_code_owner_reviews` is intentionally **off** until consumer
+repos (`hht_diary`, `hht_diary_callisto`, etc.) actually pin and depend
+on these composite actions in production workflows. Until then, no
+deploy chain depends on this repo, so the marginal safety from
+forcing tech-team review on every change is outweighed by the friction
+of needing a second approver for small fixes during the bootstrap
+phase.
+
+`.github/CODEOWNERS` remains in the repo as a documented intent
+declaration; only the *enforcement* is paused. Re-enable when the
+first consumer repo lands a workflow that `uses:` an action from here
+on a deployment path:
+
+    gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
+      ... \
+      -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
+      ...
+
+(or update the full block above and re-apply).
 
 ## Why not Terraform
 
