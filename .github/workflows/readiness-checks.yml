@@ -29,6 +29,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  doppler-oidc-auth:
+    # Implements: HHT-OPS-identity-over-keys/B
+    #   End-to-end readiness check of the Doppler OIDC handshake via the composite action.
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required by the Doppler OIDC exchange
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Doppler secrets via doppler-oidc-auth
+        uses: ./.github/actions/doppler-oidc-auth
+        with:
+          doppler_identity_id: ${{ vars.READINESS_DOPPLER_IDENTITY_ID }}
+          doppler_project: ${{ vars.READINESS_DOPPLER_PROJECT }}
+          doppler_config: ${{ vars.READINESS_DOPPLER_CONFIG }}
+      - name: Verify the readiness secret is present and correct
+        # The composite action injects all secrets in (project, config) as
+        # masked env vars. We read READINESS_OK directly from env. If the
+        # OIDC exchange or fetch failed, this var is unset and the job fails.
+        run: |
+          set -euo pipefail
+          if [ "${READINESS_OK:-}" != "yes" ]; then
+            echo "Doppler readiness check failed: expected READINESS_OK=yes; got '${READINESS_OK:-<unset>}'"
+            exit 1
+          fi
+          echo "Doppler OIDC handshake verified; readiness secret was fetched and matches expected value."
+
   gcp-wif-auth:
     # Implements: HHT-OPS-identity-over-keys/A
     #   End-to-end readiness check of the WIF handshake via the composite action.
