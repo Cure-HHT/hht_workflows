@@ -14,6 +14,7 @@ create a circular dependency.
   - Require review from Code Owners: enabled
 - Require status checks to pass before merging
   - Required checks: one entry per job in `smoke-test-actions.yml`, by exact `workflow-name / job-name`:
+    - `Smoke test composite actions / gcp-wif-auth-smoke` (real WIF handshake verification)
     - `Smoke test composite actions / no-op` (placeholder; replace with real jobs as PR -1.2 and -1.3 add them)
 - Require conversation resolution before merging: enabled
 - Enforce all the above settings on admins: enabled (`enforce_admins=true`)
@@ -35,6 +36,7 @@ ignored by the GitHub API.
       -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
       -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
       -F 'required_status_checks[strict]=true' \
+      -F 'required_status_checks[contexts][]=Smoke test composite actions / gcp-wif-auth-smoke' \
       -F 'required_status_checks[contexts][]=Smoke test composite actions / no-op' \
       -F required_conversation_resolution=true \
       -F enforce_admins=true \
