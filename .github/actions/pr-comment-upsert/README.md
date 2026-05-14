@@ -66,7 +66,7 @@ orphans on existing PRs.
 | Output | Description |
 | --- | --- |
 | `comment_id` | Numeric ID of the upserted comment. |
-| `action` | `updated`, `created`, or `noop`. |
+| `action` | `updated` if a PATCH was issued; `created` if a fresh comment was POSTed. |
 
 ## Required workflow permissions
 

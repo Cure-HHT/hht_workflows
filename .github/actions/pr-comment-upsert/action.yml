@@ -48,8 +48,11 @@ outputs:
     value: ${{ steps.upsert.outputs.comment_id }}
   action:
     description: >
-      `updated`, `created`, or `noop`. `noop` means a duplicate was
-      found and removed but no PATCH was needed (rare).
+      `updated` if an existing comment was PATCHed, `created` if a new
+      comment was POSTed. The action always emits one of these two;
+      there is no "no-op" path (the PATCH is unconditional even when the
+      body is unchanged, which costs one API call but keeps semantics
+      simple).
     value: ${{ steps.upsert.outputs.action }}
 
 runs:
@@ -79,15 +82,26 @@ runs:
             ;;
         esac
 
-        case "$BODY" in
-          "${MARKER}"*) ;;
-          *)
-            echo "ERROR: body must START with the marker on its own first line." >&2
-            echo "       marker:         $MARKER" >&2
-            echo "       body[0:200]:    ${BODY:0:200}" >&2
-            exit 2
-            ;;
-        esac
+        # Literal prefix check -- avoids shell-glob semantics on MARKER
+        # (markers containing *, ?, [, etc. would otherwise be treated as
+        # glob patterns).
+        marker_len=${#MARKER}
+        prefix="${BODY:0:$marker_len}"
+        if [ "$prefix" != "$MARKER" ]; then
+          echo "ERROR: body must START with the marker." >&2
+          echo "       marker:         $MARKER" >&2
+          echo "       body[0:200]:    ${BODY:0:200}" >&2
+          exit 2
+        fi
+        # The marker must be on its own first line: char after the marker
+        # must be a newline (or the body must end with the marker).
+        next_char="${BODY:$marker_len:1}"
+        if [ -n "$next_char" ] && [ "$next_char" != $'\n' ]; then
+          echo "ERROR: marker must be on its own first line (followed by a newline)." >&2
+          echo "       marker:         $MARKER" >&2
+          echo "       char after:     $(printf %q "$next_char")" >&2
+          exit 2
+        fi
 
         BODY_LEN=${#BODY}
         if [ "$BODY_LEN" -ge 65536 ]; then
@@ -98,11 +112,12 @@ runs:
           echo "::warning::Comment body is ${BODY_LEN} chars; approaching GitHub's 65536 limit. Consider truncating diff/log content."
         fi
 
-        # The jq filter uses --arg so the marker is passed as data, not
-        # interpolated into the jq program -- defends against markers with
-        # quotes, backslashes, or shell metacharacters.
+        # Pass MARKER to jq via env.MARKER (the env: block above puts it
+        # in the process env). gh api's --jq does not support --arg, but
+        # jq itself supports reading from env -- this keeps the marker
+        # data-not-code so markers with quotes/backslashes/etc. are safe.
         MATCH_IDS=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-          --jq --arg m "$MARKER" '.[] | select(.body | startswith($m)) | .id')
+          --jq '.[] | select(.body | startswith(env.MARKER)) | .id')
 
         FIRST_ID=""
         DUP_COUNT=0
