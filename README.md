@@ -22,12 +22,23 @@ ruleset's required status checks:
 Each of these is paired with a thin wrapper workflow that dogfoods it
 on this repo's own PRs.
 
-Plus one notification action consumed *inside* deploy/build workflows
-(not a required check, no wrapper here — see its README for usage):
+Plus consumer-invoked actions (not required checks, no wrapper here — see
+each action's README for usage):
 
 | Action | Purpose |
 | --- | --- |
 | [`slack-notify`](.github/actions/slack-notify/) | Resolves channel routing from caller's `slack-channels.yml` and posts via Slack `chat.postMessage` |
+| [`release-notes-publish`](.github/actions/release-notes-publish/) | Slice the current version's section from `RELEASE_NOTES.md` + pending fragments and emit as step outputs for downstream Slack/release tooling |
+
+## Pre-commit hooks shared from this repo
+
+In addition to the actions above, this repo exposes pre-commit hooks for
+consumer repos to install via `repo: https://github.com/Cure-HHT/hht_workflows`
+in their `.pre-commit-config.yaml`:
+
+| Hook | Purpose |
+| --- | --- |
+| [`release-notes-update`](hooks/release-notes-update/) | Maintain per-PR release-notes fragments and consolidate them into a versioned `RELEASE_NOTES.md` |
 
 ## Consuming from another Cure-HHT repo
 
