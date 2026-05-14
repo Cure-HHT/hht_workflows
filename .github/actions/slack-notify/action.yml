@@ -69,6 +69,15 @@ inputs:
     description: Path to routing YAML, relative to caller's workspace.
     required: false
     default: .github/slack-channels.yml
+  thread_reply_text:
+    description: >
+      Optional mrkdwn body posted as a thread reply on the main message,
+      to each channel that received it. Empty (default) disables thread-reply.
+      Used to keep the in-channel message terse while preserving longer
+      supplementary content (e.g. the deterministic release-notes block)
+      in the thread.
+    required: false
+    default: ""
 
 outputs:
   channel-ids:
@@ -503,3 +512,44 @@ runs:
         ( IFS=,; echo "pin-status=${posted_pin_status[*]:-}"    >> "$GITHUB_OUTPUT" )
 
         rm -f "$all_channels_json"
+
+    - name: Post thread reply (deterministic block / supplementary content)
+      if: inputs.thread_reply_text != ''
+      shell: bash
+      env:
+        SLACK_TOKEN: ${{ inputs.slack-token }}
+        CHANNEL_IDS: ${{ steps.post.outputs.channel-ids }}
+        MESSAGE_TSS: ${{ steps.post.outputs.message-tss }}
+        REPLY_TEXT: ${{ inputs.thread_reply_text }}
+      run: |
+        set -euo pipefail
+        if [ -z "$CHANNEL_IDS" ] || [ -z "$MESSAGE_TSS" ]; then
+          echo "::warning::thread-reply skipped: post step produced no channels/ts (main message may have failed)"
+          exit 0
+        fi
+        IFS=',' read -ra ids <<< "$CHANNEL_IDS"
+        IFS=',' read -ra tss <<< "$MESSAGE_TSS"
+        if [ "${#ids[@]}" -ne "${#tss[@]}" ]; then
+          echo "::warning::thread-reply skipped: channel/ts count mismatch (${#ids[@]} vs ${#tss[@]})"
+          exit 0
+        fi
+        payload=$(jq -nc \
+          --arg t "$REPLY_TEXT" \
+          '{text: $t}')
+        for i in "${!ids[@]}"; do
+          ch="${ids[$i]}"
+          ts="${tss[$i]}"
+          body=$(jq -c \
+            --arg ch "$ch" \
+            --arg ts "$ts" \
+            '. + {channel: $ch, thread_ts: $ts}' <<<"$payload")
+          resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            --data "$body")
+          ok=$(jq -r '.ok' <<<"$resp")
+          if [ "$ok" != "true" ]; then
+            err=$(jq -r '.error // "unknown"' <<<"$resp")
+            echo "::warning::thread-reply to $ch (ts $ts) failed: $err"
+          fi
+        done

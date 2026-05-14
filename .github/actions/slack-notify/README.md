@@ -38,6 +38,7 @@ secret rotation.
 | `pin`          | no       | `""`                             | Pin the posted message and unpin the prior pin for the same `(repo, env)`. Empty = auto-on for `deploy-success*` events; `"true"`/`"false"` overrides. See [Slack message pinning](#slack-message-pinning). |
 | `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                                                                 |
 | `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                                                          |
+| `thread_reply_text` | no       | `""`                             | Optional mrkdwn body posted as a thread reply to the main message in each routed channel. Failures are soft (warning only). |
 
 ## Outputs
 
@@ -194,6 +195,31 @@ is on).
     text:  "..."
     slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
+
+## Thread-reply pattern
+
+Slack doesn't support markdown `<details>` collapsibles in messages, so for
+long-form supplementary content the cleanest pattern is to post a concise
+summary in-channel and the full content as a thread reply:
+
+```yaml
+- uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<sha>
+  with:
+    event: deploy-success
+    env:   prod
+    text: |
+      :rocket: Released `v1.2.3+5` — see thread for change list.
+    thread_reply_text: |
+      *Changes in v1.2.3+5*
+      ${{ steps.notes.outputs.entries_block }}
+    slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+```
+
+When `thread_reply_text` is non-empty, the action makes one additional
+`chat.postMessage` call per routed channel with `thread_ts` set to the main
+post's `ts`. The call is best-effort; a failure emits a warning annotation
+but does not fail the step (the main message already posted; a Slack-side
+hiccup shouldn't paint a successful deploy red).
 
 ## Action version pinning
 
