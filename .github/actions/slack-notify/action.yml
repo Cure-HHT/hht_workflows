@@ -11,11 +11,12 @@ description: >
   When `bookmark-title` is provided, the action also maintains a single
   channel bookmark with that exact title pointing at the just-posted
   message's permalink: it edits the existing bookmark if one with that
-  title already exists in the channel, otherwise it adds a new one. This
-  gives each (channel, title) a single always-visible chip in the channel
-  header strip, replacing the older "pin the deploy message" approach
-  (which Slack's pinned_item rendering made visually noisy for Block Kit
-  messages).
+  title already exists in the channel, otherwise it adds a new one.
+  Bookmarks appear as full-row entries under the channel's Bookmarks
+  tab (alongside Messages / Files / Pins), so descriptive titles read
+  better than terse slot-style names. This replaces the older "pin the
+  deploy message" approach (which Slack's pinned_item rendering made
+  visually noisy for Block Kit messages).
 
   Required Slack bot scopes on the supplied token:
     - chat:write
@@ -61,17 +62,19 @@ inputs:
       When non-empty, maintain a channel bookmark with this exact title
       pointing at the just-posted message's permalink. Find-by-title is
       the dedup key: if a bookmark with this title already exists in the
-      channel it is edited (link updated), otherwise it is added. Each
-      caller picks a stable title scoped to its slot — for a single-env
-      channel, "live-version" works; for a channel that serves several
-      slots, namespace it (e.g. "callisto / dev"). Bookmark errors are
-      soft-failed (::warning::) so a Slack-side hiccup never turns a
-      successful deploy red; the `bookmark-status` output reports the
-      per-channel outcome. Requires `bookmarks:read` + `bookmarks:write`
-      on the bot token.
+      channel it is edited (link updated), otherwise it is added.
+      Bookmarks render as full-row entries inside the channel's
+      Bookmarks tab, so descriptive titles read well — e.g.
+      "Cloud Run live versions (callisto / DEV)" rather than a terse
+      slot key. The title is the dedup key, so it must be stable across
+      runs for the same slot. Bookmark errors are soft-failed
+      (::warning::) so a Slack-side hiccup never turns a successful
+      deploy red; the `bookmark-status` output reports the per-channel
+      outcome. Requires `bookmarks:read` + `bookmarks:write` on the bot
+      token.
 
       Note: two concurrent runs that race on the same title will both
-      bookmarks.edit the same chip — last writer wins. chat.postMessage
+      bookmarks.edit the same entry — last writer wins. chat.postMessage
       itself is already serialized through Slack, so the "last writer"
       is the deploy whose post Slack accepted last.
     required: false
