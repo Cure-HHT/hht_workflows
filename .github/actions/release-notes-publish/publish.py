@@ -42,11 +42,13 @@ def slice_release_notes(notes_path: Path, *, fragments_dir: Path) -> dict[str, s
 
 
 def _emit_outputs(result: dict[str, str]) -> None:
-    """Write step outputs in the GitHub Actions format."""
+    """Write step outputs in GitHub Actions' multiline heredoc format
+    (``key<<DELIM\\nvalue\\nDELIM``). When ``$GITHUB_OUTPUT`` is set the
+    output is appended there; otherwise the same heredoc form is printed
+    to stdout so local debug output matches the CI artefact byte-for-byte."""
     import os
     output_path = os.environ.get("GITHUB_OUTPUT")
     if not output_path:
-        # Local invocation; print to stdout in NAME=VALUE form.
         for k, v in result.items():
             print(f"{k}<<EOF\n{v}\nEOF")
         return

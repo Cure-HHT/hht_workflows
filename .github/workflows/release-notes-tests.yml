@@ -18,6 +18,7 @@ on:
       - '.github/actions/release-notes-publish/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
+      - '.github/workflows/release-notes-tests.yml'
 
 concurrency:
   group: release-notes-tests-${{ github.ref }}

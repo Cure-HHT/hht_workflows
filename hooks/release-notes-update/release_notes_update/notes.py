@@ -56,7 +56,14 @@ def parse_notes(text: str) -> list[Section]:
 
 def render_notes(sections: list[Section]) -> str:
     """Render an ordered list of Sections back to RELEASE_NOTES.md text.
-    The output is the inverse of parse_notes for any input the parser produced."""
+
+    Round-trips cleanly for canonically-formatted input (file leads with
+    ``# Release Notes``, sections use the standard ``## v… — YYYY-MM-DD``
+    heading + ``<!-- summary --> ... <!-- /summary -->`` / ``<!-- entries -->
+    ... <!-- /entries -->`` blocks). ``parse_notes`` is permissive of
+    preamble / non-canonical interstitial content and ignores it, so
+    ``render_notes(parse_notes(x)) == x`` is not guaranteed for arbitrary
+    ``x``."""
     if not sections:
         return _HEADER + "\n"
     out = [_HEADER, ""]

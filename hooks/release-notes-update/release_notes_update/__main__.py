@@ -110,18 +110,25 @@ def main(argv: list[str] | None = None) -> int:
             local.unlink()
             files_to_stage.append(path)
 
-    # Generate / refresh this PR's fragment.
-    subjects = git_mod.commit_subjects_since_main()
+    # Generate / refresh this PR's fragment — or retire a stale fragment
+    # if the branch no longer has any [CUR-XXX]-prefixed commit subjects
+    # (e.g. after a rebase or commit-message edit that dropped them).
+    # Skipped on detached HEAD or directly on main.
     branch = git_mod.current_branch()
-    if subjects and branch not in ("HEAD", "main"):
-        new_frag = fragment_from_commits(subjects, version=version)
-        if new_frag.bullets:
-            frag_file = frag_dir / f"{_slugify_branch(branch)}.md"
+    if branch not in ("HEAD", "main"):
+        frag_file = frag_dir / f"{_slugify_branch(branch)}.md"
+        rel_frag_path = str(frag_file.relative_to(repo_root))
+        subjects = git_mod.commit_subjects_since_main()
+        new_frag = fragment_from_commits(subjects, version=version) if subjects else None
+        if new_frag and new_frag.bullets:
             new_frag_text = render_fragment(new_frag)
             existing = frag_file.read_text() if frag_file.exists() else ""
             if new_frag_text != existing:
                 frag_file.write_text(new_frag_text)
-                files_to_stage.append(str(frag_file.relative_to(repo_root)))
+                files_to_stage.append(rel_frag_path)
+        elif frag_file.exists():
+            frag_file.unlink()
+            files_to_stage.append(rel_frag_path)
 
     git_mod.stage_paths(files_to_stage)
     return 0
