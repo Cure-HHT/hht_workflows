@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "release-notes-update"
+version = "0.1.0"
+description = "Cure-HHT pre-commit hook that maintains per-PR release-notes fragments and consolidates them into RELEASE_NOTES.md."
+requires-python = ">=3.9"
+
+[project.scripts]
+release-notes-update = "release_notes_update.__main__:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["release_notes_update*"]

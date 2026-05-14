@@ -1,0 +1,8 @@
+- id: release-notes-update
+  name: release-notes-update
+  description: Maintain per-PR release-notes fragment and consolidate pending fragments into RELEASE_NOTES.md.
+  entry: release-notes-update
+  language: python
+  stages: [pre-commit]
+  pass_filenames: false
+  always_run: true
