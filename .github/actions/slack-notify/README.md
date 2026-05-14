@@ -24,8 +24,8 @@ secret rotation.
    - `channels:read` (for `conversations.list`)
    - `channels:join` (for public-channel self-heal)
    - `groups:read` (only if any routed channel is private)
-   - `pins:write` (only when message pinning is enabled — see
-     [Slack message pinning](#slack-message-pinning))
+   - `bookmarks:read` + `bookmarks:write` (only when `bookmark-title` is
+     set — see [Channel bookmark](#channel-bookmark))
 
 ## Inputs
 
@@ -35,7 +35,7 @@ secret rotation.
 | `env`          | no       | `""`                             | Sub-key for per-environment routing (`routing.<event>.<env>`).                                                                |
 | `text`         | yes      | —                                | Slack mrkdwn body. When `blocks` is also supplied, this becomes the notification fallback / accessibility text.               |
 | `blocks`       | no       | `""`                             | Optional Slack Block Kit `blocks` JSON string. When present, controls in-channel rendering; `text` is kept as the fallback.   |
-| `pin`          | no       | `""`                             | Pin the posted message and unpin the prior pin for the same `(repo, env)`. Empty = auto-on for `deploy-success*` events; `"true"`/`"false"` overrides. See [Slack message pinning](#slack-message-pinning). |
+| `bookmark-title` | no     | `""`                             | When non-empty, maintain a channel bookmark with this exact title pointing at the just-posted message. The title is the dedup key: an existing bookmark with the same title is edited; otherwise a new one is added. Opt-in (no auto-on). See [Channel bookmark](#channel-bookmark). |
 | `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                                                                 |
 | `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                                                          |
 | `thread-reply-text` | no       | `""`                             | Optional mrkdwn body posted as a thread reply to the main message in each routed channel. Failures are soft (warning only). |
@@ -46,7 +46,7 @@ secret rotation.
 |----------------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `channel-ids`  | Comma-separated list of channel IDs the message was posted to.                                                                       |
 | `message-tss`  | Comma-separated chat.postMessage `ts` values, in the same order as `channel-ids`.                                                    |
-| `pin-status`   | Comma-separated per-channel pin outcome: `pinned`, `skipped` (pin disabled), or `soft-failed` (Slack API error; deploy stayed green). |
+| `bookmark-status` | Comma-separated per-channel bookmark outcome, aligned with `channel-ids`: `bookmarked` (added or edited), `skipped` (no `bookmark-title`), or `soft-failed` (Slack API error; deploy stayed green). |
 
 ## Routing file shape
 
@@ -135,66 +135,61 @@ validates that `blocks` parses as a JSON array before posting:
     slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
 
-## Slack message pinning
+## Channel bookmark
 
-When pinning is on, the posted message is pinned in each routed
-channel and the bot's prior pinned message for the same `(repo, env)`
-is unpinned. The intent is that a per-env Slack channel always has
-one pinned message showing the current deployed version for that env,
-regardless of how the deploy was triggered.
+When `bookmark-title` is non-empty, the action maintains a single
+channel bookmark with that exact title pointing at the just-posted
+message's permalink. Bookmarks render as full-row entries under the
+channel's Bookmarks tab (alongside Messages / Files), so descriptive
+titles read well — e.g. `Cloud Run live versions (callisto / DEV)`
+rather than a terse slot key.
 
-**When it runs.** Auto-on for any `event` matching `deploy-success` or
-`deploy-success-*`. Force on/off with `pin: "true"` / `pin: "false"`.
+This replaces the older "pin the deploy message" approach (which
+Slack's `pinned_item` rendering made visually noisy for Block Kit
+messages).
 
-**How the prior pin is identified.** Each pinned post carries Slack
-message metadata:
+**How dedup works.** The bookmark `title` is the dedup key:
 
-```yaml
-event_type: deploy_success_<repo_slug>_<env>
-event_payload:
-  repo:    <github.repository>          # e.g. Cure-HHT/hht_diary_callisto
-  env:     <input env>                  # e.g. qa
-  actor:   <github.actor>
-  run_id:  <github.run_id>
-  run_url: <github.server_url>/<github.repository>/actions/runs/<run_id>
-  ts_iso:  <ISO-8601 UTC post time>
-```
+- If a bookmark with the given title already exists in the channel,
+  the action calls `bookmarks.edit` to update its link to the new
+  message permalink.
+- Otherwise it calls `bookmarks.add` with the title + permalink.
 
-`repo_slug` is the basename of `github.repository`, lowercased, with
-runs of non-alphanumerics collapsed to a single `_` and leading/trailing
-underscores trimmed. So two repos posting to the same channel keep
-separate pin slots, and (within a repo) each env keeps its own slot.
+Titles must therefore be **stable across runs for the same slot** —
+typically embed `(<repo> / <env>)` or similar so each `(repo, env)`
+pair has its own bookmark.
 
-**Order is pin-then-unpin.** A failure adding the new pin leaves the
-prior pin in place rather than emptying the channel's pin slot.
+**Concurrent-run safety.** Two concurrent runs with the same title
+will both `bookmarks.edit` the same entry; last writer wins. Since
+`chat.postMessage` is serialized through Slack, the "last writer" is
+the deploy whose post Slack accepted last.
 
-**Race-safe unpin.** Only pins with a strictly older `ts` than the
-just-posted message are unpinned. Two concurrent deploy-success runs
-will not race each other's pins out of existence — whichever wins the
-ts ordering keeps its pin, and the other one's pin gets cleaned up by
-the next deploy.
+**Failures are soft.** `chat.getPermalink`, `bookmarks.list`,
+`bookmarks.add`, and `bookmarks.edit` errors emit `::warning::`
+annotations and let the step stay green — the deploy already
+succeeded; a Slack-side hiccup shouldn't paint it red. Any such
+failure flips that channel's `bookmark-status` to `soft-failed`, so
+callers can detect an incomplete cycle.
 
-**Failures are soft.** `pins.add`, `pins.list`, and `pins.remove`
-errors emit `::warning::` annotations and let the step stay green —
-the deploy already succeeded; a Slack-side hiccup shouldn't paint it
-red. Any failure beyond the initial `pins.add` (or `pins.add` itself)
-flips that channel's `pin-status` to `soft-failed`, so callers can
-detect an incomplete pin cycle.
+**Required scopes.** `bookmarks:read` + `bookmarks:write` on the bot
+token (only when `bookmark-title` is set).
 
-**Required scope.** `pins:write` on the bot token (only when pinning
-is on).
-
-**Disabling on a per-call basis.** Set `pin: "false"`:
+**Example.**
 
 ```yaml
 - uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<sha>
   with:
     event: deploy-success
     env:   ${{ inputs.sponsor-env }}
-    pin:   "false"            # opt out of pin/unpin for this call
     text:  "..."
+    bookmark-title: "Cloud Run live versions (callisto / ${{ inputs.sponsor-env }})"
     slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
+
+**Disabling.** Omit `bookmark-title` (or set it to `""`) to skip the
+bookmark cycle entirely. There is no auto-on / "always run for
+`deploy-success*`" mode — bookmarks are opt-in, since not every caller
+wants persistent channel-level state.
 
 ## Thread-reply pattern
 
