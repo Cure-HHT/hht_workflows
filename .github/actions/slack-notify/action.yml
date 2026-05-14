@@ -8,17 +8,23 @@ description: >
   workflow has already done actions/checkout (so slack-channels.yml is on
   disk).
 
-  When the event is a deploy-success (or `pin: true` is set explicitly),
-  the posted message is also pinned in the channel and the bot's previous
-  pinned message for the same (repo, env) is unpinned, so the channel's
-  pin slot always reflects the current deployed version per env.
+  When `bookmark-title` is provided, the action also maintains a single
+  channel bookmark with that exact title pointing at the just-posted
+  message's permalink: it edits the existing bookmark if one with that
+  title already exists in the channel, otherwise it adds a new one.
+  Bookmarks appear as full-row entries under the channel's Bookmarks
+  tab (alongside Messages / Files / Pins), so descriptive titles read
+  better than terse slot-style names. This replaces the older "pin the
+  deploy message" approach (which Slack's pinned_item rendering made
+  visually noisy for Block Kit messages).
 
   Required Slack bot scopes on the supplied token:
     - chat:write
-    - channels:read   (conversations.list)
-    - channels:join   (conversations.join — public channel self-heal)
-    - groups:read     (only if any routed channel is private)
-    - pins:write      (only when pinning is enabled — see `pin` input)
+    - channels:read    (conversations.list)
+    - channels:join    (conversations.join — public channel self-heal)
+    - groups:read      (only if any routed channel is private)
+    - bookmarks:read   (only when bookmark-title is set — bookmarks.list)
+    - bookmarks:write  (only when bookmark-title is set — bookmarks.add/edit)
 
 inputs:
   event:
@@ -51,15 +57,26 @@ inputs:
       where mrkdwn alone is too limited.
     required: false
     default: ""
-  pin:
+  bookmark-title:
     description: >
-      Pin the posted message in the channel and unpin the bot's prior
-      pinned message for the same (repo, env). Default ("") is auto-on
-      when `event` matches `deploy-success` or `deploy-success-*`; set
-      to "true" or "false" to override. Requires `pins:write` on the
-      bot token. Pin/unpin errors are soft-failed (::warning::) so a
-      Slack-side hiccup never turns a successful deploy red; the
-      `pin-status` output reports the per-channel outcome.
+      When non-empty, maintain a channel bookmark with this exact title
+      pointing at the just-posted message's permalink. Find-by-title is
+      the dedup key: if a bookmark with this title already exists in the
+      channel it is edited (link updated), otherwise it is added.
+      Bookmarks render as full-row entries inside the channel's
+      Bookmarks tab, so descriptive titles read well — e.g.
+      "Cloud Run live versions (callisto / DEV)" rather than a terse
+      slot key. The title is the dedup key, so it must be stable across
+      runs for the same slot. Bookmark errors are soft-failed
+      (::warning::) so a Slack-side hiccup never turns a successful
+      deploy red; the `bookmark-status` output reports the per-channel
+      outcome. Requires `bookmarks:read` + `bookmarks:write` on the bot
+      token.
+
+      Note: two concurrent runs that race on the same title will both
+      bookmarks.edit the same entry — last writer wins. chat.postMessage
+      itself is already serialized through Slack, so the "last writer"
+      is the deploy whose post Slack accepted last.
     required: false
     default: ""
   slack-token:
@@ -80,16 +97,17 @@ outputs:
       `channel-ids`. Useful for follow-up Slack API calls (threading,
       reactions, etc.).
     value: ${{ steps.post.outputs.message-tss }}
-  pin-status:
+  bookmark-status:
     description: >
-      Comma-separated per-channel pin outcome, aligned with
-      `channel-ids`. One of `pinned` (new pin added and any
-      strictly-older prior pin for the same metadata event_type was
-      removed), `skipped` (pinning disabled for this call), or
-      `soft-failed` (any of pins.add / pins.list / pins.remove
-      returned an error; the deploy stays green and the channel may
-      still have stale prior pins).
-    value: ${{ steps.post.outputs.pin-status }}
+      Comma-separated per-channel bookmark outcome, aligned with
+      `channel-ids`. One of `bookmarked` (a bookmark with the given
+      title now points at the new message — either freshly added or
+      edited from a prior entry), `skipped` (no bookmark-title given),
+      or `soft-failed` (any of chat.getPermalink / bookmarks.list /
+      bookmarks.add / bookmarks.edit returned an error; the deploy
+      stays green and the channel's bookmark may still reference the
+      prior message).
+    value: ${{ steps.post.outputs.bookmark-status }}
 
 runs:
   using: composite
@@ -102,7 +120,7 @@ runs:
         ENV_KEY: ${{ inputs.env }}
         TEXT: ${{ inputs.text }}
         BLOCKS: ${{ inputs.blocks }}
-        PIN_INPUT: ${{ inputs.pin }}
+        BOOKMARK_TITLE: ${{ inputs.bookmark-title }}
         SLACK_TOKEN: ${{ inputs.slack-token }}
         ROUTING_FILE: ${{ inputs.routing-file }}
       run: |
@@ -183,64 +201,13 @@ runs:
 
         CHANNEL_NAMES=$(echo "$CHANNEL_NAMES_JSON" | jq -r '.names[]')
 
-        # 3. Decide whether to pin. Empty PIN_INPUT means "auto": on
-        # for events matching deploy-success or deploy-success-*; off
-        # otherwise. Explicit "true"/"false" overrides.
-        case "$PIN_INPUT" in
-          "")
-            if printf '%s' "$EVENT" | grep -qE '^deploy-success(-.*)?$'; then
-              PIN_ENABLED=true
-            else
-              PIN_ENABLED=false
-            fi
-            ;;
-          true)  PIN_ENABLED=true ;;
-          false) PIN_ENABLED=false ;;
-          *)
-            echo "::error::'pin' input must be 'true', 'false', or empty (got '$PIN_INPUT')."
-            exit 1
-            ;;
-        esac
-
-        # When pinning, derive a stable Slack metadata `event_type`
-        # scoped per-(repo, env) so the "previous pin" we unpin is
-        # unambiguous even if two repos route to the same channel.
-        # Slack requires event_type to be alphanumeric + underscores,
-        # <=50 chars; we sanitize the repo name's basename
-        # (Cure-HHT/hht_diary_callisto -> hht_diary_callisto).
-        EVENT_TYPE_META=""
-        EVENT_PAYLOAD_JSON=""
-        if [ "$PIN_ENABLED" = "true" ]; then
-          # Slug: lowercase, then collapse any run of non-alphanumerics
-          # to a single underscore and trim leading/trailing underscores.
-          # Keeps the derived event_type stable and minimizes hitting
-          # Slack's 50-char metadata event_type cap.
-          repo_slug=$(printf '%s' "${GITHUB_REPOSITORY##*/}" \
-            | tr '[:upper:]' '[:lower:]' \
-            | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')
-          env_suffix=""
-          if [ -n "$ENV_KEY" ]; then
-            env_slug=$(printf '%s' "$ENV_KEY" \
-              | tr '[:upper:]' '[:lower:]' \
-              | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')
-            env_suffix="_${env_slug}"
-          fi
-          EVENT_TYPE_META="deploy_success_${repo_slug}${env_suffix}"
-          if [ ${#EVENT_TYPE_META} -gt 50 ]; then
-            echo "::warning::Derived Slack metadata event_type '$EVENT_TYPE_META' exceeds Slack's 50-char limit; pinning disabled for this call."
-            PIN_ENABLED=false
-          else
-            ts_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-            run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            EVENT_PAYLOAD_JSON=$(jq -n \
-              --arg repo    "$GITHUB_REPOSITORY" \
-              --arg env     "$ENV_KEY" \
-              --arg actor   "$GITHUB_ACTOR" \
-              --arg run_id  "$GITHUB_RUN_ID" \
-              --arg run_url "$run_url" \
-              --arg ts_iso  "$ts_iso" \
-              '{repo: $repo, env: $env, actor: $actor, run_id: $run_id, run_url: $run_url, ts_iso: $ts_iso}')
-          fi
+        # 3. Bookmark mode is enabled iff the caller passed a non-empty
+        # bookmark-title. The title itself is the dedup key — there's no
+        # derived slug to compute and no Slack-side metadata to attach.
+        if [ -n "$BOOKMARK_TITLE" ]; then
+          BOOKMARK_ENABLED=true
+        else
+          BOOKMARK_ENABLED=false
         fi
 
         # 4. Resolve channel name -> channel ID via Slack
@@ -285,10 +252,10 @@ runs:
         done
 
         # 5. For each target channel name, look up its ID, self-join,
-        # post, and (when enabled) pin + unpin prior.
+        # post, and (when bookmark-title is set) upsert the bookmark.
         posted_ids=()
         posted_tss=()
-        posted_pin_status=()
+        posted_bookmark_status=()
         while IFS= read -r name; do
           [ -z "$name" ] && continue
           channel_id=$(jq -r --arg n "$name" \
@@ -331,11 +298,11 @@ runs:
           fi
 
           # 6. Build and post the message. `text` is always sent;
-          # `blocks` and `metadata` are added when applicable. Each
-          # piece is grafted onto the JSON via jq's `+ {key: val}` so
-          # we don't have to juggle nested conditionals in shell.
-          # Validate blocks JSON up front so a malformed payload fails
-          # the step with a clear error rather than crashing inside jq.
+          # `blocks` is added when provided. Each piece is grafted onto
+          # the JSON via jq's `+ {key: val}` so we don't have to juggle
+          # nested conditionals in shell. Validate blocks JSON up front
+          # so a malformed payload fails the step with a clear error
+          # rather than crashing inside jq.
           if [ -n "$BLOCKS" ]; then
             if ! printf '%s' "$BLOCKS" | jq -e 'type == "array"' >/dev/null 2>&1; then
               # Single quotes around 'blocks' rather than backticks — a
@@ -355,15 +322,6 @@ runs:
           if [ -n "$BLOCKS" ]; then
             payload=$(printf '%s' "$payload" \
               | jq --argjson blks "$BLOCKS" '. + {blocks: $blks}')
-          fi
-
-          if [ "$PIN_ENABLED" = "true" ]; then
-            md_json=$(jq -n \
-              --arg et "$EVENT_TYPE_META" \
-              --argjson ep "$EVENT_PAYLOAD_JSON" \
-              '{event_type: $et, event_payload: $ep}')
-            payload=$(printf '%s' "$payload" \
-              | jq --argjson md "$md_json" '. + {metadata: $md}')
           fi
 
           post_resp=$(curl -sS --max-time 15 -X POST \
@@ -390,116 +348,105 @@ runs:
           posted_ids+=("$channel_id")
           posted_tss+=("$post_ts")
 
-          # 7. Pin the new message and unpin prior matches. All
-          # pin/unpin failures are soft (::warning::, continue) so a
-          # successful deploy never goes red on a Slack-side blip.
-          pin_outcome="skipped"
-          if [ "$PIN_ENABLED" = "true" ]; then
-            pin_outcome="pinned"
+          # 7. Maintain the bookmark slot. Find-by-title is the dedup
+          # key: if a bookmark with $BOOKMARK_TITLE already exists,
+          # bookmarks.edit it to point at the new permalink; otherwise
+          # bookmarks.add a fresh one. All bookmark failures are soft
+          # (::warning::, continue) so a successful deploy never goes
+          # red on a Slack-side blip; the per-channel outcome is
+          # reported via `bookmark-status`.
+          bookmark_outcome="skipped"
+          if [ "$BOOKMARK_ENABLED" = "true" ]; then
+            bookmark_outcome="bookmarked"
 
-            # 7a. Add the new pin.
-            pin_resp=$(curl -sS --max-time 15 -X POST \
+            # 7a. Resolve the new message's permalink. Bookmarks
+            # require a URL, not a (channel, ts) pair.
+            perm_resp=$(curl -sS --max-time 15 -G \
               -H "Authorization: Bearer $SLACK_TOKEN" \
-              -H 'Content-Type: application/x-www-form-urlencoded' \
               --data-urlencode "channel=$channel_id" \
-              --data-urlencode "timestamp=$post_ts" \
-              'https://slack.com/api/pins.add') || pin_resp=""
+              --data-urlencode "message_ts=$post_ts" \
+              'https://slack.com/api/chat.getPermalink') || perm_resp=""
 
-            if ! printf '%s' "$pin_resp" | jq -e . >/dev/null 2>&1; then
-              echo "::warning::Slack pins.add returned non-JSON response for #$name ($channel_id). Message posted but not pinned."
-              echo "Response head: $(printf '%s' "$pin_resp" | head -c 200)"
-              pin_outcome="soft-failed"
+            permalink=""
+            if ! printf '%s' "$perm_resp" | jq -e . >/dev/null 2>&1; then
+              echo "::warning::Slack chat.getPermalink returned non-JSON response for #$name ($channel_id). Bookmark not updated."
+              echo "Response head: $(printf '%s' "$perm_resp" | head -c 200)"
+              bookmark_outcome="soft-failed"
+            elif [ "$(echo "$perm_resp" | jq -r '.ok')" != "true" ]; then
+              perm_err=$(echo "$perm_resp" | jq -r '.error // "unknown"')
+              echo "::warning::Slack chat.getPermalink failed for #$name ($channel_id): $perm_err. Bookmark not updated."
+              bookmark_outcome="soft-failed"
             else
-              pin_ok=$(echo "$pin_resp" | jq -r '.ok')
-              if [ "$pin_ok" != "true" ]; then
-                pin_err=$(echo "$pin_resp" | jq -r '.error // "unknown"')
-                # already_pinned is a no-op success — same ts is
-                # already pinned, leave it alone.
-                case "$pin_err" in
-                  already_pinned) : ;;
-                  *)
-                    echo "::warning::Slack pins.add failed for #$name ($channel_id): $pin_err. Bot may need 'pins:write' scope. Message posted but not pinned."
-                    pin_outcome="soft-failed"
-                    ;;
-                esac
+              permalink=$(echo "$perm_resp" | jq -r '.permalink')
+            fi
+
+            # 7b. List bookmarks and find one matching $BOOKMARK_TITLE
+            # by exact equality. Slack has no server-side filter, and a
+            # channel can hold up to 100 bookmarks — we iterate.
+            existing_bm_id=""
+            if [ "$bookmark_outcome" = "bookmarked" ]; then
+              list_resp=$(curl -sS --max-time 15 -G \
+                -H "Authorization: Bearer $SLACK_TOKEN" \
+                --data-urlencode "channel_id=$channel_id" \
+                'https://slack.com/api/bookmarks.list') || list_resp=""
+
+              if ! printf '%s' "$list_resp" | jq -e . >/dev/null 2>&1; then
+                echo "::warning::Slack bookmarks.list returned non-JSON response for #$name ($channel_id). Bookmark not updated."
+                bookmark_outcome="soft-failed"
+              elif [ "$(echo "$list_resp" | jq -r '.ok')" != "true" ]; then
+                list_err=$(echo "$list_resp" | jq -r '.error // "unknown"')
+                echo "::warning::Slack bookmarks.list failed for #$name ($channel_id): $list_err. Bot may need 'bookmarks:read' scope. Bookmark not updated."
+                bookmark_outcome="soft-failed"
+              else
+                existing_bm_id=$(echo "$list_resp" | jq -r \
+                  --arg t "$BOOKMARK_TITLE" \
+                  '[.bookmarks[]? | select(.title == $t)][0].id // ""')
               fi
             fi
 
-            # 7b. Unpin prior matches — only if the new pin landed,
-            # so a failure in 7a doesn't empty the channel's pin slot.
-            # Any failure beyond this point (pins.list, pins.remove)
-            # flips pin_outcome to soft-failed so the caller's
-            # `pin-status` output reflects an incomplete cleanup.
-            if [ "$pin_outcome" = "pinned" ]; then
-              list_resp=$(curl -sS --max-time 15 -G \
-                -H "Authorization: Bearer $SLACK_TOKEN" \
-                --data-urlencode "channel=$channel_id" \
-                'https://slack.com/api/pins.list') || list_resp=""
-
-              list_ok=true
-              if ! printf '%s' "$list_resp" | jq -e . >/dev/null 2>&1; then
-                echo "::warning::Slack pins.list returned non-JSON response for #$name ($channel_id). Prior pin (if any) not removed."
-                list_ok=false
-              elif [ "$(echo "$list_resp" | jq -r '.ok')" != "true" ]; then
-                list_err=$(echo "$list_resp" | jq -r '.error // "unknown"')
-                echo "::warning::Slack pins.list failed for #$name ($channel_id): $list_err. Prior pin (if any) not removed."
-                list_ok=false
+            # 7c. Either edit the existing bookmark or add a new one.
+            # Both calls go through the same soft-fail funnel.
+            if [ "$bookmark_outcome" = "bookmarked" ]; then
+              if [ -n "$existing_bm_id" ]; then
+                bm_resp=$(curl -sS --max-time 15 -X POST \
+                  -H "Authorization: Bearer $SLACK_TOKEN" \
+                  -H 'Content-Type: application/x-www-form-urlencoded' \
+                  --data-urlencode "channel_id=$channel_id" \
+                  --data-urlencode "bookmark_id=$existing_bm_id" \
+                  --data-urlencode "link=$permalink" \
+                  'https://slack.com/api/bookmarks.edit') || bm_resp=""
+                bm_method="bookmarks.edit"
+              else
+                bm_resp=$(curl -sS --max-time 15 -X POST \
+                  -H "Authorization: Bearer $SLACK_TOKEN" \
+                  -H 'Content-Type: application/x-www-form-urlencoded' \
+                  --data-urlencode "channel_id=$channel_id" \
+                  --data-urlencode "title=$BOOKMARK_TITLE" \
+                  --data-urlencode "type=link" \
+                  --data-urlencode "link=$permalink" \
+                  'https://slack.com/api/bookmarks.add') || bm_resp=""
+                bm_method="bookmarks.add"
               fi
 
-              if [ "$list_ok" = "false" ]; then
-                pin_outcome="soft-failed"
+              if ! printf '%s' "$bm_resp" | jq -e . >/dev/null 2>&1; then
+                echo "::warning::Slack $bm_method returned non-JSON response for #$name ($channel_id). Bookmark not updated."
+                echo "Response head: $(printf '%s' "$bm_resp" | head -c 200)"
+                bookmark_outcome="soft-failed"
+              elif [ "$(echo "$bm_resp" | jq -r '.ok')" != "true" ]; then
+                bm_err=$(echo "$bm_resp" | jq -r '.error // "unknown"')
+                echo "::warning::Slack $bm_method failed for #$name ($channel_id): $bm_err. Bot may need 'bookmarks:write' scope. Bookmark not updated."
+                bookmark_outcome="soft-failed"
               else
-                # Race-safe: only unpin strictly-older pins. With two
-                # concurrent deploy-success runs the older posts ts_A
-                # and the newer posts ts_B > ts_A; each run sees both
-                # in pins.list, but each only removes ts entries with
-                # ts < its own. Without this, the older run would
-                # unpin the newer run's just-posted pin and vice
-                # versa, leaving the channel with no matching pin.
-                # Slack ts is "1234567890.123456" — `tonumber` parses
-                # it as a float for numeric comparison.
-                prior_tss=$(echo "$list_resp" | jq -r \
-                  --arg et "$EVENT_TYPE_META" \
-                  --arg new_ts "$post_ts" \
-                  '.items[]
-                   | select(.type == "message")
-                   | select(.message.metadata.event_type == $et)
-                   | select((.message.ts | tonumber) < ($new_ts | tonumber))
-                   | .message.ts')
-
-                while IFS= read -r prior_ts; do
-                  [ -z "$prior_ts" ] && continue
-                  unpin_resp=$(curl -sS --max-time 15 -X POST \
-                    -H "Authorization: Bearer $SLACK_TOKEN" \
-                    -H 'Content-Type: application/x-www-form-urlencoded' \
-                    --data-urlencode "channel=$channel_id" \
-                    --data-urlencode "timestamp=$prior_ts" \
-                    'https://slack.com/api/pins.remove') || unpin_resp=""
-
-                  if ! printf '%s' "$unpin_resp" | jq -e . >/dev/null 2>&1; then
-                    echo "::warning::Slack pins.remove returned non-JSON response for #$name ts=$prior_ts."
-                    pin_outcome="soft-failed"
-                  elif [ "$(echo "$unpin_resp" | jq -r '.ok')" != "true" ]; then
-                    unpin_err=$(echo "$unpin_resp" | jq -r '.error // "unknown"')
-                    # no_pin = somebody else already unpinned — fine,
-                    # not a soft-fail.
-                    if [ "$unpin_err" != "no_pin" ]; then
-                      echo "::warning::Slack pins.remove failed for #$name ts=$prior_ts: $unpin_err."
-                      pin_outcome="soft-failed"
-                    fi
-                  else
-                    echo "Unpinned prior $EVENT_TYPE_META message in #$name (ts=$prior_ts)"
-                  fi
-                done <<< "$prior_tss"
+                echo "Bookmark '$BOOKMARK_TITLE' in #$name -> $permalink ($bm_method)"
               fi
             fi
           fi
-          posted_pin_status+=("$pin_outcome")
+          posted_bookmark_status+=("$bookmark_outcome")
         done <<< "$CHANNEL_NAMES"
 
         # CSV-join outputs. Subshell so the IFS change doesn't leak.
-        ( IFS=,; echo "channel-ids=${posted_ids[*]:-}"          >> "$GITHUB_OUTPUT" )
-        ( IFS=,; echo "message-tss=${posted_tss[*]:-}"          >> "$GITHUB_OUTPUT" )
-        ( IFS=,; echo "pin-status=${posted_pin_status[*]:-}"    >> "$GITHUB_OUTPUT" )
+        ( IFS=,; echo "channel-ids=${posted_ids[*]:-}"               >> "$GITHUB_OUTPUT" )
+        ( IFS=,; echo "message-tss=${posted_tss[*]:-}"               >> "$GITHUB_OUTPUT" )
+        ( IFS=,; echo "bookmark-status=${posted_bookmark_status[*]:-}" >> "$GITHUB_OUTPUT" )
 
         rm -f "$all_channels_json"
