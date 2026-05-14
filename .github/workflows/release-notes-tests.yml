@@ -1,0 +1,52 @@
+# Release Notes Tests — runs pytest against the hook + publish action.
+# Required check; runs on every PR + on push to main.
+
+name: Release Notes Tests
+
+on:
+  pull_request:
+    paths:
+      - 'hooks/release-notes-update/**'
+      - '.github/actions/release-notes-publish/**'
+      - 'pyproject.toml'
+      - '.pre-commit-hooks.yaml'
+      - '.github/workflows/release-notes-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'hooks/release-notes-update/**'
+      - '.github/actions/release-notes-publish/**'
+      - 'pyproject.toml'
+      - '.pre-commit-hooks.yaml'
+      - '.github/workflows/release-notes-tests.yml'
+
+concurrency:
+  group: release-notes-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Release Notes Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install hooks package with test deps
+        run: |
+          set -euo pipefail
+          pip install --quiet -e '.[test]'
+      - name: Run hook tests
+        run: |
+          set -euo pipefail
+          pytest hooks/release-notes-update/tests/ -v
+      - name: Run publish action tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/release-notes-publish
+          PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ -v

@@ -1,0 +1,60 @@
+# Release Notes Publish — composite action.
+#
+# Reads RELEASE_NOTES.md + any pending fragments in .release-notes/, slices
+# the top (current) version's section, and emits it as step outputs for the
+# caller workflow to feed into slack-notify or wherever.
+#
+# READ-ONLY: this action never writes to the repo. All file mutation happens
+# in the consumer's pre-commit hook (see hooks/release-notes-update/).
+#
+# CANONICAL HOME: cure-hht/hht_workflows. Consumers invoke via:
+#   uses: Cure-HHT/hht_workflows/.github/actions/release-notes-publish@<ref>
+
+name: 'Release Notes Publish'
+description: 'Slice the current version section from RELEASE_NOTES.md and emit as step outputs.'
+
+inputs:
+  notes-file:
+    description: 'Path to RELEASE_NOTES.md (default: RELEASE_NOTES.md)'
+    required: false
+    default: 'RELEASE_NOTES.md'
+  fragments-dir:
+    description: 'Path to pending fragments directory (default: .release-notes)'
+    required: false
+    default: '.release-notes'
+
+outputs:
+  version:
+    description: 'The top section version, e.g. v1.2.3+5'
+    value: ${{ steps.slice.outputs.version }}
+  date:
+    description: 'The top section date, e.g. 2026-05-13'
+    value: ${{ steps.slice.outputs.date }}
+  summary_block:
+    description: 'Contents of the top section <!-- summary --> block (empty until PR 2 wires Claude)'
+    value: ${{ steps.slice.outputs.summary_block }}
+  entries_block:
+    description: 'Contents of the top section <!-- entries --> block, with pending matching-version fragments appended'
+    value: ${{ steps.slice.outputs.entries_block }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Slice the current version section
+      id: slice
+      shell: bash
+      env:
+        NOTES_FILE: ${{ inputs.notes-file }}
+        FRAGMENTS_DIR: ${{ inputs.fragments-dir }}
+        ACTION_DIR: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # The publish script reuses the hook's parsing modules; PYTHONPATH must
+        # include the hook package. github.action_path resolves to this action's
+        # subdir inside the caller's repo checkout, so we walk up three levels
+        # to get the repo root and add hooks/release-notes-update.
+        REPO_ROOT="$(cd "$ACTION_DIR/../../.." && pwd)"
+        export PYTHONPATH="$ACTION_DIR:$REPO_ROOT/hooks/release-notes-update"
+        python3 "$ACTION_DIR/publish.py" \
+          --notes-file "$NOTES_FILE" \
+          --fragments-dir "$FRAGMENTS_DIR"

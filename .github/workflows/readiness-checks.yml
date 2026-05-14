@@ -98,6 +98,50 @@ jobs:
           fi
           echo "WIF handshake verified: minted a ${#TOKEN}-char access token (value not printed)"
 
+  release-notes-publish:
+    # End-to-end smoke for the release-notes-publish composite action.
+    # Seeds RELEASE_NOTES.md + a pending fragment, invokes the action,
+    # asserts the step outputs match what we seeded.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed RELEASE_NOTES.md and a pending fragment
+        run: |
+          set -euo pipefail
+          mkdir -p .release-notes
+          cat > RELEASE_NOTES.md <<'EOF'
+          # Release Notes
+
+          ## v0.0.1+1 — 2026-05-13
+
+          <!-- summary -->
+          <!-- /summary -->
+
+          <!-- entries -->
+          - [CUR-1] seed entry
+          <!-- /entries -->
+          EOF
+          cat > .release-notes/smoke.md <<'EOF'
+          <!-- release-notes-fragment v1 -->
+          <!-- version: v0.0.1+1 -->
+
+          - [CUR-2] pending fragment
+          EOF
+      - id: notes
+        uses: ./.github/actions/release-notes-publish
+      - name: Verify outputs
+        env:
+          VERSION: ${{ steps.notes.outputs.version }}
+          ENTRIES: ${{ steps.notes.outputs.entries_block }}
+        run: |
+          set -euo pipefail
+          [ "$VERSION" = "v0.0.1+1" ] || { echo "::error::version mismatch: $VERSION"; exit 1; }
+          echo "$ENTRIES" | grep -q '\[CUR-1\] seed entry' || { echo "::error::missing seed entry"; exit 1; }
+          echo "$ENTRIES" | grep -q '\[CUR-2\] pending fragment' || { echo "::error::missing pending entry"; exit 1; }
+          echo "release-notes-publish smoke OK"
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.
