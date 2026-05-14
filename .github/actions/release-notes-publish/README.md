@@ -21,7 +21,7 @@ steps:
       env: ${{ inputs.deploy-env }}
       text: |
         :rocket: *Released* `${{ steps.notes.outputs.version }}` to `${{ inputs.deploy-env }}`
-      thread_reply_text: |
+      thread-reply-text: |
         ${{ steps.notes.outputs.entries_block }}
       slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
