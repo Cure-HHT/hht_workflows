@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 _HEADER = "# Release Notes"
 _SECTION_RE = re.compile(r"^## (v\S+) — (\d{4}-\d{2}-\d{2})$")
