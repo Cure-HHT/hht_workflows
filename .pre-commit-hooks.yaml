@@ -1,0 +1,20 @@
+# Cure-HHT pre-commit hooks distributed from this repo.
+# Consumers reference:
+#   - repo: https://github.com/Cure-HHT/hht_workflows
+#     rev: <tag>
+#     hooks:
+#       - id: release-notes-update
+#         args: [--version-command=cat VERSION]
+#
+# pre-commit framework discovers hooks via this file at the repo ROOT; per-hook
+# source + READMEs live under hooks/<name>/, but the manifest lives here.
+
+- id: release-notes-update
+  name: release-notes-update
+  description: Maintain per-PR release-notes fragment and consolidate pending fragments into RELEASE_NOTES.md.
+  entry: release-notes-update
+  language: python
+  stages: [pre-commit]
+  pass_filenames: false
+  always_run: true
+  minimum_pre_commit_version: "2.21.0"

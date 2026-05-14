@@ -1,4 +1,6 @@
 """CLI entry point for the release-notes-update pre-commit hook."""
+from __future__ import annotations
+
 import argparse
 import sys
 
@@ -25,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="*",
         help="Files staged for commit (passed by pre-commit framework; unused).",
     )
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)
     print("release-notes-update: placeholder; implemented in Task 5", file=sys.stderr)
     return 0
 

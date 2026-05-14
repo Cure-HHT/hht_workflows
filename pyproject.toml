@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hht-workflows-hooks"
+version = "0.1.0"
+description = "Cure-HHT-specific pre-commit hooks distributed from cure-hht/hht_workflows. Hosts the release-notes-update hook and (in future) any other cross-cutting Cure-HHT hooks."
+requires-python = ">=3.9"
+
+[project.scripts]
+release-notes-update = "release_notes_update.__main__:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+# Each hook's source lives under hooks/<hook-name>/. Setuptools is configured to
+# search those directories for top-level packages so the console-script entry
+# point ('release_notes_update.__main__:main') resolves directly. To add a
+# second hook, drop its package into hooks/<name>/ and add the path to `where`
+# plus a new [project.scripts] entry above.
+[tool.setuptools.packages.find]
+where = ["hooks/release-notes-update"]
