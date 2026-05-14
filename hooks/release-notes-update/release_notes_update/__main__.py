@@ -28,7 +28,12 @@ def _slugify_branch(branch: str) -> str:
 
 def _read_version(command: str) -> str:
     """Run the user-supplied version command and normalize the output to 'vX.Y.Z+N'."""
-    out = subprocess.check_output(command, shell=True, text=True).strip()
+    try:
+        out = subprocess.check_output(command, shell=True, text=True).strip()
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(
+            f"release-notes-update: --version-command failed (exit {e.returncode}): {command}"
+        ) from None
     if not out:
         raise SystemExit("release-notes-update: --version-command produced empty output")
     if not out.startswith("v"):

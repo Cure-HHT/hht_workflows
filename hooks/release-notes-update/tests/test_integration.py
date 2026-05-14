@@ -1,5 +1,4 @@
 """End-to-end integration tests for the release-notes-update hook."""
-import os
 import subprocess
 from pathlib import Path
 

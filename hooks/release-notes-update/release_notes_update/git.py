@@ -53,7 +53,14 @@ def fragments_on_origin_main() -> dict[str, str]:
 
 
 def stage_paths(paths: list[str]) -> None:
-    """Stage the given paths via `git add --`. No-op when paths is empty."""
+    """Stage the given paths via `git add --`. No-op when paths is empty.
+    Re-raises as SystemExit on `git add` failure so the pre-commit hook
+    surfaces a clean error rather than a Python traceback."""
     if not paths:
         return
-    subprocess.check_call(["git", "add", "--", *paths])
+    try:
+        subprocess.check_call(["git", "add", "--", *paths])
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(
+            f"release-notes-update: git add failed (exit {e.returncode})"
+        ) from None
