@@ -1,0 +1,48 @@
+name: slack-notify smoke
+
+# Manual smoke test for the slack-notify composite action's bookmark
+# path. Running this workflow twice exercises the
+# bookmarks.add -> bookmarks.edit upsert: the first run adds a chip
+# titled `smoke-test-bookmark` to #dev pointing at the just-posted
+# message; the second run finds that chip by title and edits its link
+# to point at the new message.
+#
+# Throwaway — once the bookmark behavior is verified, delete this
+# workflow and .github/slack-channels-smoke.yml in the same commit.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  # Serialize runs so the add and edit don't race each other when the
+  # workflow is fired twice in quick succession.
+  group: slack-notify-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post + bookmark via slack-notify
+        uses: ./.github/actions/slack-notify
+        with:
+          event: smoke-test
+          routing-file: .github/slack-channels-smoke.yml
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+          bookmark-title: smoke-test-bookmark
+          text: ":test_tube: slack-notify smoke test — run ${{ github.run_id }} attempt ${{ github.run_attempt }} (${{ github.actor }})"
+          # Block Kit table mirrors the shape of the callisto deploy
+          # message — this is the exact case the bookmark swap was
+          # meant to fix (Slack's pinned_item used to re-render the
+          # full table inline).
+          blocks: |
+            [
+              {"type":"section","text":{"type":"mrkdwn","text":":test_tube: *slack-notify smoke test*"}},
+              {"type":"table","rows":[
+                [{"type":"raw_text","text":"run id"},      {"type":"raw_text","text":"${{ github.run_id }}"}],
+                [{"type":"raw_text","text":"run attempt"}, {"type":"raw_text","text":"${{ github.run_attempt }}"}],
+                [{"type":"raw_text","text":"actor"},       {"type":"raw_text","text":"${{ github.actor }}"}],
+                [{"type":"raw_text","text":"commit"},      {"type":"raw_text","text":"${{ github.sha }}"}]
+              ]}
+            ]
