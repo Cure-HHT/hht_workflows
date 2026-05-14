@@ -40,24 +40,19 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Locate this action's directory
-      id: locate
-      shell: bash
-      run: echo "dir=${{ github.action_path }}" >> "$GITHUB_OUTPUT"
-
     - name: Slice the current version section
       id: slice
       shell: bash
       env:
         NOTES_FILE: ${{ inputs.notes-file }}
         FRAGMENTS_DIR: ${{ inputs.fragments-dir }}
-        ACTION_DIR: ${{ steps.locate.outputs.dir }}
+        ACTION_DIR: ${{ github.action_path }}
       run: |
         set -euo pipefail
         # The publish script reuses the hook's parsing modules; PYTHONPATH must
-        # include the hook package. The action.path resolves to the action's
-        # subdir inside the repo checkout, so we walk up three levels to get
-        # the repo root and add hooks/release-notes-update.
+        # include the hook package. github.action_path resolves to this action's
+        # subdir inside the caller's repo checkout, so we walk up three levels
+        # to get the repo root and add hooks/release-notes-update.
         REPO_ROOT="$(cd "$ACTION_DIR/../../.." && pwd)"
         export PYTHONPATH="$ACTION_DIR:$REPO_ROOT/hooks/release-notes-update"
         python3 "$ACTION_DIR/publish.py" \
