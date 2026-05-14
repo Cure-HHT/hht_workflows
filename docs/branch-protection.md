@@ -17,6 +17,8 @@ create a circular dependency.
     - `doppler-oidc-auth` (Doppler OIDC handshake readiness check)
     - `gcp-wif-auth` (real WIF handshake readiness check)
     - `no-op` (placeholder; replace with real jobs as actions are added)
+    - `release-notes-publish` (release-notes-publish smoke; covers the composite action end-to-end)
+    - `Release Notes Tests` (pytest suite for the hook + publish action)
 - Require conversation resolution before merging: enabled
 - Enforce all the above settings on admins: enabled (`enforce_admins=true`)
 - Push restrictions: not used. The require-a-pull-request rule already prevents
@@ -40,6 +42,8 @@ ignored by the GitHub API.
       -F 'required_status_checks[contexts][]=doppler-oidc-auth' \
       -F 'required_status_checks[contexts][]=gcp-wif-auth' \
       -F 'required_status_checks[contexts][]=no-op' \
+      -F 'required_status_checks[contexts][]=release-notes-publish' \
+      -F 'required_status_checks[contexts][]=Release Notes Tests' \
       -F required_conversation_resolution=true \
       -F enforce_admins=true \
       -F restrictions=null
