@@ -1,0 +1,92 @@
+# Build the URS PDF + DOCX deliverables from a consumer repo.
+#
+# Wraps scripts/urs-compile/compile-urs.sh. Callers check out the
+# consumer repo (and optionally a sibling associate repo) before
+# invoking this action.
+#
+# Example caller (in the consumer repo):
+#
+#   - uses: actions/checkout@v4
+#     with: { path: primary }
+#   - uses: actions/checkout@v4
+#     with:
+#       repository: Cure-HHT/hht_diary
+#       path: associate
+#       token: ${{ secrets.ASSOCIATE_REPO_TOKEN }}
+#   - uses: Cure-HHT/hht_workflows/actions/build-urs@main
+#     with:
+#       primary-root: primary
+#       associate-root: associate
+
+name: Build URS
+description: |
+  Produce URS PDF + DOCX deliverables from a consumer repo holding
+  spec/URS-manifest/ (cover, sponsor-info.yaml, frontmatter) and a
+  sibling associate repo providing cross-referenced spec content.
+
+inputs:
+  primary-root:
+    description: |
+      Path to the consumer repo worktree containing spec/URS-manifest/
+      and the elspais config. Defaults to GITHUB_WORKSPACE.
+    required: false
+    default: ${{ github.workspace }}
+  associate-root:
+    description: |
+      Optional path to a sibling repo worktree contributing spec
+      content via the federated elspais graph and pandoc image
+      resource paths.
+    required: false
+    default: ""
+  python-version:
+    description: Python version to set up for the build.
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Python build dependencies
+      shell: bash
+      run: |
+        pip install -r "${{ github.action_path }}/../../scripts/urs-compile/requirements-compile.txt"
+
+    - name: Install pandoc + LaTeX engine
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          pandoc \
+          texlive-xetex \
+          texlive-latex-extra \
+          texlive-fonts-recommended \
+          fonts-liberation \
+          librsvg2-bin
+
+    - name: Install elspais
+      shell: bash
+      run: |
+        pip install elspais
+
+    - name: Run URS compile
+      shell: bash
+      run: |
+        "${{ github.action_path }}/../../scripts/urs-compile/compile-urs.sh" \
+          "${{ inputs.primary-root }}" \
+          "${{ inputs.associate-root }}"
+
+    - name: Upload URS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: urs-deliverables
+        path: |
+          ${{ inputs.primary-root }}/docs/urs-compiled.pdf
+          ${{ inputs.primary-root }}/docs/urs-compiled.docx
+          ${{ inputs.primary-root }}/docs/urs-term-index.pdf
+          ${{ inputs.primary-root }}/docs/urs-term-index.docx
+        retention-days: 30
