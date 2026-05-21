@@ -8,8 +8,13 @@ the URS in Word format:
 - Heading 1 (chapters): bold, 18pt, page-break-before
 - Heading 2 (sections): bold, 14pt
 - Heading 3 (REQ headings): bold, 12pt
-- Heading 4 (sub-sections under a REQ): bold italic, 11pt
+- Heading 4 / Heading 5: neutralized to read as body text (URS content
+  deeper than H3 is continuous prose, not a hierarchical heading)
 - Body Text: 11pt Arial (Calibri fallback)
+- Subtitle / Author / Date / Abstract: cover-page spacing + alignment
+- REQ ID, Assertions Label: custom paragraph styles available in the
+  styles palette (defined but not auto-applied by the renderer)
+- Table: light-gray borders, modest cell padding, bold pale-cyan header row
 - Page header: sponsor / protocol / version, right-aligned
 - Page footer: "Specific to Protocol [protocol]    CONFIDENTIAL    Page N of M"
 
@@ -33,6 +38,7 @@ from pathlib import Path
 
 import yaml
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -120,6 +126,154 @@ def _set_heading_style(doc, style_name: str, size_pt: int, bold: bool = True,
     pf.keep_with_next = True
     if page_break_before:
         pf.page_break_before = True
+
+
+def _neutralize_heading_style(doc, style_name: str) -> None:
+    """Strip heading-like visual formatting from a Heading N so it reads as
+    body text. Used for Heading 4 / 5: pandoc still maps ``####`` / ``#####``
+    to them, but we don't want them to look like a numbered outline level.
+    Clears outlineLvl so the style stops participating in the document
+    outline / TOC."""
+    style = _get_style(doc, style_name)
+    font = style.font
+    font.name = BODY_FONT
+    font.size = Pt(11)
+    font.bold = False
+    font.italic = False
+    font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+    pf = style.paragraph_format
+    pf.space_before = Pt(6)
+    pf.space_after = Pt(6)
+    pf.keep_with_next = False
+    pf.page_break_before = False
+    pPr = style.element.find(qn("w:pPr"))
+    if pPr is not None:
+        for ol in pPr.findall(qn("w:outlineLvl")):
+            pPr.remove(ol)
+
+
+def _set_cover_text_style(doc) -> None:
+    """Apply URS cover-page spacing/alignment to pandoc's title-block styles."""
+    specs = {
+        "Body Text": dict(before=9, after=9),
+        "Subtitle": dict(size=15, before=12, after=12, center=True, keep_next=True),
+        "Author": dict(center=True, keep_next=True),
+        "Date": dict(center=True, keep_next=True),
+        "Abstract": dict(size=10, before=15, after=15, keep_next=True),
+    }
+    for name, spec in specs.items():
+        try:
+            style = _get_style(doc, name)
+        except KeyError:
+            continue
+        style.font.name = BODY_FONT
+        if "size" in spec:
+            style.font.size = Pt(spec["size"])
+        pf = style.paragraph_format
+        if "before" in spec:
+            pf.space_before = Pt(spec["before"])
+        if "after" in spec:
+            pf.space_after = Pt(spec["after"])
+        if spec.get("center"):
+            pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if spec.get("keep_next"):
+            pf.keep_with_next = True
+
+
+def _add_custom_paragraph_style(
+    doc,
+    name: str,
+    base_name: str,
+    *,
+    font_name: str | None = None,
+    bold: bool = False,
+    before_pt: float = 0,
+    after_pt: float = 0,
+    keep_next: bool = False,
+) -> None:
+    """Define a custom paragraph style. Idempotent: re-adding the same name
+    is a no-op so the function is safe to call against a docx that already
+    carries the style."""
+    if any(s.name == name for s in doc.styles):
+        return
+    style = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+    try:
+        style.base_style = _get_style(doc, base_name)
+    except KeyError:
+        pass
+    if font_name:
+        style.font.name = font_name
+    if bold:
+        style.font.bold = True
+    pf = style.paragraph_format
+    if before_pt:
+        pf.space_before = Pt(before_pt)
+    if after_pt:
+        pf.space_after = Pt(after_pt)
+    if keep_next:
+        pf.keep_with_next = True
+
+
+def _set_table_style(doc) -> None:
+    """Configure the default ``Table`` style with light-gray borders, modest
+    cell padding, and a bold pale-cyan first-row treatment.
+
+    python-docx's high-level API doesn't reach ``tblStylePr`` /
+    ``tblBorders`` / ``shd``, so we manipulate OXML directly."""
+    style = _get_style(doc, "Table")
+    style_el = style.element
+
+    # Make the style normally visible (pandoc default flags it semiHidden).
+    for tag in ("w:semiHidden", "w:unhideWhenUsed"):
+        for el in style_el.findall(qn(tag)):
+            style_el.remove(el)
+
+    tblPr = style_el.find(qn("w:tblPr"))
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        style_el.append(tblPr)
+
+    existing = tblPr.find(qn("w:tblBorders"))
+    if existing is not None:
+        tblPr.remove(existing)
+    tblBorders = OxmlElement("w:tblBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        b = OxmlElement(f"w:{side}")
+        b.set(qn("w:val"), "single")
+        b.set(qn("w:sz"), "4")
+        b.set(qn("w:space"), "0")
+        b.set(qn("w:color"), "BFBFBF")
+        tblBorders.append(b)
+    tblPr.append(tblBorders)
+
+    existing_mar = tblPr.find(qn("w:tblCellMar"))
+    if existing_mar is not None:
+        tblPr.remove(existing_mar)
+    tblCellMar = OxmlElement("w:tblCellMar")
+    for side, width in (("top", "80"), ("left", "120"), ("bottom", "80"), ("right", "120")):
+        m = OxmlElement(f"w:{side}")
+        m.set(qn("w:w"), width)
+        m.set(qn("w:type"), "dxa")
+        tblCellMar.append(m)
+    tblPr.append(tblCellMar)
+
+    for existing_tsp in style_el.findall(qn("w:tblStylePr")):
+        if existing_tsp.get(qn("w:type")) == "firstRow":
+            style_el.remove(existing_tsp)
+    first_row = OxmlElement("w:tblStylePr")
+    first_row.set(qn("w:type"), "firstRow")
+    rPr = OxmlElement("w:rPr")
+    rPr.append(OxmlElement("w:b"))
+    first_row.append(rPr)
+    first_row.append(OxmlElement("w:tblPr"))
+    tcPr = OxmlElement("w:tcPr")
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), "DAEEF3")
+    tcPr.append(shd)
+    first_row.append(tcPr)
+    style_el.append(first_row)
 
 
 def _set_body_style(doc) -> None:
@@ -212,12 +366,23 @@ def build_reference_docx(output_path: Path, sponsor_info: dict) -> None:
 
     _set_body_style(doc)
     _set_title_style(doc)
+    _set_cover_text_style(doc)
     _set_heading_style(doc, "Heading 1", size_pt=18, page_break_before=True)
     _set_heading_style(doc, "Heading 2", size_pt=14)
     _set_heading_style(doc, "Heading 3", size_pt=12)
-    _set_heading_style(doc, "Heading 4", size_pt=11, italic=True)
-    _set_heading_style(doc, "Heading 5", size_pt=11, bold=False, italic=True,
-                       color=(0x40, 0x40, 0x40))
+    _neutralize_heading_style(doc, "Heading 4")
+    _neutralize_heading_style(doc, "Heading 5")
+
+    _add_custom_paragraph_style(
+        doc, "REQ ID", base_name="Normal",
+        font_name="Consolas", before_pt=6, after_pt=4,
+    )
+    _add_custom_paragraph_style(
+        doc, "Assertions Label", base_name="Normal",
+        bold=True, before_pt=8, after_pt=4, keep_next=True,
+    )
+
+    _set_table_style(doc)
 
     _install_header(doc, sponsor_info)
     _install_footer(doc, sponsor_info)
