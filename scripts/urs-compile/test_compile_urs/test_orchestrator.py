@@ -12,7 +12,7 @@ def _load_orchestrator():
 
 
 def test_assemble_markdown_emits_chapter_section_headings_and_content(
-    sample_graph_dict, sample_manifest_dict
+    sample_graph_dict, sample_manifest_dict, tmp_path
 ):
     from urs_compile.graph_loader import Graph
     from urs_compile.manifest import Manifest
@@ -21,7 +21,7 @@ def test_assemble_markdown_emits_chapter_section_headings_and_content(
     graph = Graph.from_dict(sample_graph_dict)
     manifest = Manifest.from_dict(sample_manifest_dict)
 
-    out = mod.assemble_markdown(graph, manifest)
+    out = mod.assemble_markdown(graph, manifest, tmp_path, None)
 
     # Chapter heading — LaTeX numbers chapters automatically; we emit titles only.
     assert "# SYSTEM-WIDE STANDARDS" in out
