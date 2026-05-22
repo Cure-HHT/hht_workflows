@@ -54,21 +54,31 @@ def test_heading_1_through_3_keep_urs_blue_and_sizes(built_docx):
         assert s.font.size.pt == expected_size
         assert s.font.bold is True
         assert str(s.font.color.rgb) == "1F3A5F"
+    # Heading 1 (chapter) and Heading 3 (REQ) both start fresh pages so the
+    # docx mirrors the LaTeX template's \newpage on \chapter and \subsection.
+    assert by_name["Heading 1"].paragraph_format.page_break_before is True
+    assert by_name["Heading 3"].paragraph_format.page_break_before is True
+    assert by_name["Heading 2"].paragraph_format.page_break_before is not True
 
 
-def test_heading_4_and_5_are_neutralized(built_docx):
+def test_heading_4_and_5_are_subheading_styled(built_docx):
+    """H4 / H5 are bold + URS-blue (smaller than chapter/section headings)
+    so REQ-internal subheadings stand out, but have outlineLvl cleared so
+    they don't appear in Word's document outline or the TOC."""
     from docx import Document
     d = Document(built_docx)
     by_name = {s.name: s for s in d.styles}
-    for name in ("Heading 4", "Heading 5"):
+    for name, expected_size in (("Heading 4", 11), ("Heading 5", 10)):
         s = by_name[name]
-        assert s.font.size.pt == 11
-        assert s.font.bold is False
-        assert s.font.italic is False
+        assert s.font.size.pt == expected_size
+        assert s.font.bold is True
+        assert str(s.font.color.rgb) == "1F3A5F"
         assert s.paragraph_format.page_break_before is False
+        # Keep-with-next prevents the subheading from being orphaned at the
+        # bottom of a page with its content starting on the next page.
+        assert s.paragraph_format.keep_with_next is True
+    assert by_name["Heading 5"].font.italic is True
 
-    # outlineLvl removed from the style's pPr so Word stops treating H4/H5
-    # as outline-numbered headings.
     root = _styles_root(built_docx)
     for display_name in ("heading 4", "heading 5"):
         st = _find_style(root, display_name)
@@ -110,6 +120,32 @@ def test_table_style_has_gray_borders_and_blue_header_row(built_docx):
     assert rPr.find(f"{{{W}}}b") is not None, "first-row should be bold"
     shd = first_row.find(f"{{{W}}}tcPr").find(f"{{{W}}}shd")
     assert shd.get(f"{{{W}}}fill") == "DAEEF3"
+
+
+def test_footer_layout_table_has_no_visible_borders(built_docx):
+    """The footer uses a 3-col table to position left/center/right labels;
+    it should NOT carry the global Table style's gray borders."""
+    with zipfile.ZipFile(built_docx) as z:
+        # There's only one footer in the URS-style docx (footer1.xml).
+        footer = etree.fromstring(z.read("word/footer1.xml"))
+    tbl = footer.find(f".//{{{W}}}tbl")
+    assert tbl is not None, "footer should contain a layout table"
+    borders = tbl.find(f"{{{W}}}tblPr/{{{W}}}tblBorders")
+    assert borders is not None, "footer table should explicitly suppress borders"
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        b = borders.find(f"{{{W}}}{side}")
+        assert b is not None and b.get(f"{{{W}}}val") == "nil", (
+            f"footer table {side} border should be nil, got "
+            f"{b.get(f'{{{W}}}val') if b is not None else 'missing'}"
+        )
+
+
+def test_settings_request_field_update_on_open(built_docx):
+    with zipfile.ZipFile(built_docx) as z:
+        settings = etree.fromstring(z.read("word/settings.xml"))
+    update = settings.find(f"{{{W}}}updateFields")
+    assert update is not None, "missing <w:updateFields> in settings.xml"
+    assert update.get(f"{{{W}}}val") == "true"
 
 
 def test_cover_styles_centered_with_expected_spacing(built_docx):

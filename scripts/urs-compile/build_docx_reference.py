@@ -7,9 +7,13 @@ the URS in Word format:
 - Title (cover): centered, 24pt bold
 - Heading 1 (chapters): bold, 18pt, page-break-before
 - Heading 2 (sections): bold, 14pt
-- Heading 3 (REQ headings): bold, 12pt
-- Heading 4 / Heading 5: neutralized to read as body text (URS content
-  deeper than H3 is continuous prose, not a hierarchical heading)
+- Heading 3 (REQ headings): bold, 12pt, page-break-before (each REQ on
+  its own page — matches the LaTeX template's \\newpage on \\subsection)
+- Heading 4 (Overview / Assertions / Rationale): bold, URS-blue, 11pt
+- Heading 5 (Trigger / Suppression subgroups): bold italic, URS-blue, 10pt
+  Both are kept out of Word's outline (outlineLvl cleared); render.py
+  also tags each REQ-internal H4 with {.unnumbered} so pandoc skips
+  the 6.1.8.x section prefix.
 - Body Text: 11pt Arial (Calibri fallback)
 - Subtitle / Author / Date / Abstract: cover-page spacing + alignment
 - REQ ID, Assertions Label: custom paragraph styles available in the
@@ -128,23 +132,28 @@ def _set_heading_style(doc, style_name: str, size_pt: int, bold: bool = True,
         pf.page_break_before = True
 
 
-def _neutralize_heading_style(doc, style_name: str) -> None:
-    """Strip heading-like visual formatting from a Heading N so it reads as
-    body text. Used for Heading 4 / 5: pandoc still maps ``####`` / ``#####``
-    to them, but we don't want them to look like a numbered outline level.
-    Clears outlineLvl so the style stops participating in the document
-    outline / TOC."""
+def _set_subheading_style(doc, style_name: str, *, size_pt: int = 11,
+                          italic: bool = False) -> None:
+    """Configure Heading 4 / Heading 5 for use as REQ-internal subheadings
+    (Overview / Assertions / Rationale / Trigger / Suppression).
+
+    Bold + URS-blue, smaller than the chapter/section headings, no
+    page-break, and with ``outlineLvl`` cleared so the style stops
+    participating in Word's document outline / TOC. Pandoc still maps
+    ``####`` / ``#####`` to them, but the renderer also tags each
+    REQ-internal occurrence with ``{.unnumbered}`` so pandoc skips its
+    ``--number-sections`` prefix and TOC entry."""
     style = _get_style(doc, style_name)
     font = style.font
     font.name = BODY_FONT
-    font.size = Pt(11)
-    font.bold = False
-    font.italic = False
-    font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+    font.size = Pt(size_pt)
+    font.bold = True
+    font.italic = italic
+    font.color.rgb = RGBColor(0x1F, 0x3A, 0x5F)
     pf = style.paragraph_format
-    pf.space_before = Pt(6)
-    pf.space_after = Pt(6)
-    pf.keep_with_next = False
+    pf.space_before = Pt(8)
+    pf.space_after = Pt(4)
+    pf.keep_with_next = True
     pf.page_break_before = False
     pPr = style.element.find(qn("w:pPr"))
     if pPr is not None:
@@ -276,6 +285,18 @@ def _set_table_style(doc) -> None:
     style_el.append(first_row)
 
 
+def _enable_update_fields_on_open(doc) -> None:
+    """Tell Word/LibreOffice to refresh all fields when the document is
+    opened. Without this, pandoc's TOC field renders as a blank gray
+    placeholder until the reader right-clicks → Update Field."""
+    settings = doc.settings.element
+    for existing in settings.findall(qn("w:updateFields")):
+        settings.remove(existing)
+    update = OxmlElement("w:updateFields")
+    update.set(qn("w:val"), "true")
+    settings.append(update)
+
+
 def _set_body_style(doc) -> None:
     style = _get_style(doc, "Normal")
     style.font.name = BODY_FONT
@@ -297,6 +318,27 @@ def _set_title_style(doc) -> None:
     title.font.color.rgb = RGBColor(0x1F, 0x3A, 0x5F)
     title.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_after = Pt(24)
+
+
+def _strip_table_borders(table) -> None:
+    """Override the default ``Table`` style's borders on a specific table.
+
+    Used for the footer layout table — the table is purely a positioning
+    device for the three footer labels and shouldn't show the gray borders
+    the global Table style applies."""
+    tbl = table._element
+    tblPr = tbl.find(qn("w:tblPr"))
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl.insert(0, tblPr)
+    for existing in tblPr.findall(qn("w:tblBorders")):
+        tblPr.remove(existing)
+    tblBorders = OxmlElement("w:tblBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        b = OxmlElement(f"w:{side}")
+        b.set(qn("w:val"), "nil")
+        tblBorders.append(b)
+    tblPr.append(tblBorders)
 
 
 def _install_header(doc, sponsor_info: dict) -> None:
@@ -329,7 +371,10 @@ def _install_footer(doc, sponsor_info: dict) -> None:
         for p in list(footer.paragraphs):
             p._element.getparent().remove(p._element)
         table = footer.add_table(rows=1, cols=3, width=Inches(6.5))
-        # Make the table look like plain text (no borders by default; nothing to do).
+        # Suppress borders: the default Table style (intentionally) draws
+        # light-gray borders around every cell, but this table is purely
+        # for laying out the three footer labels left/center/right.
+        _strip_table_borders(table)
         # Left cell
         left = table.cell(0, 0).paragraphs[0]
         left.alignment = WD_ALIGN_PARAGRAPH.LEFT
@@ -369,9 +414,9 @@ def build_reference_docx(output_path: Path, sponsor_info: dict) -> None:
     _set_cover_text_style(doc)
     _set_heading_style(doc, "Heading 1", size_pt=18, page_break_before=True)
     _set_heading_style(doc, "Heading 2", size_pt=14)
-    _set_heading_style(doc, "Heading 3", size_pt=12)
-    _neutralize_heading_style(doc, "Heading 4")
-    _neutralize_heading_style(doc, "Heading 5")
+    _set_heading_style(doc, "Heading 3", size_pt=12, page_break_before=True)
+    _set_subheading_style(doc, "Heading 4", size_pt=11)
+    _set_subheading_style(doc, "Heading 5", size_pt=10, italic=True)
 
     _add_custom_paragraph_style(
         doc, "REQ ID", base_name="Normal",
@@ -383,6 +428,7 @@ def build_reference_docx(output_path: Path, sponsor_info: dict) -> None:
     )
 
     _set_table_style(doc)
+    _enable_update_fields_on_open(doc)
 
     _install_header(doc, sponsor_info)
     _install_footer(doc, sponsor_info)

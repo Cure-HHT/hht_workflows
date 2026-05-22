@@ -2,6 +2,7 @@
 
 **REQ ID:** `{{ node.id }}`
 
+{%- if config.show_refines_satisfies %}
 {# Outgoing refs come from content.refines_refs / content.satisfies_refs. -#}
 {# node.edges contains BOTH outgoing AND incoming REFINES — using it would -#}
 {# show parents AND children, inverting the hierarchy for PRD base REQs. -#}
@@ -29,3 +30,4 @@
 {% endfor %}
 
 {% endif -%}
+{%- endif -%}

@@ -3,11 +3,32 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import jinja2
 
 from .graph_loader import Graph, GraphNode
+
+
+@dataclass(frozen=True)
+class RenderConfig:
+    """Per-sponsor toggles for which REQ sections appear in the rendered URS.
+
+    Loaded from the ``urs_render:`` block of ``spec/URS-manifest/sponsor-info.yaml``
+    on the consumer repo. Missing keys keep the defaults below (everything
+    visible), so existing sponsors don't need to update their config to
+    preserve current behaviour."""
+    show_refines_satisfies: bool = True
+    show_rationale: bool = True
+
+    @classmethod
+    def from_sponsor_info(cls, sponsor_info: dict) -> "RenderConfig":
+        block = (sponsor_info or {}).get("urs_render") or {}
+        return cls(
+            show_refines_satisfies=bool(block.get("show_refines_satisfies", True)),
+            show_rationale=bool(block.get("show_rationale", True)),
+        )
 
 
 _TABLE_AFTER_PROSE_RE = re.compile(
@@ -38,7 +59,8 @@ def render_remainder(node: GraphNode) -> str:
     return node.content.get("text", "")
 
 
-def render_requirement(node: GraphNode, graph: Graph) -> str:
+def render_requirement(node: GraphNode, graph: Graph,
+                       config: RenderConfig = RenderConfig()) -> str:
     """Render a REQUIREMENT node to markdown.
 
     Walks `node.children` once in source order so each ASSERTION lands
@@ -71,7 +93,7 @@ def render_requirement(node: GraphNode, graph: Graph) -> str:
     """
     # Header (heading + REQ ID + Refines/Satisfies edges) — Jinja handles these.
     template = _env.get_template("req.md.j2")
-    header = template.render(node=node).rstrip()
+    header = template.render(node=node, config=config).rstrip()
 
     body_parts: list[str] = [header]
     saw_rationale_remainder = False
@@ -115,7 +137,7 @@ def render_requirement(node: GraphNode, graph: Graph) -> str:
         child = graph.get_node(child_id)
 
         if idx == assertions_start_idx and not emitted_assertions_header:
-            body_parts.append("\n\n#### Assertions\n")
+            body_parts.append("\n\n#### Assertions {.unnumbered}\n")
             emitted_assertions_header = True
 
         if child.kind == "REMAINDER":
@@ -127,6 +149,10 @@ def render_requirement(node: GraphNode, graph: Graph) -> str:
                 emitted_assertions_header = True
             if heading_lower == "rationale":
                 saw_rationale_remainder = True
+                if not config.show_rationale:
+                    # Skip the rationale REMAINDER entirely (heading + text)
+                    # when the sponsor hides rationale.
+                    continue
             if heading:
                 # `heading_level` set -> source `### Heading` / `## Heading`
                 # (varies by repo authoring style; both surface as REQ
@@ -139,7 +165,7 @@ def render_requirement(node: GraphNode, graph: Graph) -> str:
                 # the `#### Assertions` parent; an italic label is a soft
                 # subgroup marker.
                 if heading_level is not None:
-                    body_parts.append(f"\n\n#### {heading}\n")
+                    body_parts.append(f"\n\n#### {heading} {{.unnumbered}}\n")
                 else:
                     body_parts.append(f"\n\n*{heading}*\n")
             if text:
@@ -161,20 +187,21 @@ def render_requirement(node: GraphNode, graph: Graph) -> str:
 
     # Fallback: emit content.rationale only when the children didn't
     # already supply a Rationale REMAINDER (avoids duplicate sections).
-    if not saw_rationale_remainder:
+    if config.show_rationale and not saw_rationale_remainder:
         rationale = (node.content.get("rationale") or "").strip()
         if rationale:
-            body_parts.append("\n\n#### Rationale\n")
+            body_parts.append("\n\n#### Rationale {.unnumbered}\n")
             body_parts.append(f"\n{rationale}\n")
 
     return "".join(body_parts).rstrip() + "\n"
 
 
-def render_node(node: GraphNode, graph: Graph | None = None) -> str:
+def render_node(node: GraphNode, graph: Graph | None = None,
+                config: RenderConfig = RenderConfig()) -> str:
     if node.kind == "REMAINDER":
         return render_remainder(node)
     if node.kind == "REQUIREMENT":
         if graph is None:
             raise ValueError("render_node requires a Graph for REQUIREMENT nodes")
-        return render_requirement(node, graph)
+        return render_requirement(node, graph, config)
     raise ValueError(f"Cannot render node kind {node.kind!r}")
