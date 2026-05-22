@@ -30,13 +30,28 @@ import build_docx_reference  # noqa: E402
 from urs_compile.graph_loader import Graph  # noqa: E402
 from urs_compile.interleave import interleave_section_by_path  # noqa: E402
 from urs_compile.manifest import Manifest  # noqa: E402
-from urs_compile.render import render_node  # noqa: E402
+from urs_compile.render import RenderConfig, render_node  # noqa: E402
 
 
 _HEADING_RE = re.compile(r"^(#{1,5})(\s+)", re.MULTILINE)
 _LEADING_H1_RE = re.compile(r"\A\s*#\s+[^\n]*(\n+|\Z)")
 _LEADING_COMMENTS_RE = re.compile(r"\A(?:\s*<!--.*?-->\s*\n?)+", re.DOTALL)
 _LATEX_BLOCK_RE = re.compile(r"```\{=latex\}\n.*?\n```\n?", re.DOTALL)
+# elspais-generated glossary entries pack the "Defined in: <REQ-id>"
+# attribution onto the same source line as the definition, separated by
+# an inline raw-LaTeX span (`\\*\null\hfill`) that the PDF target uses to
+# right-align the attribution. For docx, that span is dropped — leaving
+# the attribution mashed onto the definition. The line-break regex
+# below substitutes a `<br>` so pandoc emits a `<w:br/>` in the same
+# Definition paragraph. The smallskip regex strips the trailing vertical
+# spacer (PDF-only).
+_INLINE_LATEX_LINEBREAK_RE = re.compile(r"`\\\\\*\\null\\hfill`\{=latex\}")
+_INLINE_LATEX_SMALLSKIP_RE = re.compile(r"`\\smallskip`\{=latex\}[ \t]*")
+# Force "See:" / "Avoid:" / "Defined in:" labels onto their own lines in
+# the docx output. pandoc treats single source newlines as spaces inside
+# a definition entry, which collapses these labels into one run-on
+# paragraph; injecting an explicit <br> keeps them visually separated.
+_DEFLIST_LABEL_RE = re.compile(r"\n(See:|Avoid:|Defined in:)")
 _H2_HEADING_RE = re.compile(r"^(## )(?!.*\{\.)(.+?)$", re.MULTILINE)
 _GLOSSARY_LETTER_HEADING_RE = re.compile(r"^## ([A-Z])\s*$", re.MULTILINE)
 _DEFINED_IN_RE = re.compile(r"\n\*Defined in: ([^*]*)\*", re.MULTILINE)
@@ -135,6 +150,23 @@ def _strip_latex_blocks(text: str) -> str:
     return _LATEX_BLOCK_RE.sub("", text)
 
 
+def _normalise_glossary_breaks_for_docx(text: str) -> str:
+    """Translate PDF-only glossary line-break tricks into docx equivalents.
+
+    elspais's glossary writer hand-codes inline LaTeX to format each entry
+    as definition + right-aligned "Defined in" attribution on a single
+    source line. In the docx target the LaTeX spans are dropped and
+    single newlines collapse to spaces — leaving a run-on Definition
+    paragraph. We substitute pandoc's hard-line-break syntax (two
+    trailing spaces before the newline) so each label lands on its own
+    line inside the same paragraph. A ``<br>`` HTML tag would be silently
+    dropped by pandoc's docx writer, so it can't be used here."""
+    text = _INLINE_LATEX_LINEBREAK_RE.sub("  \n", text)
+    text = _INLINE_LATEX_SMALLSKIP_RE.sub("", text)
+    text = _DEFLIST_LABEL_RE.sub(r"  \n\1", text)
+    return text
+
+
 def _exclude_h2_from_toc(text: str) -> str:
     """Mark every H2 heading as `{.unnumbered .unlisted}` so pandoc skips it
     in the TOC and omits the auto-numbering.
@@ -198,7 +230,9 @@ def _resolve(primary: Path, associate: Path | None, relative: str) -> Path | Non
     return None
 
 
-def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path, associate: Path | None) -> str:
+def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path,
+                      associate: Path | None,
+                      config: RenderConfig = RenderConfig()) -> str:
     """Build the full assembled markdown document body (no frontmatter / appendices)."""
     parts: list[str] = []
     for chapter in manifest.chapters:
@@ -243,7 +277,7 @@ def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path, associate
             emitted_any = False
             for relpath in section.files:
                 for _kind, node in interleave_section_by_path(graph, relpath):
-                    rendered_chunks.append((node.kind, render_node(node, graph)))
+                    rendered_chunks.append((node.kind, render_node(node, graph, config)))
                     rendered_chunks.append(("SEP", "\n"))
                     emitted_any = True
             if not emitted_any:
@@ -289,6 +323,7 @@ def assemble_full_document(
     primary: Path,
     associate: Path | None = None,
     target_format: str = "pdf",
+    config: RenderConfig = RenderConfig(),
 ) -> str:
     """Assemble the full markdown including frontmatter, body, appendices, glossary, term-index.
 
@@ -315,7 +350,7 @@ def assemble_full_document(
         path = _resolve(primary, associate, manifest.frontmatter)
         if path is not None:
             chunks.append(path.read_text())
-    chunks.append(assemble_markdown(graph, manifest, primary, associate))
+    chunks.append(assemble_markdown(graph, manifest, primary, associate, config))
     # Each back-matter section carries an explicit heading label so
     # "term_index" renders as "Term Index" (not "Term_index" from .title()).
     for key, heading in (
@@ -353,6 +388,7 @@ def assemble_full_document(
     text = _rewrite_image_paths("\n\n".join(chunks))
     if target_format != "pdf":
         text = _strip_latex_blocks(text)
+        text = _normalise_glossary_breaks_for_docx(text)
     return text
 
 
@@ -433,6 +469,103 @@ def run_pandoc_pdf(
     subprocess.run(cmd, check=True)
 
 
+def _strip_unreferenced_bookmarks(docx_path: Path) -> None:
+    """Remove pandoc-emitted bookmarks that no hyperlink or field targets.
+
+    Pandoc inserts a ``<w:bookmarkStart>`` / ``<w:bookmarkEnd>`` pair at
+    every heading anchor (slugified title or ``{#req-id}`` block ID). With
+    Word's "Show bookmarks" option enabled these appear as gray brackets
+    in the body. Word's TOC field generates its own ``_Toc*`` bookmarks
+    on update, so pandoc's named ones are only useful when something
+    actually targets them (internal hyperlink ``w:anchor=`` or a
+    ``REF``/``PAGEREF`` field). The URS body currently has none, so we
+    drop the orphans. Anything *referenced* is preserved verbatim so
+    future renderer changes that emit cross-references keep working."""
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    doc = Document(docx_path)
+    body = doc.element.body
+
+    referenced: set[str] = set()
+    for hl in body.iter(qn("w:hyperlink")):
+        anchor = hl.get(qn("w:anchor"))
+        if anchor:
+            referenced.add(anchor)
+    for instr in body.iter(qn("w:instrText")):
+        text = (instr.text or "").strip()
+        # Field-instruction syntax is e.g. ` REF MyBookmark \h ` — split
+        # on whitespace and treat every non-switch token as a potential
+        # name. Cheap, but conservative: false positives keep a bookmark
+        # alive needlessly; false negatives delete a referenced one.
+        for tok in text.split():
+            if tok and not tok.startswith("\\"):
+                referenced.add(tok)
+
+    removed = 0
+    for el in list(body.iter(qn("w:bookmarkStart"))):
+        name = el.get(qn("w:name"))
+        if name in referenced:
+            continue
+        bid = el.get(qn("w:id"))
+        el.getparent().remove(el)
+        # Drop the matching bookmarkEnd (paired by id).
+        for end in list(body.iter(qn("w:bookmarkEnd"))):
+            if end.get(qn("w:id")) == bid:
+                end.getparent().remove(end)
+                break
+        removed += 1
+
+    if removed:
+        doc.save(docx_path)
+
+
+def _move_toc_after_cover(docx_path: Path) -> None:
+    """Relocate pandoc's auto-generated TOC so it lands on its own page,
+    after the cover content.
+
+    Pandoc places the ``--toc`` SDT at body index 0. With ``TOCHeading``
+    inheriting page-break-before from ``Heading 1`` in our reference doc,
+    Word suppresses that page break when the TOC is the very first body
+    element — TOC and cover end up sharing page 1. Moving the SDT to
+    immediately before the first ``Heading 1`` paragraph fixes the layout:
+    cover on page 1, TOC on page 2 (page-break-before now fires), first
+    chapter on page 3 (its own page-break-before)."""
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    doc = Document(docx_path)
+    body = doc.element.body
+
+    toc_sdt = None
+    for child in body:
+        if child.tag != qn("w:sdt"):
+            continue
+        for ps in child.iter(qn("w:pStyle")):
+            if ps.get(qn("w:val")) == "TOCHeading":
+                toc_sdt = child
+                break
+        if toc_sdt is not None:
+            break
+    if toc_sdt is None:
+        return
+
+    first_h1 = None
+    for child in body:
+        if child.tag != qn("w:p"):
+            continue
+        ps = child.find(f"{qn('w:pPr')}/{qn('w:pStyle')}")
+        if ps is not None and ps.get(qn("w:val")) == "Heading1":
+            first_h1 = child
+            break
+    if first_h1 is None:
+        return
+
+    body.remove(toc_sdt)
+    first_h1.addprevious(toc_sdt)
+    doc.save(docx_path)
+
+
 def run_pandoc_docx(
     markdown_path: Path,
     output_path: Path,
@@ -445,6 +578,8 @@ def run_pandoc_docx(
     If reference_doc is provided and exists, pandoc uses it for fonts,
     heading styles, header/footer; otherwise pandoc's default styling applies.
     """
+    filters_dir = Path(__file__).parent / "pandoc-filters"
+    image_filter = filters_dir / "image-normalize.lua"
     cmd = [
         "pandoc",
         str(markdown_path),
@@ -455,11 +590,18 @@ def run_pandoc_docx(
         # Match the PDF's chapter-class mapping so headings line up
         # numerically between the two outputs.
         "--top-level-division=chapter",
+        # Lua filter: cap every Image's width to a uniform docx-friendly
+        # size. The same filter sets fig-pos=H for the LaTeX target;
+        # other format branches inside the filter pass through unchanged.
+        f"--lua-filter={image_filter}",
         "--resource-path=" + ":".join(str(p) for p in resource_paths),
     ]
     if reference_doc is not None and reference_doc.exists():
         cmd.extend(["--reference-doc", str(reference_doc)])
     subprocess.run(cmd, check=True)
+
+    _move_toc_after_cover(output_path)
+    _strip_unreferenced_bookmarks(output_path)
 
 
 def main() -> int:
@@ -518,6 +660,7 @@ def main() -> int:
     sponsor_info: dict = {}
     if args.sponsor_info.exists():
         sponsor_info = yaml.safe_load(args.sponsor_info.read_text()) or {}
+    render_config = RenderConfig.from_sponsor_info(sponsor_info)
 
     graph = Graph.from_json_path(args.graph)
     manifest = Manifest.from_yaml_path(args.manifest)
@@ -535,7 +678,8 @@ def main() -> int:
     per_format_md: dict[str, Path] = {}
     for fmt in formats:
         md = assemble_full_document(
-            graph, manifest, repo_root, associate_root, target_format=fmt,
+            graph, manifest, repo_root, associate_root,
+            target_format=fmt, config=render_config,
         )
         if len(formats) > 1:
             md_path = args.output_md.with_suffix(f".{fmt}.md")
