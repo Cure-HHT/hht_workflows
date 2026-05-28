@@ -1,0 +1,78 @@
+name: Cosign verify (org-standard)
+description: >
+  Verifies keyless cosign signatures on one or more fully-pinned container
+  image references using the Cure-HHT standard certificate-identity-regexp and
+  OIDC issuer. Wraps sigstore cosign with a retry/backoff loop (the Sigstore
+  verify side can flake) and an optional soft-fail mode. Pin this action by SHA
+  from consumer workflows; never by branch or tag.
+inputs:
+  images:
+    description: >
+      Newline-separated list of fully-pinned image refs to verify, each in
+      name@sha256:<64-hex> form. Tags are NOT accepted; pass digests.
+    required: true
+  identity-regexp:
+    description: cosign --certificate-identity-regexp. Defaults to the calling repo's Actions identity.
+    required: false
+    default: https://github.com/${{ github.repository }}
+  oidc-issuer:
+    description: cosign --certificate-oidc-issuer value.
+    required: false
+    default: https://token.actions.githubusercontent.com
+  retries:
+    description: Max verification attempts per image before giving up.
+    required: false
+    default: '5'
+  soft-fail:
+    description: >
+      'true' -> log ::warning:: and exit 0 on persistent failure (mirrors the
+      SBOM-attestation pattern). 'false' -> exit non-zero and fail the job.
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+    - name: Verify signatures
+      shell: bash
+      run: |
+        set -uo pipefail
+        max_attempts="${{ inputs.retries }}"
+        soft_fail="${{ inputs.soft-fail }}"
+        overall_ok=true
+        while IFS= read -r image; do
+          [ -z "$image" ] && continue
+          attempt=1
+          ok=false
+          while true; do
+            echo "cosign verify attempt ${attempt}/${max_attempts} for ${image}"
+            if cosign verify \
+              --certificate-identity-regexp="${{ inputs.identity-regexp }}" \
+              --certificate-oidc-issuer="${{ inputs.oidc-issuer }}" \
+              "$image"; then
+              echo "verified: ${image}"
+              ok=true
+              break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then break; fi
+            sleep_seconds=$((attempt * 15))
+            echo "verify failed; retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done
+          if [ "$ok" = true ]; then
+            echo "- \`${image}\`: verified" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- \`${image}\`: VERIFY FAILED after ${max_attempts} attempts" >> "$GITHUB_STEP_SUMMARY"
+            overall_ok=false
+          fi
+        done <<< "${{ inputs.images }}"
+        if [ "$overall_ok" != true ]; then
+          if [ "$soft_fail" = "true" ]; then
+            echo "::warning::cosign verification failed for one or more images (soft-fail)."
+            exit 0
+          fi
+          echo "::error::cosign verification failed for one or more images."
+          exit 1
+        fi
