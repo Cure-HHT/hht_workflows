@@ -21,7 +21,7 @@ soft-fail mode that mirrors the SBOM-attestation pattern.
 
 **Default behavior:**
 - Verifies 1 or more fully-pinned images (digest form, not tags).
-- Uses 5 retry attempts with exponential backoff (attempt * 15 seconds).
+- Uses 5 retry attempts with linear backoff (`attempt * 15` seconds: 15s, 30s, 45s, 60s across 5 attempts).
 - On persistent failure, logs a `::warning::` and exits 0 (soft-fail mode).
 
 **Security-gate vs advisory mode:**
@@ -46,11 +46,11 @@ explicitly discouraged — they can change without your knowledge.
 | Input | Description | Default | Required |
 |-------|-------------|---------|----------|
 | `images` | Newline-separated list of fully-pinned image refs (name@sha256:...). Tags are NOT accepted. | — | Yes |
-| `identity-regexp` | cosign `--certificate-identity-regexp` value. | `https://github.com/${{ github.repository }}` | No |
+| `identity-regexp` | cosign `--certificate-identity-regexp` value. Anchored to the calling repo (prefix `^`, trailing `/`) so prefix collisions (`foo` vs `foo-bar`) are rejected. | `^https://github.com/${{ github.repository }}/` | No |
 | `oidc-issuer` | cosign `--certificate-oidc-issuer` value. | `https://token.actions.githubusercontent.com` | No |
 | `retries` | Max verification attempts per image. | `5` | No |
 | `soft-fail` | `'true'`: log warning and exit 0 on failure. `'false'`: exit 1 and fail the job. | `'true'` | No |
-| `cosign-version` | Override the cosign-installer release (e.g. `'v2.4.1'`). Defaults to the SHA-pinned v3.x. | `''` | No |
+| `cosign-version` | Cosign **binary** release to install (e.g. `'v2.5.3'`). The installer itself is SHA-pinned to `sigstore/cosign-installer@v3.9.2` independently. When empty, uses `v2.5.3` — the cosign release bundled with that pinned installer. Override only to test a different cosign version; the default is what consumers should use in production. | `''` | No |
 
 ## Why this exists
 
