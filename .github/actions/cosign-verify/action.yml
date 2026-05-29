@@ -1,0 +1,139 @@
+name: Cosign verify (org-standard)
+description: >
+  Verifies keyless cosign signatures on one or more fully-pinned container
+  image references using the Cure-HHT standard certificate-identity-regexp and
+  OIDC issuer. Wraps sigstore cosign with a retry/backoff loop (the Sigstore
+  verify side can flake) and an optional soft-fail mode. Set soft-fail: 'false'
+  when this step is a required security gate. Pin this action by SHA from
+  consumer workflows; never by branch or tag.
+inputs:
+  images:
+    description: >
+      Newline-separated list of fully-pinned image refs to verify, each in
+      name@sha256:<64-hex> form. Tags are NOT accepted; pass digests.
+    required: true
+  identity-regexp:
+    description: >
+      cosign --certificate-identity-regexp. Defaults to the calling repo's Actions identity,
+      anchored to the calling repo so prefix collisions (`foo` vs `foo-bar`) are rejected.
+    required: false
+    default: ^https://github.com/${{ github.repository }}/
+  oidc-issuer:
+    description: cosign --certificate-oidc-issuer value.
+    required: false
+    default: https://token.actions.githubusercontent.com
+  retries:
+    description: Max verification attempts per image before giving up.
+    required: false
+    default: '5'
+  soft-fail:
+    description: >
+      'true' -> log ::warning:: and exit 0 on persistent failure (mirrors the
+      SBOM-attestation pattern). 'false' -> exit non-zero and fail the job.
+    required: false
+    default: 'true'
+  cosign-version:
+    description: >
+      Cosign binary release to install (e.g. 'v2.5.3'). When empty, defaults
+      to 'v2.5.3' -- the cosign release bundled with the pinned
+      sigstore/cosign-installer (v3.9.2) used by this action. Override only
+      to test against a different cosign version; the default is what
+      consumers should use in production.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159  # v3.9.2
+      with:
+        cosign-release: ${{ inputs.cosign-version != '' && inputs.cosign-version || 'v2.5.3' }}
+    # Implements: CAL-OPS-deploy-provenance-traceability  (callisto spec/ops-deployment.md)
+    - name: Verify signatures
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        IDENTITY_REGEXP: ${{ inputs.identity-regexp }}
+        OIDC_ISSUER: ${{ inputs.oidc-issuer }}
+        RETRIES: ${{ inputs.retries }}
+        SOFT_FAIL: ${{ inputs.soft-fail }}
+      run: |
+        set -uo pipefail
+
+        # F3: validate retries is a non-negative integer
+        if ! [[ "$RETRIES" =~ ^[0-9]+$ ]]; then
+          echo "::error::retries must be a non-negative integer, got: '${RETRIES}'"
+          exit 1
+        fi
+        max_attempts="$RETRIES"
+        if [ "$max_attempts" -lt 1 ]; then max_attempts=1; fi
+
+        soft_fail="$SOFT_FAIL"
+        overall_ok=true
+        config_error=false
+        processed_count=0
+        verified_count=0
+
+        while IFS= read -r image; do
+          # strip leading/trailing whitespace
+          image="${image#"${image%%[![:space:]]*}"}"
+          image="${image%"${image##*[![:space:]]}"}"
+          [ -z "$image" ] && continue
+          processed_count=$((processed_count + 1))
+
+          # F2: enforce digest pinning — tags or non-digest refs are a config error
+          if ! [[ "$image" =~ @sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Image must be pinned by digest (name@sha256:<64-hex>), got: ${image}"
+            echo "- \`${image}\`: REJECTED (not digest-pinned)" >> "$GITHUB_STEP_SUMMARY"
+            overall_ok=false
+            config_error=true
+            continue
+          fi
+
+          attempt=1
+          ok=false
+          while true; do
+            echo "cosign verify attempt ${attempt}/${max_attempts} for ${image}"
+            if cosign verify \
+              --certificate-identity-regexp="$IDENTITY_REGEXP" \
+              --certificate-oidc-issuer="$OIDC_ISSUER" \
+              "$image"; then
+              echo "verified: ${image}"
+              ok=true
+              break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then break; fi
+            sleep_seconds=$((attempt * 15))
+            echo "verify failed; retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done
+          if [ "$ok" = true ]; then
+            echo "- \`${image}\`: verified" >> "$GITHUB_STEP_SUMMARY"
+            verified_count=$((verified_count + 1))
+          else
+            echo "- \`${image}\`: VERIFY FAILED after ${max_attempts} attempts" >> "$GITHUB_STEP_SUMMARY"
+            overall_ok=false
+          fi
+        done <<< "$IMAGES"
+
+        # F4: nothing to verify is a config error
+        if [ "$processed_count" -eq 0 ]; then
+          echo "::error::'images' input contained no non-empty image references; nothing to verify"
+          exit 1
+        fi
+
+        # F2 fall-through: any malformed input fails unconditionally (not soft-fail)
+        if [ "$config_error" = true ]; then
+          echo "::error::One or more image references were not digest-pinned; failing regardless of soft-fail."
+          exit 1
+        fi
+
+        if [ "$overall_ok" != true ]; then
+          if [ "$soft_fail" = "true" ]; then
+            echo "::warning::cosign verification failed for one or more images (soft-fail)."
+            exit 0
+          fi
+          echo "::error::cosign verification failed for one or more images."
+          exit 1
+        fi

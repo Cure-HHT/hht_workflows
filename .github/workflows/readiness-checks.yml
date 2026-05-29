@@ -142,6 +142,72 @@ jobs:
           echo "$ENTRIES" | grep -q '\[CUR-2\] pending fragment' || { echo "::error::missing pending entry"; exit 1; }
           echo "release-notes-publish smoke OK"
 
+  cosign-verify:
+    # Implements: CAL-OPS-deploy-provenance-traceability  (callisto spec/ops-deployment.md)
+    #   End-to-end readiness check of the cosign-verify composite action.
+    #   Builds a minimal fixture image, pushes to GHCR, signs it with the
+    #   workflow's own keyless OIDC identity, then verifies with the action.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write    # push to GHCR
+      id-token: write    # keyless cosign sign (OIDC token)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push fixture image
+        id: build
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75  # v6.9.0
+        with:
+          context: .github/fixtures/cosign-verify
+          push: true
+          tags: ghcr.io/cure-hht/cosign-verify-readiness:${{ github.sha }}
+
+      - name: Install Cosign (for signing step)
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159  # v3.9.2
+
+      - name: Sign fixture image
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes \
+            "ghcr.io/cure-hht/cosign-verify-readiness@${IMAGE_DIGEST}"
+
+      - name: Verify signature via composite action (happy path)
+        # soft-fail: 'false' so a verification failure blocks this readiness job.
+        uses: ./.github/actions/cosign-verify
+        with:
+          images: ghcr.io/cure-hht/cosign-verify-readiness@${{ steps.build.outputs.digest }}
+          soft-fail: 'false'
+
+      - name: Verify signature fails for wrong identity (negative case)
+        id: negative
+        uses: ./.github/actions/cosign-verify
+        with:
+          images: ghcr.io/cure-hht/cosign-verify-readiness@${{ steps.build.outputs.digest }}
+          identity-regexp: 'https://github.com/does-not-exist/wrong-repo'
+          soft-fail: 'false'
+        continue-on-error: true
+
+      - name: Assert negative case failed
+        env:
+          OUTCOME: ${{ steps.negative.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::Expected wrong-identity check to fail but got outcome: ${OUTCOME}"
+            exit 1
+          fi
+          echo "Negative identity check correctly rejected wrong-repo identity (outcome: ${OUTCOME})"
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.
