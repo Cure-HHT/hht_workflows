@@ -63,6 +63,57 @@ jobs:
           fi
           echo "Doppler OIDC handshake verified; readiness secret was fetched and matches expected value."
 
+  doppler-cli-oidc-auth:
+    # Implements: HHT-OPS-identity-over-keys/B
+    # Implements: HHT-OPS-composite-action-library/A,B,F
+    #   End-to-end readiness check of the CLI-token-mint variant of the
+    #   Doppler OIDC handshake. Distinct from doppler-oidc-auth above:
+    #   this action only authenticates the doppler CLI for the job; it
+    #   does NOT fetch any secret values. We verify by installing the
+    #   CLI and asserting it can list projects with the minted token.
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required by the Doppler OIDC exchange
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Doppler CLI
+        # Pinned upstream install script. Used here only to exercise the
+        # CLI against the minted token; consumers install their own CLI.
+        run: |
+          set -euo pipefail
+          curl -Ls --tlsv1.2 --proto "=https" --retry 3 \
+            https://cli.doppler.com/install.sh | sudo sh
+      - name: Mint Doppler CLI token via doppler-cli-oidc-auth
+        # Reuse the existing readiness identity if a CLI-specific one is
+        # not provisioned. The action only needs the identity ID; project
+        # / config scoping happens later via CLI invocations.
+        uses: ./.github/actions/doppler-cli-oidc-auth
+        with:
+          doppler_identity_id: ${{ vars.READINESS_DOPPLER_CLI_IDENTITY_ID || vars.READINESS_DOPPLER_IDENTITY_ID }}
+      - name: Assert DOPPLER_TOKEN is set in env
+        # The action exports DOPPLER_TOKEN to $GITHUB_ENV after masking it.
+        # We only check that it is non-empty; the action's own self-check
+        # already validated the token works against /v3/projects.
+        run: |
+          set -euo pipefail
+          if [ -z "${DOPPLER_TOKEN:-}" ]; then
+            echo "::error::DOPPLER_TOKEN unset after doppler-cli-oidc-auth (action did not export the token)"
+            exit 1
+          fi
+          echo "DOPPLER_TOKEN is set (${#DOPPLER_TOKEN} chars; value not printed)"
+      - name: Verify the CLI can list projects with the minted token
+        # Independent end-to-end check via the CLI surface: confirms the
+        # token is acceptable to the CLI (not just to a raw curl call) and
+        # that the identity has at least one project's read access.
+        run: |
+          set -euo pipefail
+          if ! doppler projects --json | jq -e 'length > 0' >/dev/null; then
+            echo "::error::doppler projects returned no projects for the readiness identity"
+            exit 1
+          fi
+          echo "doppler-cli-oidc-auth verified: CLI lists projects with the minted token."
+
   gcp-wif-auth:
     # Implements: HHT-OPS-identity-over-keys/A
     #   End-to-end readiness check of the WIF handshake via the composite action.

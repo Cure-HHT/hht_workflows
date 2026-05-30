@@ -1,0 +1,81 @@
+name: Doppler CLI OIDC auth (org-standard)
+description: >
+  Mints a CLI-usable Doppler token via GitHub OIDC for a single audit identity
+  and exposes it as a masked DOPPLER_TOKEN env var. Unlike doppler-oidc-auth
+  (which injects secrets from a single config as env vars), this action does
+  NOT fetch any secret values -- it just authenticates the doppler CLI for the
+  job. Callers then invoke `doppler configs ...` and `doppler secrets ...`
+  using the identity's permissions.
+
+  Pin this action by SHA from consumer workflows; never by branch or tag.
+
+inputs:
+  doppler_identity_id:
+    description: >
+      UUID of the Doppler service-account identity to authenticate as. The
+      identity must be configured in Doppler dashboard to accept the caller's
+      workflow as an OIDC source (subject claim should be bound to the
+      specific job_workflow_ref). Pass via vars.<NAME> from caller; do NOT
+      hardcode.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-identity-over-keys/B
+    #   CI -> Doppler auth via OIDC; no static DOPPLER_TOKEN anywhere.
+    # Implements: HHT-OPS-composite-action-library/A,B,F
+    #   Cross-repo CI primitive; declared input contract; SHA-pinned consumers.
+    - name: Mint Doppler token via GitHub OIDC and mask it before export
+      id: mint
+      shell: bash
+      env:
+        DOPPLER_IDENTITY_ID: ${{ inputs.doppler_identity_id }}
+      run: |
+        set -euo pipefail
+
+        # Fetch a GitHub OIDC token bound to this job. The audience MUST match
+        # what the Doppler identity is configured to accept; Doppler's default
+        # for GitHub provider is https://github.com/<org>.
+        OIDC_TOKEN="$(curl -fsSL \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Cure-HHT" \
+          | jq -r '.value')"
+
+        if [ -z "$OIDC_TOKEN" ] || [ "$OIDC_TOKEN" = "null" ]; then
+          echo "::error::Failed to obtain GitHub OIDC token for audience https://github.com/Cure-HHT"
+          exit 1
+        fi
+
+        # Exchange the OIDC token for a Doppler CLI token. The exchange
+        # endpoint is Doppler's identity-token-exchange API.
+        # Verified against https://docs.doppler.com/reference/auth-oidc
+        # on 2026-05-26: POST /v3/auth/oidc with body {identity, token}.
+        RESPONSE="$(curl -fsSL -X POST \
+          -H 'accept: application/json' \
+          -H 'content-type: application/json' \
+          --data "$(jq -nc \
+            --arg id "$DOPPLER_IDENTITY_ID" \
+            --arg token "$OIDC_TOKEN" \
+            '{identity: $id, token: $token}')" \
+          'https://api.doppler.com/v3/auth/oidc')"
+
+        DOPPLER_TOKEN="$(printf '%s' "$RESPONSE" | jq -r '.token')"
+
+        if [ -z "$DOPPLER_TOKEN" ] || [ "$DOPPLER_TOKEN" = "null" ]; then
+          echo "::error::Doppler OIDC exchange returned no token. Response: $(printf '%s' "$RESPONSE" | jq -r '.messages // empty')"
+          exit 1
+        fi
+
+        # CRITICAL: mask FIRST, then export. Without this ordering, the
+        # token's first appearance is unmasked.
+        printf '::add-mask::%s\n' "$DOPPLER_TOKEN"
+        printf 'DOPPLER_TOKEN=%s\n' "$DOPPLER_TOKEN" >> "$GITHUB_ENV"
+
+        # Self-check: validate the token works against Doppler's API by
+        # listing projects (the response body has no token value -- safe to
+        # let bubble in case of error).
+        if ! curl -fsSL -H "authorization: Bearer $DOPPLER_TOKEN" 'https://api.doppler.com/v3/projects?per_page=1' >/dev/null; then
+          echo "::error::Minted Doppler token failed self-check against /v3/projects"
+          exit 1
+        fi
