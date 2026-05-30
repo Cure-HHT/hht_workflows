@@ -72,10 +72,16 @@ runs:
         printf '::add-mask::%s\n' "$DOPPLER_TOKEN"
         printf 'DOPPLER_TOKEN=%s\n' "$DOPPLER_TOKEN" >> "$GITHUB_ENV"
 
-        # Self-check: validate the token works against Doppler's API by
-        # listing projects (the response body has no token value -- safe to
-        # let bubble in case of error).
-        if ! curl -fsSL -H "authorization: Bearer $DOPPLER_TOKEN" 'https://api.doppler.com/v3/projects?per_page=1' >/dev/null; then
-          echo "::error::Minted Doppler token failed self-check against /v3/projects"
+        # Self-check: validate the token works against Doppler's API AND
+        # the identity actually has at least one project's read access.
+        # Doppler returns HTTP 200 with `{"projects": [], "page": 1}` for
+        # zero-permission identities -- curl's -f flag doesn't catch that,
+        # so we must parse the response body to detect "token is valid but
+        # useless." Both failure modes (HTTP error AND empty projects) are
+        # surfaced as a hard exit so consumers don't get a silently-broken
+        # token. The response body has no token value -- safe to capture.
+        SELF_CHECK="$(curl -fsSL -H "authorization: Bearer $DOPPLER_TOKEN" 'https://api.doppler.com/v3/projects?per_page=1')"
+        if ! printf '%s' "$SELF_CHECK" | jq -e '.projects | length > 0' >/dev/null; then
+          echo "::error::Minted Doppler token has no project access. The identity may be unbound, missing project memberships, or scoped to zero projects in the Doppler dashboard."
           exit 1
         fi
