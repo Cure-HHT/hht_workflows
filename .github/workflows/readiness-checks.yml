@@ -78,12 +78,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Doppler CLI
-        # Pinned upstream install script. Used here only to exercise the
-        # CLI against the minted token; consumers install their own CLI.
+        # Pin Doppler CLI version. Mirrors hht_admin's canonical pin in
+        # cure-hht/hht_admin/.github/versions.env (DOPPLER_CLI_VERSION) so
+        # the readiness check exercises the action against the same CLI
+        # version downstream consumers run in production. Bump path: bump
+        # in hht_admin/.github/versions.env first, then update this inline
+        # pin to match.
+        env:
+          DOPPLER_CLI_VERSION: v3.75.1
         run: |
           set -euo pipefail
           curl -Ls --tlsv1.2 --proto "=https" --retry 3 \
-            https://cli.doppler.com/install.sh | sudo sh
+            https://cli.doppler.com/install.sh \
+            | sudo sh -s -- --version "${DOPPLER_CLI_VERSION#v}"
+          doppler --version
       - name: Mint Doppler CLI token via doppler-cli-oidc-auth
         # Reuse the existing readiness identity if a CLI-specific one is
         # not provisioned. The action only needs the identity ID; project

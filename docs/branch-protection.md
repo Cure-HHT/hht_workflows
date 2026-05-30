@@ -14,7 +14,8 @@ create a circular dependency.
   - Require review from Code Owners: **disabled** (see note below)
 - Require status checks to pass before merging
   - Required checks: one entry per job in `readiness-checks.yml`, by the bare **job name** (NOT `workflow-name / job-name` — that's what the UI displays, but the check-run is stored under just the job name on the commit; matching is by the stored name):
-    - `doppler-oidc-auth` (Doppler OIDC handshake readiness check)
+    - `doppler-oidc-auth` (Doppler OIDC handshake readiness check; secrets-injection variant)
+    - `doppler-cli-oidc-auth` (Doppler OIDC handshake readiness check; CLI-token-mint variant)
     - `gcp-wif-auth` (real WIF handshake readiness check)
     - `no-op` (placeholder; replace with real jobs as actions are added)
     - `release-notes-publish` (release-notes-publish smoke; covers the composite action end-to-end)
@@ -40,6 +41,7 @@ ignored by the GitHub API.
       -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
       -F 'required_status_checks[strict]=true' \
       -F 'required_status_checks[contexts][]=doppler-oidc-auth' \
+      -F 'required_status_checks[contexts][]=doppler-cli-oidc-auth' \
       -F 'required_status_checks[contexts][]=gcp-wif-auth' \
       -F 'required_status_checks[contexts][]=no-op' \
       -F 'required_status_checks[contexts][]=release-notes-publish' \
