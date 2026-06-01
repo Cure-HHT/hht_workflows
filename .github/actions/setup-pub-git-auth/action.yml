@@ -1,0 +1,74 @@
+name: Setup pub git auth (org-standard)
+description: >
+  Authenticate CI to private Cure-HHT git dependencies (e.g. the event_sourcing
+  packages consumed via `dart pub get` / `flutter pub get`) by minting a
+  short-lived ops-bot GitHub App installation token and rewriting
+  git@github.com:<owner>/ URLs to HTTPS-with-token. No deploy keys, no static
+  PATs. Run AFTER doppler-oidc-auth (which provides the App key as env vars) and
+  BEFORE any `pub get`. Pin this action by SHA from consumer workflows; never by
+  branch or tag.
+
+inputs:
+  app_id:
+    description: >
+      ops-bot GitHub App ID. Pass from an env var sourced via doppler-oidc-auth
+      (e.g. ${{ env.OPS_BOT_APP_ID }}); do NOT hardcode.
+    required: true
+  app_private_key:
+    description: >
+      ops-bot GitHub App private key (PEM), sourced via doppler-oidc-auth
+      (e.g. ${{ env.OPS_BOT_APP_PRIVATE_KEY }}); do NOT hardcode.
+    required: true
+  owner:
+    description: GitHub org that owns the private dependency repos.
+    required: false
+    default: Cure-HHT
+  repositories:
+    description: >
+      Comma-separated repo names (within owner) the token may read. Default is
+      the single event_sourcing source repo that hosts the event_sourcing /
+      reaction / reaction_widgets / reaction_widgets_testing packages.
+    required: false
+    default: event_sourcing
+
+outputs:
+  token:
+    description: >
+      The minted short-lived installation token (masked). Available to later
+      steps that need authenticated git/gh access; expires with the job.
+    value: ${{ steps.app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-identity-over-keys/B
+    #   git auth via a per-job, short-lived App installation token minted from
+    #   the OIDC-fetched App key; no static PAT or deploy key is stored anywhere.
+    - name: Mint ops-bot App installation token (contents:read, scoped)
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.owner }}
+        repositories: ${{ inputs.repositories }}
+        permission-contents: read
+
+    # Implements: HHT-OPS-composite-action-library/A,B
+    #   The git-url-rewrite is implemented once here and consumed by reference;
+    #   upgrades (e.g. the minting action's pin) land in one place.
+    - name: Rewrite git@ <owner> URLs to HTTPS-with-token for pub resolution
+      shell: bash
+      env:
+        GH_PUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        OWNER: ${{ inputs.owner }}
+      run: |
+        set -euo pipefail
+        echo "::add-mask::${GH_PUB_TOKEN}"
+        # `pub` resolves git: deps with the system git, so rewrite this owner's
+        # SSH form (and the plain-HTTPS form) to inject the installation token.
+        # One base can carry multiple insteadOf values.
+        base="https://x-access-token:${GH_PUB_TOKEN}@github.com/${OWNER}/"
+        git config --global "url.${base}.insteadOf" "git@github.com:${OWNER}/"
+        git config --global --add "url.${base}.insteadOf" "https://github.com/${OWNER}/"
+        echo "git auth configured for ${OWNER}/* private pub deps"
