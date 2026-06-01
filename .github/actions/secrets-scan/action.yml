@@ -2,6 +2,11 @@
 #
 # Runs gitleaks against the consumer repo's full git history.
 #
+# If the consumer repo commits a gitleaks baseline file (default
+# `.gitleaks-baseline.json`), it is passed via `--baseline-path` so
+# previously-acknowledged historical findings don't fail the gate while
+# new leaks still do. Repos without a baseline file are unaffected.
+#
 # CANONICAL HOME: cure-hht/hht_workflows (this file).
 # Consumer repos invoke this from a thin workflow wrapper:
 #   uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@main
@@ -17,6 +22,10 @@ inputs:
     description: 'Gitleaks version (override default pin)'
     required: false
     default: '8.29.0'
+  baseline-path:
+    description: 'Path to a gitleaks baseline file; passed via --baseline-path when it exists in the consumer repo'
+    required: false
+    default: '.gitleaks-baseline.json'
 
 runs:
   using: 'composite'
@@ -43,9 +52,16 @@ runs:
 
     - name: Scan for secrets
       shell: bash
+      env:
+        BASELINE_PATH: ${{ inputs.baseline-path }}
       run: |
         set -euo pipefail
-        if gitleaks detect --verbose --no-banner --redact --log-level info; then
+        baseline_arg=()
+        if [ -n "${BASELINE_PATH}" ] && [ -f "${BASELINE_PATH}" ]; then
+          echo "Using gitleaks baseline: ${BASELINE_PATH}"
+          baseline_arg=(--baseline-path "${BASELINE_PATH}")
+        fi
+        if gitleaks detect --verbose --no-banner --redact --log-level info "${baseline_arg[@]}"; then
           echo "No secrets detected"
         else
           echo "::error::Gitleaks detected secrets in the repository"
