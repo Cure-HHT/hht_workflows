@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: Cure-HHT/hht_workflows/.github/actions/validate-pr-title@main
+      - uses: Cure-HHT/hht_workflows/.github/actions/validate-pr-title@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 ### `secrets-scan.yml`
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # gitleaks needs full history
-      - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@main
+      - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 ### `validation-summary.yml`
@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: Cure-HHT/hht_workflows/.github/actions/validation-summary@main
+      - uses: Cure-HHT/hht_workflows/.github/actions/validation-summary@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 The job's `name:` field becomes the check-context name that the
@@ -129,7 +129,9 @@ This repo follows semantic versioning:
   to an action's input/output contract (`HHT-OPS-composite-action-library/F`);
   MINOR/PATCH are backward-compatible.
 - **`vMAJOR`** (e.g. `v1`) is a moving tag re-pointed to the latest release
-  within that major, for anyone who wants a major-pin.
+  within that major. It exists only for **discoverability and SHA→version
+  mapping** (Dependabot, the drift check, humans reading releases) — consumers
+  SHALL NOT reference it in `uses:`; they always SHA-pin, as above.
 
 Each release tag points at a `main` commit. Because consumers SHA-pin, the
 tag is what maps a pinned SHA to a version: Dependabot (`github-actions`

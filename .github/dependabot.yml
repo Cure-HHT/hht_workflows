@@ -1,11 +1,13 @@
 # Dependabot — GitHub Actions dependency updates.
 #
-# Tracks the third-party actions this repo SHA-pins (docker/*, dopplerhq/*,
-# google-github-actions/*, sigstore/*, actions/*) across .github/workflows and
-# the composite actions under .github/actions. Dependabot maps each pinned SHA
-# to the action's latest release tag and opens a reviewed, grouped, weekly PR;
-# it never auto-merges and keeps the SHA-pin style (rewriting the SHA + a
-# version comment in place).
+# Tracks the actions this repo depends on across .github/workflows and the
+# composite actions under .github/actions: the SHA-pinned upstreams wrapped by
+# the composite actions (docker/*, dopplerhq/*, google-github-actions/*,
+# sigstore/*) plus the tag-pinned `actions/*` used in workflows (e.g.
+# actions/checkout@v4). Dependabot opens a reviewed, grouped, weekly PR per
+# update and never auto-merges, preserving each ref's existing style (a
+# SHA-pinned ref is rewritten to the new SHA + version comment; a tag ref to
+# the new tag).
 #
 # Implements: HHT-OPS-composite-action-library (consumer-notification leg; CUR-1422)
 version: 2
