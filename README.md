@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: Cure-HHT/hht_workflows/.github/actions/validate-pr-title@main
+      - uses: Cure-HHT/hht_workflows/.github/actions/validate-pr-title@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 ### `secrets-scan.yml`
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # gitleaks needs full history
-      - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@main
+      - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 ### `validation-summary.yml`
@@ -105,18 +105,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: Cure-HHT/hht_workflows/.github/actions/validation-summary@main
+      - uses: Cure-HHT/hht_workflows/.github/actions/validation-summary@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 The job's `name:` field becomes the check-context name that the
 org-level ruleset matches against. Each consumer's wrappers must use
 these exact names.
 
-## Pinning
+## Pinning & versioning
 
-Pin to `@main` for auto-update (a fix in this repo lands in all
-consumers on their next workflow run). Pin to `@<commit-sha>` or
-`@<tag>` if you need stability against unintended changes here.
+Consumers **SHA-pin** every `uses:` reference to this repo
+(`Cure-HHT/hht_workflows/.github/actions/<name>@<40-char-sha>`), per
+`HHT-OPS-composite-action-library/B` in `hht_admin`. Do **not** pin to
+`@main` or a moving tag — an unreviewed change here would otherwise reach
+every consumer on their next run.
+
+### Versioning & releases
+
+This repo follows semantic versioning:
+
+- **`vMAJOR.MINOR.PATCH`** (immutable, e.g. `v1.0.0`) is cut for each set
+  of changes consumers may adopt. A MAJOR bump signals a breaking change
+  to an action's input/output contract (`HHT-OPS-composite-action-library/F`);
+  MINOR/PATCH are backward-compatible.
+- **`vMAJOR`** (e.g. `v1`) is a moving tag re-pointed to the latest release
+  within that major. It exists only for **discoverability and SHA→version
+  mapping** (Dependabot, the drift check, humans reading releases) — consumers
+  SHALL NOT reference it in `uses:`; they always SHA-pin, as above.
+
+Each release tag points at a `main` commit. Because consumers SHA-pin, the
+tag is what maps a pinned SHA to a version: Dependabot (`github-actions`
+ecosystem, enabled in this repo and every consumer) opens a **reviewed** PR
+when a newer release exists, and the cross-repo pin-drift check in `hht_admin`
+flags consumers that pin an untagged SHA or that disagree across
+`hht_diary` ↔ `hht_diary_<sponsor>`. No auto-update — bumps are explicit and
+reviewed.
+
+**Cutting a release:** merge to `main`, then
+`gh release create vX.Y.Z --target <main-sha>`, and re-point the major tag:
+`git tag -f vMAJOR <sha> && git push -f origin vMAJOR`.
 
 ## Local hooks (pre-commit framework)
 

@@ -92,7 +92,7 @@ omitted, `routing.<event>` (must be a leaf, not a dict).
 
 - name: Notify Slack on deploy success
   if: success()
-  uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<sha>  # slack-notify-vX.Y.Z
+  uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<commit-sha>  # SHA-pin to a release; see top-level README "Pinning & versioning"
   with:
     event: deploy-success
     env: ${{ inputs.sponsor-env }}
@@ -218,14 +218,9 @@ hiccup shouldn't paint a successful deploy red).
 
 ## Action version pinning
 
-Two equally valid approaches in this repo (matching the convention for
-the other actions here, see top-level `README.md`):
-
-- **`@main`** — auto-update; a fix in this repo lands in all consumers
-  on their next workflow run.
-- **`@<commit-sha>` or `@<tag>`** — stable against unintended changes
-  here.
-
-Tag releases as `slack-notify-vX.Y.Z` (subdir-prefixed) since this repo
-hosts multiple shared actions and a single repo-wide `v1` would
-conflate them.
+Consumers **SHA-pin** this action like every other action in the repo
+(`@<40-char-sha>`, never `@main` or a moving tag). Releases are
+**repo-wide** semantic-version tags (`vX.Y.Z` + a moving `vMAJOR`); the
+tag is a version label that lets a pinned SHA be mapped to a release
+(Dependabot, the drift check). See the top-level `README.md` →
+"Pinning & versioning" for the full policy.
