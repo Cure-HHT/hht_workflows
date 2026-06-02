@@ -37,7 +37,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Fetch Doppler secrets via doppler-oidc-auth
         uses: ./.github/actions/doppler-oidc-auth
         with:
@@ -76,7 +76,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Doppler CLI
         # Pin Doppler CLI version. Mirrors hht_admin's canonical pin in
         # cure-hht/hht_admin/.github/versions.env (DOPPLER_CLI_VERSION) so
@@ -130,7 +130,7 @@ jobs:
       id-token: write   # required by the WIF auth exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Auth to GCP via gcp-wif-auth
         id: auth
         uses: ./.github/actions/gcp-wif-auth
@@ -165,7 +165,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Seed RELEASE_NOTES.md and a pending fragment
         run: |
           set -euo pipefail
@@ -212,7 +212,7 @@ jobs:
       packages: write    # push to GHCR
       id-token: write    # keyless cosign sign (OIDC token)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0

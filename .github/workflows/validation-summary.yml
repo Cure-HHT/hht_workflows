@@ -35,5 +35,5 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4  # required for ./.github/actions resolution
+      - uses: actions/checkout@v6  # required for ./.github/actions resolution
       - uses: ./.github/actions/validation-summary
