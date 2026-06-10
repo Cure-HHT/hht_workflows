@@ -6,7 +6,7 @@ from urs_compile.manifest import Manifest, Section, Chapter
 def test_load_from_dict(sample_manifest_dict):
     m = Manifest.from_dict(sample_manifest_dict)
     assert m.document["title"] == "Test URS"
-    assert len(m.chapters) == 1
+    assert len(m.chapters) == 2
 
 
 def test_chapter_has_sections(sample_manifest_dict):
@@ -15,6 +15,20 @@ def test_chapter_has_sections(sample_manifest_dict):
     assert ch.number == 4
     assert ch.title == "SYSTEM-WIDE STANDARDS"
     assert len(ch.sections) == 1
+
+
+def test_chapter_scope_defaults_core(sample_manifest_dict):
+    m = Manifest.from_dict(sample_manifest_dict)
+    assert m.chapters[0].scope == "core"
+    assert m.chapters[1].scope == "sponsor"
+
+
+def test_chapter_scope_rejects_unknown_value():
+    with pytest.raises(ValueError, match="scope"):
+        Manifest.from_dict({
+            "chapters": [{"number": 4, "title": "X", "sections": [],
+                          "scope": "bogus"}],
+        })
 
 
 def test_section_has_files(sample_manifest_dict):

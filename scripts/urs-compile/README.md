@@ -11,7 +11,7 @@ content via the federated elspais graph.
 scripts/urs-compile/
 ├── compile-urs.sh             # Local-dev / CI entry point
 ├── compile-urs.py             # Python orchestrator
-├── urs_compile/               # Helper modules (graph_loader, interleave, manifest, render)
+├── urs_compile/               # Helper modules (graph_loader, ordering, manifest, render)
 ├── pandoc-filters/            # Lua filters (table-grid, image-normalize, code-breakable, assertion-label-italic)
 ├── urs-template.latex         # Generic LaTeX template; sponsor identity comes from \sponsorName macros
 ├── urs-section-map.yaml       # Chapter/section ordering manifest
@@ -61,16 +61,30 @@ spec/URS-manifest/
 ├── urs-cover.tex              # LaTeX cover snippet (uses \sponsorName etc.)
 ├── urs-term-index-cover.tex   # LaTeX cover snippet for the term-index PDF
 ├── cover.md                   # Markdown cover prepended to the DOCX output
-└── frontmatter.md             # Markdown frontmatter prepended to both outputs
+├── frontmatter.md             # Markdown frontmatter prepended to both outputs
+├── ch7-intro.md               # Sponsor Configuration Requirements chapter intro
+└── appendices.md              # Appendix prose appended after the body
 ```
 
 Platform-generic (typically ASSOCIATE_ROOT, but may live in either):
 
 ```text
 spec/URS-manifest/
-├── ch4-intro.md, ch5-intro.md, ch6-intro.md   # Chapter intros
-└── appendices.md              # Appendix prose appended after the body
+└── ch4-intro.md, ch5-intro.md, ch6-intro.md   # Chapter intros
 ```
+
+## Section ordering
+
+Within each manifest section, REQs are ordered by the kebab structure
+of their IDs — topic (first kebab segment, in order of first appearance
+across the section's files), then level (PRD before GUI), then subtopic
+(source order) — see `urs_compile/ordering.py`. Only PRD and GUI levels
+appear in the deliverable.
+
+Chapters declare a `scope`: `core` chapters emit DIARY-* REQs only;
+a `sponsor` chapter collects every sponsor-namespace REQ from the files
+it references, so sponsor configuration REQs land in their own chapter
+instead of interleaving with the platform REQs.
 
 ## Local CLI usage
 

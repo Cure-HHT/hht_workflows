@@ -29,12 +29,17 @@ def test_assemble_markdown_emits_chapter_section_headings_and_content(
     assert "## User Roles and Permissions" in out
     # DIARY content
     assert "Customizable Role-Based Access Control" in out
-    # CAL content (interleaved after DIARY pair)
+    # Sponsor content is no longer interleaved with the core REQs — it
+    # lands in the sponsor chapter after the body chapters.
     assert "Role Definitions (Callisto Permissions Table)" in out
-    # Order check: DIARY role-definitions comes before CAL role-definitions
+    assert "# SPONSOR CONFIGURATION REQUIREMENTS" in out
+    sponsor_chapter_pos = out.find("# SPONSOR CONFIGURATION REQUIREMENTS")
     diary_pos = out.find("DIARY-PRD-role-definitions")
     cal_pos = out.find("CAL-PRD-role-definitions")
-    assert 0 < diary_pos < cal_pos
+    assert 0 < diary_pos < sponsor_chapter_pos < cal_pos
+    # File prose (REMAINDERs) renders ahead of the section's REQs.
+    prose_pos = out.find("Intro prose for the section.")
+    assert 0 < prose_pos < diary_pos
 
 
 def test_strip_latex_blocks_removes_raw_latex_fences():

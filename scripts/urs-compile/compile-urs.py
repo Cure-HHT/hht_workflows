@@ -6,8 +6,11 @@ Pipeline:
   2. Read tools/urs-section-map.yaml manifest.
   3. Assemble markdown chapter-by-chapter, section-by-section.
      - Emit URS chapter and section headings from manifest.
-     - For each section, walk FILE nodes whose relative_path matches; interleave
-       DIARY + CAL REQs by kebab-stripped name (DIARY first, then CAL pair).
+     - For each section, emit the file prose (REMAINDERs) followed by the
+       section's REQs ordered by kebab ID structure (topic, level,
+       subtopic — see urs_compile/ordering.py). Core chapters emit
+       DIARY-* REQs; the sponsor chapter collects the sponsor-namespace
+       REQs from the files it references.
   4. Prepend frontmatter, append appendices + glossary.
   5. Invoke pandoc once with the URS LaTeX template + cover + resource path.
 """
@@ -28,7 +31,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import build_docx_reference  # noqa: E402
 from urs_compile.graph_loader import Graph  # noqa: E402
-from urs_compile.interleave import interleave_section_by_path  # noqa: E402
+from urs_compile.ordering import (  # noqa: E402
+    ordered_section_requirements,
+    section_remainders,
+)
 from urs_compile.manifest import Manifest  # noqa: E402
 from urs_compile.render import RenderConfig, render_node  # noqa: E402
 
@@ -268,18 +274,27 @@ def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path,
                 )
             prev_section_num = section_idx
             parts.append(f"\n## {section.title}\n")
-            # Run interleave per manifest path: source_file-based lookup
-            # surfaces CAL siblings even when federation collapsed FILE nodes.
-            # We collect (kind, rendered_text) so we can demote only REMAINDER
-            # output — REQ output is already at the final heading level
-            # (### title / #### subsections) and must not be demoted.
+            # Emit file prose (REMAINDERs) first, then the section's REQs
+            # ordered by kebab ID structure (topic, level, subtopic). The
+            # sponsor chapter skips REMAINDERs — its prose is the body
+            # chapters' job; it only collects the sponsor-namespace REQs.
+            # We collect (kind, rendered_text) so we can demote only
+            # REMAINDER output — REQ output is already at the final heading
+            # level (### title / #### subsections) and must not be demoted.
             rendered_chunks: list[tuple[str, str]] = []
-            emitted_any = False
-            for relpath in section.files:
-                for _kind, node in interleave_section_by_path(graph, relpath):
-                    rendered_chunks.append((node.kind, render_node(node, graph, config)))
+            if chapter.scope == "core":
+                for rem in section_remainders(graph, section.files):
+                    rendered_chunks.append((rem.kind, render_node(rem, graph, config)))
                     rendered_chunks.append(("SEP", "\n"))
-                    emitted_any = True
+            reqs = ordered_section_requirements(
+                graph, section.files, scope=chapter.scope,
+            )
+            for req in reqs:
+                rendered_chunks.append((req.kind, render_node(req, graph, config)))
+                rendered_chunks.append(("SEP", "\n"))
+            emitted_any = bool(reqs) or any(
+                kind == "REMAINDER" for kind, _ in rendered_chunks
+            )
             if not emitted_any:
                 parts.append(
                     f"\n*(No content found for {section.number} — manifest references {section.files})*\n"

@@ -22,22 +22,6 @@
       ],
       "edges": []
     },
-    "file:spec/prd-rbac.md@callisto": {
-      "id": "file:spec/prd-rbac.md@callisto",
-      "kind": "FILE",
-      "label": "prd-rbac.md",
-      "content": {
-        "file_type": "spec",
-        "absolute_path": "/fake/cal/spec/prd-rbac.md",
-        "relative_path": "spec/prd-rbac.md",
-        "repo": "callisto"
-      },
-      "children": [
-        "rem:cal:spec/prd-rbac.md:1",
-        "CAL-PRD-role-definitions"
-      ],
-      "edges": []
-    },
     "rem:spec/prd-rbac.md:1": {
       "id": "rem:spec/prd-rbac.md:1",
       "kind": "REMAINDER",
@@ -54,16 +38,6 @@
       "label": "### Role Switching",
       "content": {
         "text": "### Role Switching\n\nProse between REQs."
-      },
-      "children": [],
-      "edges": []
-    },
-    "rem:cal:spec/prd-rbac.md:1": {
-      "id": "rem:cal:spec/prd-rbac.md:1",
-      "kind": "REMAINDER",
-      "label": "# RBAC (callisto)",
-      "content": {
-        "text": "CAL-side intro prose."
       },
       "children": [],
       "edges": []
@@ -228,6 +202,6 @@
       "edges": []
     }
   },
-  "roots": ["file:spec/prd-rbac.md", "file:spec/prd-rbac.md@callisto"],
+  "roots": ["file:spec/prd-rbac.md"],
   "metadata": {"federated": true, "repos": ["diary", "callisto"]}
 }

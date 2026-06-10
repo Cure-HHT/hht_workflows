@@ -10,3 +10,10 @@ chapters:
       - number: "4.3"
         title: "User Roles and Permissions"
         files: [spec/prd-rbac.md]
+  - number: 7
+    title: "SPONSOR CONFIGURATION REQUIREMENTS"
+    scope: sponsor
+    sections:
+      - number: "7.1"
+        title: "System-wide Standards"
+        files: [spec/prd-rbac.md]
