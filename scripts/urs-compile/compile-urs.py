@@ -709,6 +709,7 @@ def run_pandoc_docx(
     """
     filters_dir = Path(__file__).parent / "pandoc-filters"
     image_filter = filters_dir / "image-normalize.lua"
+    table_filter = filters_dir / "table-autofit-docx.lua"
     cmd = [
         "pandoc",
         str(markdown_path),
@@ -723,6 +724,11 @@ def run_pandoc_docx(
         # size. The same filter sets fig-pos=H for the LaTeX target;
         # other format branches inside the filter pass through unchanged.
         f"--lua-filter={image_filter}",
+        # Lua filter: content-based column widths for auto-width tables
+        # (longest-word floor, prose columns absorb the slack) so short
+        # identifiers and headers stop wrapping. docx target only;
+        # authored-width grid tables pass through unchanged.
+        f"--lua-filter={table_filter}",
         "--resource-path=" + ":".join(str(p) for p in resource_paths),
     ]
     if reference_doc is not None and reference_doc.exists():

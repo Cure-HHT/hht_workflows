@@ -12,7 +12,7 @@ scripts/urs-compile/
 ├── compile-urs.sh             # Local-dev / CI entry point
 ├── compile-urs.py             # Python orchestrator
 ├── urs_compile/               # Helper modules (graph_loader, ordering, manifest, render)
-├── pandoc-filters/            # Lua filters (table-grid, image-normalize, code-breakable, assertion-label-italic)
+├── pandoc-filters/            # Lua filters (table-grid, table-autofit-docx, image-normalize, code-breakable, assertion-label-italic)
 ├── urs-template.latex         # Generic LaTeX template; sponsor identity comes from \sponsorName macros
 ├── urs-section-map.yaml       # Chapter/section ordering manifest
 ├── build_docx_reference.py    # Generates the pandoc docx style reference at build time
@@ -87,6 +87,15 @@ Chapters declare a `scope`: `core` chapters emit DIARY-* REQs only;
 a `sponsor` chapter collects every sponsor-namespace REQ from the files
 it references, so sponsor configuration REQs land in their own chapter
 instead of interleaving with the platform REQs.
+
+Table widths (docx): `table-autofit-docx.lua` sizes each auto-width
+table's columns from content — the longest unbreakable word is the
+floor (headers may wrap between words but never mid-word), prose
+columns absorb the spare width, and the table spans the full text
+width. Pandoc-derived all-equal widths (from uniform pipe-table
+separators) are recomputed; authored unequal widths (grid tables) are
+kept, and empty columns (signature blanks) stay wide. The PDF target
+keeps its own `table-grid.lua` treatment.
 
 Pagination: every body section (level-2 heading) starts on a fresh page;
 every level-3 heading starts on a fresh page EXCEPT the first one of
