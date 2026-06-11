@@ -5,9 +5,10 @@
 # The compile pipeline reads `elspais graph` JSON (run from the sponsor
 # side to capture the federated graph) and emits content for each section
 # by collecting REQs whose source_file matches `files` below — across both
-# repos. Within a section, REQs are ordered by kebab ID structure (topic,
-# level, subtopic — see urs_compile/ordering.py); only PRD and GUI levels
-# appear in the URS deliverable.
+# repos. Within a section, REQs keep source order, with PRD/GUI twins
+# sharing one kebab name merged into a single level-3 section (see
+# urs_compile/ordering.py); only PRD and GUI levels appear in the URS
+# deliverable.
 #
 # Chapter `scope` controls namespace routing: `core` chapters emit DIARY-*
 # REQs only; the `sponsor` chapter collects every sponsor-namespace REQ

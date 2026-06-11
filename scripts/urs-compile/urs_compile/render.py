@@ -60,8 +60,16 @@ def render_remainder(node: GraphNode) -> str:
 
 
 def render_requirement(node: GraphNode, graph: Graph,
-                       config: RenderConfig = RenderConfig()) -> str:
+                       config: RenderConfig = RenderConfig(),
+                       primary_label: str | None = None) -> str:
     """Render a REQUIREMENT node to markdown.
+
+    `primary_label` marks this REQ as a secondary member of a merged
+    level-3 section (a PRD/GUI twin sharing one kebab name). Instead of
+    a numbered `### Title` heading — which would add a TOC entry, a
+    section number, and a page break — the REQ opens with a horizontal
+    rule and, when its title differs from the group's primary title, a
+    bold title paragraph.
 
     Walks `node.children` once in source order so each ASSERTION lands
     immediately under whichever REMAINDER subheading preceded it. This
@@ -93,7 +101,9 @@ def render_requirement(node: GraphNode, graph: Graph,
     """
     # Header (heading + REQ ID + Refines/Satisfies edges) — Jinja handles these.
     template = _env.get_template("req.md.j2")
-    header = template.render(node=node, config=config).rstrip()
+    header = template.render(
+        node=node, config=config, primary_label=primary_label,
+    ).rstrip()
 
     body_parts: list[str] = [header]
     saw_rationale_remainder = False
@@ -197,11 +207,12 @@ def render_requirement(node: GraphNode, graph: Graph,
 
 
 def render_node(node: GraphNode, graph: Graph | None = None,
-                config: RenderConfig = RenderConfig()) -> str:
+                config: RenderConfig = RenderConfig(),
+                primary_label: str | None = None) -> str:
     if node.kind == "REMAINDER":
         return render_remainder(node)
     if node.kind == "REQUIREMENT":
         if graph is None:
             raise ValueError("render_node requires a Graph for REQUIREMENT nodes")
-        return render_requirement(node, graph, config)
+        return render_requirement(node, graph, config, primary_label=primary_label)
     raise ValueError(f"Cannot render node kind {node.kind!r}")

@@ -1,5 +1,17 @@
+{% if primary_label is none -%}
 ### {{ node.label }}  {{ '{#' }}{{ node.id }}}
+{% else -%}
+{#- Secondary member of a merged level-3 section: a rule separates it -#}
+{#- from the primary REQ; a bold title paragraph (no heading -> no TOC -#}
+{#- entry, no numbering, no page break) carries its title when it -#}
+{#- differs from the primary's. -#}
+---
 
+{% if node.label != primary_label -%}
+**{{ node.label }}**
+
+{% endif -%}
+{% endif %}
 **REQ ID:** `{{ node.id }}`
 
 {%- if config.show_refines_satisfies %}

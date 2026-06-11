@@ -1,19 +1,18 @@
-"""Order section REQs by their kebab ID structure: topic, level, subtopic.
+"""Group section REQs by their kebab ID name into URS level-3 sections.
 
 The URS body no longer interleaves sponsor (CAL-*) REQs with core
 (DIARY-*) REQs. Each manifest chapter declares a ``scope`` — ``core``
 chapters emit only core-namespace REQs, the ``sponsor`` chapter collects
 every sponsor-namespace REQ from the files it references.
 
-Within a section, REQs are ordered by the kebab structure of their IDs.
-Given ``DIARY-{PRD|GUI}-{topic}-{subtopic...}``:
-
-1. **topic** — the first kebab segment of the namespace/level-stripped
-   name. Topics appear in order of first appearance across the section's
-   files (preserving the source narrative: foundational REQs stay first).
-2. **level** — PRD before GUI within a topic.
-3. **subtopic** — source (parse_line) order within a (topic, level)
-   group; the sort is stable so the author's in-file ordering survives.
+Within a section, REQs whose IDs share the same kebab name after the
+namespace/level prefix (``DIARY-PRD-user-account-deactivate`` and
+``DIARY-GUI-user-account-deactivate``) merge into a single level-3
+section: one numbered heading, the PRD REQ first, the GUI REQ following
+in the same section (no page break between them). This removes the
+duplicate titles the TOC otherwise shows for PRD/GUI twins. Groups keep
+the source (parse_line) order of their first member; within a group,
+PRD precedes GUI.
 
 Only URS-relevant levels (PRD, GUI) are emitted. BASE / OPS / DEV REQs
 in manifest-referenced files are excluded from the URS deliverable.
@@ -49,25 +48,22 @@ def parse_req_id(req_id: str) -> tuple[str, str, str] | None:
     return m.group(1), m.group(2), m.group(3)
 
 
-def kebab_topic(name: str) -> str:
-    """Return the topic (first kebab segment) of a stripped REQ name."""
-    return name.split("-", 1)[0]
-
-
-def ordered_section_requirements(
+def grouped_section_requirements(
     graph: Graph,
     relpaths: Iterable[str],
     scope: str = "core",
-) -> list[GraphNode]:
-    """Return the section's REQs filtered by `scope`, in URS order.
+) -> list[list[GraphNode]]:
+    """Return the section's REQs filtered by `scope`, grouped for the URS.
 
     `scope`:
     - ``"core"`` — REQs in the :data:`CORE_NAMESPACE` only.
     - ``"sponsor"`` — REQs in any other namespace (the sponsor overlay).
 
-    REQs are collected across `relpaths` in manifest order, then sorted
-    by (topic first-appearance, level rank) with a stable sort so source
-    order is preserved inside each (topic, level) group.
+    Each returned group holds the REQs sharing one kebab name and renders
+    as one level-3 section. Groups appear in source order (manifest file
+    order, then parse_line of the group's first member); group members
+    are ordered by level (PRD before GUI; the sort is stable, so source
+    order breaks ties).
     """
     collected: list[tuple[GraphNode, str, str]] = []
     for relpath in relpaths:
@@ -84,17 +80,19 @@ def ordered_section_requirements(
                 continue
             collected.append((req, level, name))
 
-    topic_first_appearance: dict[str, int] = {}
-    for _req, _level, name in collected:
-        topic_first_appearance.setdefault(kebab_topic(name), len(topic_first_appearance))
+    group_order: list[str] = []
+    groups: dict[str, list[tuple[GraphNode, str]]] = {}
+    for req, level, name in collected:
+        if name not in groups:
+            groups[name] = []
+            group_order.append(name)
+        groups[name].append((req, level))
 
-    collected.sort(
-        key=lambda item: (
-            topic_first_appearance[kebab_topic(item[2])],
-            _LEVEL_RANK[item[1]],
-        )
-    )
-    return [req for req, _level, _name in collected]
+    out: list[list[GraphNode]] = []
+    for name in group_order:
+        members = sorted(groups[name], key=lambda item: _LEVEL_RANK[item[1]])
+        out.append([req for req, _level in members])
+    return out
 
 
 def section_remainders(graph: Graph, relpaths: Iterable[str]) -> list[GraphNode]:
@@ -102,7 +100,7 @@ def section_remainders(graph: Graph, relpaths: Iterable[str]) -> list[GraphNode]
 
     REMAINDERs carry the file's title and intro prose. In the spec trees
     all non-empty REMAINDERs precede the first REQ, so emitting them as a
-    block before the re-ordered REQs preserves the rendered prose.
+    block before the grouped REQs preserves the rendered prose.
     Federation keeps a single FILE node per relative_path; its repo bias
     decides whose prose survives (pre-existing pipeline behaviour).
     """

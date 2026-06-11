@@ -40,6 +40,38 @@ def test_assemble_markdown_emits_chapter_section_headings_and_content(
     # File prose (REMAINDERs) renders ahead of the section's REQs.
     prose_pos = out.find("Intro prose for the section.")
     assert 0 < prose_pos < diary_pos
+    # Page-break marker precedes every section heading (both formats'
+    # raw blocks; the inapplicable one is ignored/stripped per target).
+    assert "\\URSsectionfreshtrue" in out
+    assert '<w:br w:type="page"/>' in out
+    assert out.find("\\URSsectionfreshtrue") < out.find("## User Roles and Permissions")
+
+
+def test_assemble_markdown_merges_kebab_twins_into_one_section(
+    sample_graph_dict, sample_manifest_dict, tmp_path
+):
+    """DIARY-PRD-role-definitions and DIARY-GUI-role-definitions share a
+    kebab name -> one level-3 section: the PRD REQ carries the numbered
+    heading, the GUI twin follows heading-less (bold title paragraph) so
+    the TOC shows the title once and no page break separates them."""
+    from urs_compile.graph_loader import Graph
+    from urs_compile.manifest import Manifest
+
+    mod = _load_orchestrator()
+    graph = Graph.from_dict(sample_graph_dict)
+    manifest = Manifest.from_dict(sample_manifest_dict)
+
+    out = mod.assemble_markdown(graph, manifest, tmp_path, None)
+
+    assert "### Role Definitions  {#DIARY-PRD-role-definitions}" in out
+    # The GUI twin renders WITHOUT a heading — bold title paragraph only.
+    assert "### Role Definitions — Interface" not in out
+    assert "**Role Definitions — Interface**" in out
+    # The twin sits directly after its PRD sibling, before the next section.
+    prd_pos = out.find("DIARY-PRD-role-definitions")
+    gui_pos = out.find("**Role Definitions — Interface**")
+    switching_pos = out.find("DIARY-GUI-role-switching")
+    assert 0 < prd_pos < gui_pos < switching_pos
 
 
 def test_strip_latex_blocks_removes_raw_latex_fences():
@@ -84,3 +116,38 @@ def test_assemble_full_document_docx_strips_latex_blocks(
     # No raw LaTeX should survive in docx output.
     assert "{=latex}" not in out
     assert "\\setcounter" not in out
+
+
+def test_apply_heading_page_breaks_folds_markers(tmp_path):
+    """Markers become pageBreakBefore on the following heading; the first
+    Heading-3 of a marked section gets an explicit override (False) and
+    later Heading-3s keep the style-level break (None = inherit)."""
+    from docx import Document
+    from docx.enum.text import WD_BREAK
+
+    mod = _load_orchestrator()
+    doc = Document()
+    doc.add_paragraph("chapter intro")
+    marker = doc.add_paragraph()
+    marker.add_run().add_break(WD_BREAK.PAGE)
+    doc.add_paragraph("5.1 Administration", style="Heading 2")
+    doc.add_paragraph("section prose")
+    doc.add_paragraph("Create User Account", style="Heading 3")
+    doc.add_paragraph("Edit User Account", style="Heading 3")
+    path = tmp_path / "t.docx"
+    doc.save(path)
+
+    mod._apply_heading_page_breaks(path)
+
+    paras = Document(path).paragraphs
+    assert [p.text for p in paras] == [
+        "chapter intro",
+        "5.1 Administration",
+        "section prose",
+        "Create User Account",
+        "Edit User Account",
+    ]
+    by_text = {p.text: p for p in paras}
+    assert by_text["5.1 Administration"].paragraph_format.page_break_before is True
+    assert by_text["Create User Account"].paragraph_format.page_break_before is False
+    assert by_text["Edit User Account"].paragraph_format.page_break_before is None

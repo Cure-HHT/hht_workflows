@@ -73,18 +73,29 @@ spec/URS-manifest/
 └── ch4-intro.md, ch5-intro.md, ch6-intro.md   # Chapter intros
 ```
 
-## Section ordering
+## Section ordering and pagination
 
-Within each manifest section, REQs are ordered by the kebab structure
-of their IDs — topic (first kebab segment, in order of first appearance
-across the section's files), then level (PRD before GUI), then subtopic
-(source order) — see `urs_compile/ordering.py`. Only PRD and GUI levels
-appear in the deliverable.
+Within each manifest section, REQs keep their source order, except that
+REQs sharing one kebab name after the namespace/level prefix
+(`DIARY-PRD-user-account-deactivate` + `DIARY-GUI-user-account-deactivate`)
+merge into a single level-3 section: one numbered heading (the PRD twin's
+title), the GUI twin following heading-less in the same section — see
+`urs_compile/ordering.py`. Only PRD and GUI levels appear in the
+deliverable.
 
 Chapters declare a `scope`: `core` chapters emit DIARY-* REQs only;
 a `sponsor` chapter collects every sponsor-namespace REQ from the files
 it references, so sponsor configuration REQs land in their own chapter
 instead of interleaving with the platform REQs.
+
+Pagination: every body section (level-2 heading) starts on a fresh page;
+every level-3 heading starts on a fresh page EXCEPT the first one of
+each section, which shares the section's opening page. The assembler
+emits a page-break marker before each section heading (`{=latex}` for
+the PDF — which also raises the flag the template's `\subsection`
+format consumes — and `{=openxml}` for the docx, folded into
+`pageBreakBefore` by `_apply_heading_page_breaks`). Frontmatter,
+appendix, and glossary headings are unaffected.
 
 ## Local CLI usage
 

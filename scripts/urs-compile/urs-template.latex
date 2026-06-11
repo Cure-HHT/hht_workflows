@@ -249,12 +249,17 @@
 \pretocmd{\section}{\needspace{6\baselineskip}}{}{}
 \pretocmd{\subsection}{\needspace{6\baselineskip}}{}{}
 
-% Each REQUIREMENT renders as `### Title` -> \subsection. Start every
-% REQ on a fresh page so reviewers can read one requirement at a time
-% without scrolling across boundaries. \newpage in the title-format's
-% before-code block fires for every subsection.
+% Each REQUIREMENT group renders as `### Title` -> \subsection. Start
+% every level-3 section on a fresh page so reviewers can read one
+% requirement at a time — EXCEPT the first one of each section: the
+% assembler raises \URSsectionfresh in the same raw {=latex} block that
+% \clearpage's the section heading, and the \subsection before-code
+% consumes the flag instead of breaking, so the section heading and its
+% first level-3 heading share a page. Unnumbered \subsection*'s
+% (appendix items) never see the flag and keep breaking.
+\newif\ifURSsectionfresh
 \titleformat{\subsection}[hang]
-  {\newpage\Large\bfseries}{\thesubsection.}{0.5em}{}
+  {\ifURSsectionfresh\global\URSsectionfreshfalse\else\newpage\fi\Large\bfseries}{\thesubsection.}{0.5em}{}
 
 % Paragraph spacing
 \setlength{\parindent}{0pt}
