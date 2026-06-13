@@ -596,7 +596,6 @@ def _apply_heading_page_breaks(docx_path: Path) -> None:
     (frontmatter, appendices, glossary) are untouched."""
     from docx import Document
     from docx.oxml.ns import qn
-    from docx.text.paragraph import Paragraph
 
     doc = Document(docx_path)
     body = doc.element.body
@@ -627,7 +626,10 @@ def _apply_heading_page_breaks(docx_path: Path) -> None:
         body.remove(p_el)
         removed += 1
         if heading is not None:
-            Paragraph(heading, None).paragraph_format.page_break_before = True
+            # Set pageBreakBefore at the oxml layer (what
+            # ParagraphFormat.page_break_before does internally) rather
+            # than wrapping the bare element in a parent-less Paragraph.
+            heading.get_or_add_pPr().pageBreakBefore_val = True
             marked_headings.append(heading)
 
     # NOTE: lxml element proxies have unstable Python identity, so the
@@ -641,7 +643,9 @@ def _apply_heading_page_breaks(docx_path: Path) -> None:
                 if style in ("Heading1", "Heading2"):
                     break
                 if style == "Heading3":
-                    Paragraph(el, None).paragraph_format.page_break_before = False
+                    # Explicit w:val="0" overrides the Heading 3 style's
+                    # page-break-before (oxml layer, no Paragraph proxy).
+                    el.get_or_add_pPr().pageBreakBefore_val = False
                     break
             el = el.getnext()
 
