@@ -2,22 +2,26 @@
 #
 # Maps spec files to URS chapter/section structure. Drives compile-urs.py.
 #
-# The compile pipeline reads `elspais graph` JSON (run from callisto side to
-# capture the federated graph) and emits content for each section by walking
-# FILE nodes whose relative_path matches `files` below — across both repos.
-# REQ interleaving uses the auto-rule (pair DIARY+CAL by kebab-stripped name,
-# trailing-CAL fallback).
+# The compile pipeline reads `elspais graph` JSON (run from the sponsor
+# side to capture the federated graph) and emits content for each section
+# by collecting REQs whose source_file matches `files` below — across both
+# repos. Within a section, REQs keep source order, with PRD/GUI twins
+# sharing one kebab name merged into a single level-3 section (see
+# urs_compile/ordering.py); only PRD and GUI levels appear in the URS
+# deliverable.
 #
-# Empty `files:` arrays are intentional placeholders for URS sections without
-# a current spec-tree file; compile-urs.py renders them as gap markers.
+# Chapter `scope` controls namespace routing: `core` chapters emit DIARY-*
+# REQs only; the `sponsor` chapter collects every sponsor-namespace REQ
+# from the files it references. Sponsor REQs are no longer interleaved
+# with core REQs.
 #
-# Sections without a current dedicated spec file (verified 2026-05-17):
-#   - 5.2 User Interface: OMITTED from the manifest by design. The original
-#     URS PDF carved out a "5.2 User Interface" subsection under
-#     Administration, but in the current spec tree the GUI/portal UI REQs
-#     live inside prd-user-account.md (section 5.1) and the manifest cannot
-#     split a single file across two sections. The URS reader will see
-#     5.1 → 5.3 with the UI content embedded in 5.1.
+# Structural notes (mirroring the URS-v1 source document, 2026-06-10):
+#   - The former "5.2 User Interface" gap is gone — URS-v1 numbers the
+#     portal sections 5.1-5.5 contiguously.
+#   - URS-v1 4.4 "Questionnaire Score Display" is sponsor-only content;
+#     with sponsor REQs collected into their own chapter the section has
+#     no core REQs left, so chapter 4 renumbers contiguously and the REQ
+#     surfaces in the sponsor chapter instead.
 
 document:
   title: "User Requirements Specification"
@@ -34,9 +38,9 @@ document:
 frontmatter: spec/URS-manifest/frontmatter.md
 appendices:  spec/URS-manifest/appendices.md
 # Glossary and term-index are regenerated fresh on every compile from
-# the callisto worktree (which declares hht_diary as an associate), so
-# the federated view includes every defined term across all repos. The
-# committed spec/_generated/ files are local-only and would miss CAL
+# the sponsor worktree (which declares the platform repo as an associate),
+# so the federated view includes every defined term across all repos. The
+# committed spec/_generated/ files are local-only and would miss sponsor
 # terms — we read from build/_generated/ instead. See compile-urs.sh
 # for the regeneration step.
 glossary:    build/_generated/glossary.md
@@ -62,40 +66,39 @@ chapters:
       - number: "4.3"
         title: "User Roles and Permissions"
         files: [spec/prd-rbac.md]
+      # URS-v1 4.4 "Questionnaire Score Display" is sponsor-only
+      # (spec/prd-questionnaire-score-display.md); it surfaces in the
+      # sponsor chapter below. Subsequent sections renumber contiguously.
       - number: "4.4"
-        title: "Questionnaire Score Display"
-        files: [spec/prd-questionnaire-score-display.md]  # CAL-only file; federated lookup resolves it.
-      - number: "4.5"
         title: "Audit Log Visibility"
         files: [spec/prd-audit-log.md]
-      - number: "4.6"
+      - number: "4.5"
         title: "Notification Behavior"
         files: [spec/prd-notification-behavior.md]
-      - number: "4.7"
+      - number: "4.6"
         title: "Help and Resources"
         files: [spec/prd-help-resources.md]
-      - number: "4.8"
+      - number: "4.7"
         title: "Configuration"
         files: [spec/prd-configuration.md]
 
   - number: 5
-    title: "PRODUCT REQUIREMENTS"
+    title: "SPONSOR PORTAL REQUIREMENTS"
     intro_file: spec/URS-manifest/ch5-intro.md
     sections:
       - number: "5.1"
         title: "Administration"
         files: [spec/prd-user-account.md]
-      # 5.2 User Interface intentionally omitted — see header comment.
-      - number: "5.3"
+      - number: "5.2"
         title: "Questionnaire Management"
         files: [spec/prd-questionnaire-management.md]
-      - number: "5.4"
+      - number: "5.3"
         title: "Participant Workflows"
         files: [spec/prd-participant.md]
-      - number: "5.5"
+      - number: "5.4"
         title: "Sponsor Portal Authentication"
         files: [spec/prd-portal-auth.md]
-      - number: "5.6"
+      - number: "5.5"
         title: "Administrator Settings"
         files: [spec/prd-administrator-settings.md]
 
@@ -130,3 +133,46 @@ chapters:
       - number: "6.9"
         title: "Device Linking"
         files: [spec/prd-device-linking.md]
+
+  # Sponsor Configuration Requirements: every sponsor-namespace REQ from
+  # the files above (plus sponsor-only files), collected into one chapter
+  # instead of interleaving with the core REQs. Sections mirror the body
+  # chapters so a reader can navigate from a Platform Requirement to the
+  # sponsor configuration that refines it (the Refines: line on each REQ
+  # carries the precise link).
+  - number: 7
+    title: "SPONSOR CONFIGURATION REQUIREMENTS"
+    intro_file: spec/URS-manifest/ch7-intro.md
+    scope: sponsor
+    sections:
+      - number: "7.1"
+        title: "System-wide Standards"
+        files:
+          - spec/prd-common-ui.md
+          - spec/prd-status-registry.md
+          - spec/prd-rbac.md
+          - spec/prd-questionnaire-score-display.md
+          - spec/prd-audit-log.md
+          - spec/prd-notification-behavior.md
+          - spec/prd-help-resources.md
+          - spec/prd-configuration.md
+      - number: "7.2"
+        title: "Sponsor Portal"
+        files:
+          - spec/prd-user-account.md
+          - spec/prd-questionnaire-management.md
+          - spec/prd-participant.md
+          - spec/prd-portal-auth.md
+          - spec/prd-administrator-settings.md
+      - number: "7.3"
+        title: "Mobile Application"
+        files:
+          - spec/prd-mobile-app.md
+          - spec/prd-questionnaire-overview.md
+          - spec/prd-questionnaire-participant-workflow.md
+          - spec/prd-epistaxis.md
+          - spec/prd-score-calculation.md
+          - spec/prd-diary-entry-rules.md
+          - spec/prd-mobile-navigation.md
+          - spec/prd-mobile-notifications.md
+          - spec/prd-device-linking.md

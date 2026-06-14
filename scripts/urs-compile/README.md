@@ -11,8 +11,8 @@ content via the federated elspais graph.
 scripts/urs-compile/
 ├── compile-urs.sh             # Local-dev / CI entry point
 ├── compile-urs.py             # Python orchestrator
-├── urs_compile/               # Helper modules (graph_loader, interleave, manifest, render)
-├── pandoc-filters/            # Lua filters (table-grid, image-normalize, code-breakable, assertion-label-italic)
+├── urs_compile/               # Helper modules (graph_loader, ordering, manifest, render)
+├── pandoc-filters/            # Lua filters (table-grid, table-autofit-docx, image-normalize, code-breakable, assertion-label-italic)
 ├── urs-template.latex         # Generic LaTeX template; sponsor identity comes from \sponsorName macros
 ├── urs-section-map.yaml       # Chapter/section ordering manifest
 ├── build_docx_reference.py    # Generates the pandoc docx style reference at build time
@@ -61,16 +61,50 @@ spec/URS-manifest/
 ├── urs-cover.tex              # LaTeX cover snippet (uses \sponsorName etc.)
 ├── urs-term-index-cover.tex   # LaTeX cover snippet for the term-index PDF
 ├── cover.md                   # Markdown cover prepended to the DOCX output
-└── frontmatter.md             # Markdown frontmatter prepended to both outputs
+├── frontmatter.md             # Markdown frontmatter prepended to both outputs
+├── ch7-intro.md               # Sponsor Configuration Requirements chapter intro
+└── appendices.md              # Appendix prose appended after the body
 ```
 
 Platform-generic (typically ASSOCIATE_ROOT, but may live in either):
 
 ```text
 spec/URS-manifest/
-├── ch4-intro.md, ch5-intro.md, ch6-intro.md   # Chapter intros
-└── appendices.md              # Appendix prose appended after the body
+└── ch4-intro.md, ch5-intro.md, ch6-intro.md   # Chapter intros
 ```
+
+## Section ordering and pagination
+
+Within each manifest section, REQs keep their source order, except that
+REQs sharing one kebab name after the namespace/level prefix
+(`DIARY-PRD-user-account-deactivate` + `DIARY-GUI-user-account-deactivate`)
+merge into a single level-3 section: one numbered heading (the PRD twin's
+title), the GUI twin following heading-less in the same section — see
+`urs_compile/ordering.py`. Only PRD and GUI levels appear in the
+deliverable.
+
+Chapters declare a `scope`: `core` chapters emit DIARY-* REQs only;
+a `sponsor` chapter collects every sponsor-namespace REQ from the files
+it references, so sponsor configuration REQs land in their own chapter
+instead of interleaving with the platform REQs.
+
+Table widths (docx): `table-autofit-docx.lua` sizes each auto-width
+table's columns from content — the longest unbreakable word is the
+floor (headers may wrap between words but never mid-word), prose
+columns absorb the spare width, and the table spans the full text
+width. Pandoc-derived all-equal widths (from uniform pipe-table
+separators) are recomputed; authored unequal widths (grid tables) are
+kept, and empty columns (signature blanks) stay wide. The PDF target
+keeps its own `table-grid.lua` treatment.
+
+Pagination: every body section (level-2 heading) starts on a fresh page;
+every level-3 heading starts on a fresh page EXCEPT the first one of
+each section, which shares the section's opening page. The assembler
+emits a page-break marker before each section heading (`{=latex}` for
+the PDF — which also raises the flag the template's `\subsection`
+format consumes — and `{=openxml}` for the docx, folded into
+`pageBreakBefore` by `_apply_heading_page_breaks`). Frontmatter,
+appendix, and glossary headings are unaffected.
 
 ## Local CLI usage
 

@@ -22,22 +22,6 @@
       ],
       "edges": []
     },
-    "file:spec/prd-rbac.md@callisto": {
-      "id": "file:spec/prd-rbac.md@callisto",
-      "kind": "FILE",
-      "label": "prd-rbac.md",
-      "content": {
-        "file_type": "spec",
-        "absolute_path": "/fake/cal/spec/prd-rbac.md",
-        "relative_path": "spec/prd-rbac.md",
-        "repo": "callisto"
-      },
-      "children": [
-        "rem:cal:spec/prd-rbac.md:1",
-        "CAL-PRD-role-definitions"
-      ],
-      "edges": []
-    },
     "rem:spec/prd-rbac.md:1": {
       "id": "rem:spec/prd-rbac.md:1",
       "kind": "REMAINDER",
@@ -54,16 +38,6 @@
       "label": "### Role Switching",
       "content": {
         "text": "### Role Switching\n\nProse between REQs."
-      },
-      "children": [],
-      "edges": []
-    },
-    "rem:cal:spec/prd-rbac.md:1": {
-      "id": "rem:cal:spec/prd-rbac.md:1",
-      "kind": "REMAINDER",
-      "label": "# RBAC (callisto)",
-      "content": {
-        "text": "CAL-side intro prose."
       },
       "children": [],
       "edges": []
@@ -197,6 +171,34 @@
       "children": [],
       "edges": []
     },
+    "DIARY-GUI-role-definitions": {
+      "id": "DIARY-GUI-role-definitions",
+      "kind": "REQUIREMENT",
+      "label": "Role Definitions — Interface",
+      "content": {
+        "title": "Role Definitions — Interface",
+        "rationale": "",
+        "level": "gui",
+        "status": "Active",
+        "source_file": "spec/prd-rbac.md",
+        "parse_line": 35
+      },
+      "children": ["DIARY-GUI-role-definitions-A"],
+      "edges": [
+        {"target": "DIARY-GUI-role-definitions-A", "kind": "STRUCTURES"}
+      ]
+    },
+    "DIARY-GUI-role-definitions-A": {
+      "id": "DIARY-GUI-role-definitions-A",
+      "kind": "ASSERTION",
+      "label": "Display the role definitions.",
+      "content": {
+        "label": "A",
+        "parse_line": 36
+      },
+      "children": [],
+      "edges": []
+    },
     "CAL-PRD-role-definitions": {
       "id": "CAL-PRD-role-definitions",
       "kind": "REQUIREMENT",
@@ -228,6 +230,6 @@
       "edges": []
     }
   },
-  "roots": ["file:spec/prd-rbac.md", "file:spec/prd-rbac.md@callisto"],
+  "roots": ["file:spec/prd-rbac.md"],
   "metadata": {"federated": true, "repos": ["diary", "callisto"]}
 }

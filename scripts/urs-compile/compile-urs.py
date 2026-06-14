@@ -6,8 +6,16 @@ Pipeline:
   2. Read tools/urs-section-map.yaml manifest.
   3. Assemble markdown chapter-by-chapter, section-by-section.
      - Emit URS chapter and section headings from manifest.
-     - For each section, walk FILE nodes whose relative_path matches; interleave
-       DIARY + CAL REQs by kebab-stripped name (DIARY first, then CAL pair).
+     - For each section, emit the file prose (REMAINDERs) followed by the
+       section's REQs in source order, with PRD/GUI twins sharing one
+       kebab name merged into a single level-3 section (see
+       urs_compile/ordering.py). Core chapters emit DIARY-* REQs; the
+       sponsor chapter collects the sponsor-namespace REQs from the
+       files it references.
+     - Every body section heading is preceded by a page-break marker
+       (raw {=latex} for the PDF, raw {=openxml} for the docx) so each
+       level-2 section starts on a fresh page while the first level-3
+       heading of the section shares that page.
   4. Prepend frontmatter, append appendices + glossary.
   5. Invoke pandoc once with the URS LaTeX template + cover + resource path.
 """
@@ -28,7 +36,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import build_docx_reference  # noqa: E402
 from urs_compile.graph_loader import Graph  # noqa: E402
-from urs_compile.interleave import interleave_section_by_path  # noqa: E402
+from urs_compile.ordering import (  # noqa: E402
+    grouped_section_requirements,
+    section_remainders,
+)
 from urs_compile.manifest import Manifest  # noqa: E402
 from urs_compile.render import RenderConfig, render_node  # noqa: E402
 
@@ -53,6 +64,22 @@ _INLINE_LATEX_SMALLSKIP_RE = re.compile(r"`\\smallskip`\{=latex\}[ \t]*")
 # paragraph; injecting an explicit <br> keeps them visually separated.
 _DEFLIST_LABEL_RE = re.compile(r"\n(See:|Avoid:|Defined in:)")
 _H2_HEADING_RE = re.compile(r"^(## )(?!.*\{\.)(.+?)$", re.MULTILINE)
+
+# Emitted before every body section heading. The {=latex} block starts the
+# section on a fresh page and raises the fresh-section flag that the LaTeX
+# template's \subsection format consumes to SKIP the page break on the
+# section's first level-3 heading. The {=openxml} block is the docx
+# equivalent — a bare page-break paragraph that _apply_heading_page_breaks
+# later folds into pageBreakBefore on the section heading itself. Each
+# pandoc writer ignores the other format's raw block.
+SECTION_PAGE_BREAK_MD = (
+    "\n```{=latex}\n"
+    "\\clearpage\\global\\URSsectionfreshtrue\n"
+    "```\n"
+    "\n```{=openxml}\n"
+    '<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n'
+    "```\n"
+)
 _GLOSSARY_LETTER_HEADING_RE = re.compile(r"^## ([A-Z])\s*$", re.MULTILINE)
 _DEFINED_IN_RE = re.compile(r"\n\*Defined in: ([^*]*)\*", re.MULTILINE)
 
@@ -267,19 +294,49 @@ def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path,
                     f"\n```{{=latex}}\n\\setcounter{{section}}{{{section_idx - 1}}}\n```\n"
                 )
             prev_section_num = section_idx
+            # Page-break marker before the section heading: the raw LaTeX
+            # \clearpage starts the section on a fresh page and raises the
+            # fresh-section flag the template's \subsection format consumes
+            # to skip the page break on the section's FIRST level-3 heading.
+            # The raw openxml paragraph is the docx equivalent; pandoc's
+            # docx writer passes it through and _apply_heading_page_breaks
+            # converts it into pageBreakBefore on the heading. Each writer
+            # ignores the other format's raw block.
+            parts.append(SECTION_PAGE_BREAK_MD)
             parts.append(f"\n## {section.title}\n")
-            # Run interleave per manifest path: source_file-based lookup
-            # surfaces CAL siblings even when federation collapsed FILE nodes.
-            # We collect (kind, rendered_text) so we can demote only REMAINDER
-            # output — REQ output is already at the final heading level
-            # (### title / #### subsections) and must not be demoted.
+            # Emit file prose (REMAINDERs) first, then the section's REQ
+            # groups (PRD/GUI twins sharing a kebab name render as one
+            # level-3 section: the primary REQ carries the heading, the
+            # rest follow as heading-less blocks). The sponsor chapter
+            # skips REMAINDERs — its prose is the body chapters' job; it
+            # only collects the sponsor-namespace REQs.
+            # We collect (kind, rendered_text) so we can demote only
+            # REMAINDER output — REQ output is already at the final heading
+            # level (### title / #### subsections) and must not be demoted.
             rendered_chunks: list[tuple[str, str]] = []
-            emitted_any = False
-            for relpath in section.files:
-                for _kind, node in interleave_section_by_path(graph, relpath):
-                    rendered_chunks.append((node.kind, render_node(node, graph, config)))
+            if chapter.scope == "core":
+                for rem in section_remainders(graph, section.files):
+                    rendered_chunks.append((rem.kind, render_node(rem, graph, config)))
                     rendered_chunks.append(("SEP", "\n"))
-                    emitted_any = True
+            groups = grouped_section_requirements(
+                graph, section.files, scope=chapter.scope,
+            )
+            for group in groups:
+                primary_req = group[0]
+                rendered_chunks.append(
+                    (primary_req.kind, render_node(primary_req, graph, config))
+                )
+                rendered_chunks.append(("SEP", "\n"))
+                for req in group[1:]:
+                    rendered_chunks.append((
+                        req.kind,
+                        render_node(req, graph, config,
+                                    primary_label=primary_req.label),
+                    ))
+                    rendered_chunks.append(("SEP", "\n"))
+            emitted_any = bool(groups) or any(
+                kind == "REMAINDER" for kind, _ in rendered_chunks
+            )
             if not emitted_any:
                 parts.append(
                     f"\n*(No content found for {section.number} — manifest references {section.files})*\n"
@@ -520,6 +577,82 @@ def _strip_unreferenced_bookmarks(docx_path: Path) -> None:
         doc.save(docx_path)
 
 
+def _apply_heading_page_breaks(docx_path: Path) -> None:
+    """Fold assembler page-break markers into heading pagination.
+
+    The assembler emits a raw-openxml paragraph (a bare page-type
+    ``<w:br>``) before every body section heading. Leaving it as-is
+    would work but strands an empty paragraph at the top of each new
+    page, so instead: delete each marker and set ``pageBreakBefore`` on
+    the section heading that follows it. pandoc interposes body-level
+    ``bookmarkStart``/``bookmarkEnd`` elements between the marker and
+    the heading, so the scan skips every non-paragraph sibling.
+
+    Then, for each marked section, clear ``pageBreakBefore`` on the
+    FIRST Heading-3 paragraph inside it (per-paragraph ``w:val=0``
+    overrides the Heading 3 style's page-break-before) so the section
+    heading and its first level-3 heading share a page. Subsequent
+    Heading-3 paragraphs keep the style break. Unmarked regions
+    (frontmatter, appendices, glossary) are untouched."""
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    doc = Document(docx_path)
+    body = doc.element.body
+
+    def _style(p_el):
+        ps = p_el.find(f"{qn('w:pPr')}/{qn('w:pStyle')}")
+        return ps.get(qn("w:val")) if ps is not None else None
+
+    def _is_marker(p_el) -> bool:
+        if any((t.text or "").strip() for t in p_el.iter(qn("w:t"))):
+            return False
+        return any(
+            br.get(qn("w:type")) == "page" for br in p_el.iter(qn("w:br"))
+        )
+
+    def _next_paragraph(el):
+        el = el.getnext()
+        while el is not None and el.tag != qn("w:p"):
+            el = el.getnext()
+        return el
+
+    removed = 0
+    marked_headings: list = []
+    for p_el in list(body.iterchildren(qn("w:p"))):
+        if not _is_marker(p_el):
+            continue
+        heading = _next_paragraph(p_el)
+        body.remove(p_el)
+        removed += 1
+        if heading is not None:
+            # Set pageBreakBefore at the oxml layer (what
+            # ParagraphFormat.page_break_before does internally) rather
+            # than wrapping the bare element in a parent-less Paragraph.
+            heading.get_or_add_pPr().pageBreakBefore_val = True
+            marked_headings.append(heading)
+
+    # NOTE: lxml element proxies have unstable Python identity, so the
+    # first-H3 scan walks forward from each kept heading element rather
+    # than re-iterating the body and comparing ids.
+    for heading in marked_headings:
+        el = heading.getnext()
+        while el is not None:
+            if el.tag == qn("w:p"):
+                style = _style(el)
+                if style in ("Heading1", "Heading2"):
+                    break
+                if style == "Heading3":
+                    # Explicit w:val="0" overrides the Heading 3 style's
+                    # page-break-before (oxml layer, no Paragraph proxy).
+                    el.get_or_add_pPr().pageBreakBefore_val = False
+                    break
+            el = el.getnext()
+
+    if removed:
+        doc.save(docx_path)
+
+
 def _move_toc_after_cover(docx_path: Path) -> None:
     """Relocate pandoc's auto-generated TOC so it lands on its own page,
     after the cover content.
@@ -580,6 +713,7 @@ def run_pandoc_docx(
     """
     filters_dir = Path(__file__).parent / "pandoc-filters"
     image_filter = filters_dir / "image-normalize.lua"
+    table_filter = filters_dir / "table-autofit-docx.lua"
     cmd = [
         "pandoc",
         str(markdown_path),
@@ -594,12 +728,18 @@ def run_pandoc_docx(
         # size. The same filter sets fig-pos=H for the LaTeX target;
         # other format branches inside the filter pass through unchanged.
         f"--lua-filter={image_filter}",
+        # Lua filter: content-based column widths for auto-width tables
+        # (longest-word floor, prose columns absorb the slack) so short
+        # identifiers and headers stop wrapping. docx target only;
+        # authored-width grid tables pass through unchanged.
+        f"--lua-filter={table_filter}",
         "--resource-path=" + ":".join(str(p) for p in resource_paths),
     ]
     if reference_doc is not None and reference_doc.exists():
         cmd.extend(["--reference-doc", str(reference_doc)])
     subprocess.run(cmd, check=True)
 
+    _apply_heading_page_breaks(output_path)
     _move_toc_after_cover(output_path)
     _strip_unreferenced_bookmarks(output_path)
 

@@ -27,6 +27,10 @@ class Chapter:
     # manifest / pipeline edits — the file is plain markdown, no
     # frontmatter or scripting required.
     intro_file: str | None = None
+    # Which REQ namespace the chapter emits: "core" (DIARY-*) or
+    # "sponsor" (everything else). Sponsor-overlay REQs are collected
+    # into their own chapter instead of interleaving with core REQs.
+    scope: str = "core"
 
 
 @dataclass(frozen=True)
@@ -52,11 +56,18 @@ class Manifest:
                 )
                 for s in ch.get("sections", [])
             ]
+            scope = ch.get("scope", "core")
+            if scope not in ("core", "sponsor"):
+                raise ValueError(
+                    f"chapter {ch['number']}: scope must be 'core' or "
+                    f"'sponsor', got {scope!r}"
+                )
             chapters.append(Chapter(
                 number=int(ch["number"]),
                 title=ch["title"],
                 sections=sections,
                 intro_file=ch.get("intro_file"),
+                scope=scope,
             ))
         return cls(
             document=d.get("document", {}),
