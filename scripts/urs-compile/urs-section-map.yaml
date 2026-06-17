@@ -44,6 +44,13 @@ appendices:  spec/URS-manifest/appendices.md
 # terms — we read from build/_generated/ instead. See compile-urs.sh
 # for the regeneration step.
 glossary:    build/_generated/glossary.md
+# Prune glossary + references entries whose term is not referenced in the
+# assembled body (frontmatter + chapters + appendices). The federated
+# glossary carries every defined term across all repos, including
+# core-glossary and DEV/OPS-only vocabulary not used in this PRD/GUI
+# deliverable. See prune_glossary_terms in compile-urs.py. Set to false
+# to emit the full federated glossary.
+prune_glossary: true
 # Term index excluded from the URS PDF — the federated index is ~10.6k
 # lines (one entry per indexed term, listing every assertion and code
 # reference verbatim) and adds ~200 pages without proportional review
