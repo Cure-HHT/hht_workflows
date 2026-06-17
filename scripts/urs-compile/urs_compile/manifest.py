@@ -41,6 +41,13 @@ class Manifest:
     glossary: str | None
     term_index: str | None
     chapters: list[Chapter]
+    # When True, glossary and references entries whose term is not
+    # referenced anywhere in the assembled document body are dropped.
+    # The federated glossary aggregates every defined term across all
+    # repos (core glossary, DEV/OPS specs) — many of which never appear
+    # in this PRD/GUI-only deliverable. Default on so the URS glossary
+    # is self-contained.
+    prune_glossary: bool = True
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Manifest":
@@ -76,6 +83,7 @@ class Manifest:
             glossary=d.get("glossary"),
             term_index=d.get("term_index"),
             chapters=chapters,
+            prune_glossary=bool(d.get("prune_glossary", True)),
         )
 
     @classmethod

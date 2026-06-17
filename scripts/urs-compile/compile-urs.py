@@ -110,6 +110,120 @@ def _break_defined_in(text: str) -> str:
     )
 
 
+_GLOSSARY_ENTRY_RE = re.compile(
+    r"^\*\*(.+?)\*\*(?:\s*\*\(not indexed\)\*)?\s*$"
+)
+_GLOSSARY_HEADING_RE = re.compile(r"^(#{1,2}) ")
+
+
+def _term_match_candidates(term: str) -> set[str]:
+    """Strings whose presence in the body counts as referencing `term`.
+
+    Glossary term names follow a `PRIMARY (parenthetical)` convention where
+    the parenthetical is sometimes an acronym expansion ("CRA (Clinical
+    Research Associate)") and sometimes a type tag ("FDA 21 CFR Part 11
+    (Regulation)"). The body usually cites the PRIMARY form ("CRA"), so
+    match on that; additionally accept a *multi-word* parenthetical as an
+    alias (so the spelled-out "Clinical Research Associate" also counts)
+    while ignoring single-word type tags like "(Regulation)" that would
+    cause false keeps.
+    """
+    cands = {term, term.split(" (")[0].strip()}
+    m = re.search(r"\(([^)]+)\)\s*$", term)
+    if m and len(m.group(1).split()) > 1:
+        cands.add(m.group(1).strip())
+    return {c.lower() for c in cands if c}
+
+
+def _is_term_referenced(term: str, doc_text_lc: str) -> bool:
+    """True if any match-candidate of `term` appears in `doc_text_lc`.
+
+    `doc_text_lc` is the assembled body lowercased with emphasis markers
+    stripped. Matching is word-bounded and tolerates a trailing plural /
+    possessive ('s, s, es) so "Participants" references "Participant".
+    """
+    for c in _term_match_candidates(term):
+        if re.search(
+            r"(?<![A-Za-z])" + re.escape(c) + r"(?:'s|s|es)?(?![A-Za-z])",
+            doc_text_lc,
+        ):
+            return True
+    return False
+
+
+def prune_glossary_terms(glossary_md: str, doc_text: str) -> str:
+    """Drop glossary / references entries not referenced in `doc_text`.
+
+    The federated glossary lists every defined term across all repos;
+    this keeps only entries whose term is actually used in the assembled
+    document body (frontmatter + chapters + appendices). Pruning is NOT
+    transitive over surviving definitions — a term referenced only inside
+    another glossary entry's definition (and nowhere in the body) is
+    still dropped, matching the intent of excluding core-glossary /
+    DEV-OPS-only vocabulary.
+
+    Letter sub-headings (`## A`) left with no surviving entries are
+    dropped (a later pass re-marks genuinely-absent letters as "No
+    terms."); an H1 section (`# References`) left with no surviving
+    entries is dropped entirely rather than rendered as an empty chapter.
+    The `# Glossary` H1 is always kept.
+    """
+    doc_text_lc = re.sub(r"\*+", "", doc_text).lower()
+    lines = glossary_md.split("\n")
+
+    # Tokenize into structural items: H1/H2 headings, term entries (with
+    # their continuation block), and raw passthrough lines (banner
+    # comments, blank lines between structural items).
+    items: list[tuple] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        hm = _GLOSSARY_HEADING_RE.match(line)
+        if hm:
+            items.append(("h1" if len(hm.group(1)) == 1 else "h2", line))
+            i += 1
+            continue
+        em = _GLOSSARY_ENTRY_RE.match(line)
+        if em:
+            block = [line]
+            i += 1
+            while i < n and not _GLOSSARY_HEADING_RE.match(lines[i]) \
+                    and not _GLOSSARY_ENTRY_RE.match(lines[i]):
+                block.append(lines[i])
+                i += 1
+            items.append(("entry", em.group(1).strip(), block))
+            continue
+        items.append(("raw", line))
+        i += 1
+
+    def _section_has_kept(start: int, stop_levels: tuple[str, ...]) -> bool:
+        for j in range(start + 1, len(items)):
+            kind = items[j][0]
+            if kind in stop_levels:
+                break
+            if kind == "entry" and _is_term_referenced(items[j][1], doc_text_lc):
+                return True
+        return False
+
+    out: list[str] = []
+    for idx, it in enumerate(items):
+        kind = it[0]
+        if kind == "entry":
+            if _is_term_referenced(it[1], doc_text_lc):
+                out.extend(it[2])
+        elif kind == "h1":
+            # Always keep "# Glossary"; keep other H1 sections (References)
+            # only when at least one entry survives beneath them.
+            if it[1].strip().lower() == "# glossary" or _section_has_kept(idx, ("h1",)):
+                out.append(it[1])
+        elif kind == "h2":
+            if _section_has_kept(idx, ("h1", "h2")):
+                out.append(it[1])
+        else:
+            out.append(it[1])
+    return "\n".join(out)
+
+
 def _fill_missing_glossary_letters(text: str) -> str:
     """Insert `## <Letter>\\n\\n*No terms.*\\n` for every alphabet letter
     that doesn't already appear as a single-letter H2 heading.
@@ -433,6 +547,12 @@ def assemble_full_document(
         # Also break `*Defined in: ...*` onto its own paragraph so it
         # doesn't render inline with the entry's URL / last definition.
         if key == "glossary":
+            # Drop entries (and the References bibliography) for terms not
+            # referenced anywhere in the assembled body. `chunks` here is
+            # exactly the document content emitted before the glossary
+            # (frontmatter + chapters + appendices).
+            if manifest.prune_glossary:
+                text = prune_glossary_terms(text, "\n".join(chunks))
             text = _fill_missing_glossary_letters(text)
             text = _break_defined_in(text)
         # Only inject a chapter heading when the file doesn't already

@@ -106,6 +106,20 @@ format consumes — and `{=openxml}` for the docx, folded into
 `pageBreakBefore` by `_apply_heading_page_breaks`). Frontmatter,
 appendix, and glossary headings are unaffected.
 
+Glossary pruning: the federated glossary (`elspais glossary`) aggregates
+every defined term across all repos — including core-glossary and
+DEV/OPS-only vocabulary that never appears in this PRD/GUI deliverable.
+With `prune_glossary: true` (the manifest default), `prune_glossary_terms`
+drops every glossary entry and external-standard reference whose term is
+not referenced anywhere in the assembled body (frontmatter + chapters +
+appendices). Matching is acronym-aware (`CRA (Clinical Research
+Associate)` is kept when the body cites `CRA`), word-bounded, and
+plural/possessive-tolerant; pruning is NOT transitive over surviving
+definitions (a term used only inside another kept entry's definition is
+still dropped). Letter sub-headings left empty fall back to "No terms.";
+the `# References` section is dropped entirely when no reference is cited.
+Set `prune_glossary: false` to emit the full federated glossary.
+
 ## Local CLI usage
 
 From the consumer repo's worktree:
