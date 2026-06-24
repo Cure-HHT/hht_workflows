@@ -162,7 +162,13 @@ In a consumer-repo workflow:
   with:
     primary-root: primary
     associate-root: associate
+    elspais-version: ${{ env.ELSPAIS_VERSION }}  # pin from .github/versions.env
 ```
+
+`elspais-version` is required: the action installs that exact PyPI release
+(`pip install elspais==<version>`) so URS builds are reproducible and traceable
+to a known tool version. Source it from the caller repo's
+`.github/versions.env` (`ELSPAIS_VERSION`).
 
 The action installs pandoc, xelatex, and elspais; runs `compile-urs.sh`;
 and uploads the four URS deliverables as a `urs-deliverables` artifact.
