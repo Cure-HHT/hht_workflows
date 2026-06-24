@@ -158,7 +158,7 @@ In a consumer-repo workflow:
     repository: Cure-HHT/hht_diary
     path: associate
     token: ${{ secrets.ASSOCIATE_REPO_TOKEN }}
-- uses: Cure-HHT/hht_workflows/actions/build-urs@main
+- uses: Cure-HHT/hht_workflows/.github/actions/build-urs@main
   with:
     primary-root: primary
     associate-root: associate

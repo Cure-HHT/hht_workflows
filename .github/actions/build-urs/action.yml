@@ -13,7 +13,7 @@
 #       repository: Cure-HHT/hht_diary
 #       path: associate
 #       token: ${{ secrets.ASSOCIATE_REPO_TOKEN }}
-#   - uses: Cure-HHT/hht_workflows/actions/build-urs@main
+#   - uses: Cure-HHT/hht_workflows/.github/actions/build-urs@main
 #     with:
 #       primary-root: primary
 #       associate-root: associate
@@ -61,7 +61,7 @@ runs:
     - name: Install Python build dependencies
       shell: bash
       run: |
-        pip install -r "${{ github.action_path }}/../../scripts/urs-compile/requirements-compile.txt"
+        pip install -r "${{ github.action_path }}/../../../scripts/urs-compile/requirements-compile.txt"
 
     - name: Install pandoc + LaTeX engine
       shell: bash
@@ -89,7 +89,7 @@ runs:
     - name: Run URS compile
       shell: bash
       run: |
-        "${{ github.action_path }}/../../scripts/urs-compile/compile-urs.sh" \
+        "${{ github.action_path }}/../../../scripts/urs-compile/compile-urs.sh" \
           "${{ inputs.primary-root }}" \
           "${{ inputs.associate-root }}"
 
