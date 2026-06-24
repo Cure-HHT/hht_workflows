@@ -17,6 +17,7 @@
 #     with:
 #       primary-root: primary
 #       associate-root: associate
+#       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
 
 name: Build URS
 description: |
@@ -42,6 +43,12 @@ inputs:
     description: Python version to set up for the build.
     required: false
     default: "3.12"
+  elspais-version:
+    description: |
+      Exact elspais release to install from PyPI (e.g. "0.117.81"), so URS
+      builds are reproducible and traceable to a known tool version. Pass the
+      value from the caller repo's .github/versions.env (ELSPAIS_VERSION).
+    required: true
 
 runs:
   using: composite
@@ -70,8 +77,14 @@ runs:
 
     - name: Install elspais
       shell: bash
+      env:
+        ELSPAIS_VERSION: ${{ inputs.elspais-version }}
       run: |
-        pip install elspais
+        if [ -z "${ELSPAIS_VERSION}" ]; then
+          echo "::error::elspais-version input is required (pass ELSPAIS_VERSION from the caller's .github/versions.env) so URS builds are traceable to a pinned release." >&2
+          exit 1
+        fi
+        pip install "elspais==${ELSPAIS_VERSION}"
 
     - name: Run URS compile
       shell: bash
