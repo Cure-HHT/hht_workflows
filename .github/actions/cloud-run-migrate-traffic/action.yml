@@ -1,0 +1,32 @@
+# hht_workflows/.github/actions/cloud-run-migrate-traffic/action.yml
+name: Cloud Run migrate traffic to revision
+description: >
+  Routes 100% of a Cloud Run (v1) service's traffic to a named revision.
+  Pin by commit SHA. Targets an explicit revision (not LATEST) so a racing
+  newer deploy cannot be promoted by accident.
+
+inputs:
+  service:  { description: "Cloud Run service name", required: true }
+  region:   { description: "GCP region", required: true }
+  project:  { description: "Deploy project id", required: true }
+  revision: { description: "Revision name to send 100% traffic", required: true }
+
+runs:
+  using: composite
+  steps:
+    # Implements: DIARY-OPS-deploy-traffic-gating/C
+    - name: Migrate 100% traffic to the verified revision
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        REGION: ${{ inputs.region }}
+        PROJECT: ${{ inputs.project }}
+        REVISION: ${{ inputs.revision }}
+      run: |
+        set -euo pipefail
+        echo "Migrating 100% traffic on $SERVICE to $REVISION"
+        gcloud run services update-traffic "$SERVICE" \
+          --region="$REGION" \
+          --project="$PROJECT" \
+          --to-revisions="$REVISION=100"
+        echo "✅ Traffic now 100% on $REVISION"
