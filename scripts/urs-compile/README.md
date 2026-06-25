@@ -130,14 +130,21 @@ From the consumer repo's worktree:
     /path/to/associate/worktree   # optional
 ```
 
-Outputs land in `<primary-root>/docs/`:
+Outputs land in `<primary-root>/docs/`. The basename derives from the manifest
+filename (without `.yaml`): manifest `spec/URS-manifest/urs.yaml` (the default)
+produces:
 
 ```text
-docs/urs-compiled.pdf
-docs/urs-compiled.docx
+docs/urs.pdf
+docs/urs.docx
 docs/urs-term-index.pdf
 docs/urs-term-index.docx
+docs/urs-build-provenance.md
 ```
+
+Override the stem with `OUTPUT_BASENAME=custom` to produce `docs/custom.pdf`
+etc., or set `MANIFEST=spec/URS-manifest/other.yaml` to use a different manifest
+(stem `other` derives automatically).
 
 Prerequisites:
 
