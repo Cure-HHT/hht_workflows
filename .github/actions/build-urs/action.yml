@@ -49,6 +49,26 @@ inputs:
       builds are reproducible and traceable to a known tool version. Pass the
       value from the caller repo's .github/versions.env (ELSPAIS_VERSION).
     required: true
+  manifest:
+    description: |
+      Path (relative to primary-root) of the URS manifest to compile.
+      Defaults to spec/URS-manifest/urs.yaml. The output basename derives
+      from this filename.
+    required: false
+    default: "spec/URS-manifest/urs.yaml"
+  associate-roots:
+    description: |
+      Newline-delimited list of associate source repo paths to federate
+      (multi-source). Takes precedence over the single associate-root input.
+      Each path must be a checked-out elspais repo.
+    required: false
+    default: ""
+  output-basename:
+    description: |
+      Override the output basename (default: the manifest filename stem).
+      Produces docs/<basename>.pdf and .docx.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -88,6 +108,10 @@ runs:
 
     - name: Run URS compile
       shell: bash
+      env:
+        MANIFEST: ${{ inputs.manifest }}
+        ASSOCIATE_ROOTS: ${{ inputs.associate-roots }}
+        OUTPUT_BASENAME: ${{ inputs.output-basename }}
       run: |
         "${{ github.action_path }}/../../../scripts/urs-compile/compile-urs.sh" \
           "${{ inputs.primary-root }}" \
@@ -98,8 +122,6 @@ runs:
       with:
         name: urs-deliverables
         path: |
-          ${{ inputs.primary-root }}/docs/urs-compiled.pdf
-          ${{ inputs.primary-root }}/docs/urs-compiled.docx
-          ${{ inputs.primary-root }}/docs/urs-term-index.pdf
-          ${{ inputs.primary-root }}/docs/urs-term-index.docx
+          ${{ inputs.primary-root }}/docs/*.pdf
+          ${{ inputs.primary-root }}/docs/*.docx
         retention-days: 30
