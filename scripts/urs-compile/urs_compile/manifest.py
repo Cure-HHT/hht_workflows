@@ -14,6 +14,7 @@ class Section:
     number: str
     title: str
     files: list[str]
+    levels: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class Manifest:
                     number=s["number"],
                     title=s["title"],
                     files=list(s.get("files", [])),
+                    levels=tuple(s["levels"]) if s.get("levels") else None,
                 )
                 for s in ch.get("sections", [])
             ]

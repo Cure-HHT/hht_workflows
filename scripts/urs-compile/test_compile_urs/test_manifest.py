@@ -88,3 +88,18 @@ def test_metadata_explicit_field_list():
 def test_metadata_rejects_unknown_field():
     with pytest.raises(ValueError, match="metadata"):
         Manifest.from_dict({"document": {}, "metadata": ["bogus"], "chapters": []})
+
+
+# --- section levels ---
+
+def test_section_levels_default_none(sample_manifest_dict):
+    m = Manifest.from_dict(sample_manifest_dict)
+    assert m.chapters[0].sections[0].levels is None
+
+
+def test_section_levels_explicit():
+    m = Manifest.from_dict({"document": {}, "chapters": [
+        {"number": 9, "title": "Development", "sections": [
+            {"number": "9.1", "title": "All DEV", "levels": ["DEV"]}]}]})
+    assert m.chapters[0].sections[0].levels == ("DEV",)
+    assert m.chapters[0].sections[0].files == []
