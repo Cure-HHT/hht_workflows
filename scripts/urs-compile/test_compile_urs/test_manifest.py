@@ -54,3 +54,37 @@ def test_term_index_field():
 def test_term_index_defaults_none(sample_manifest_dict):
     m = Manifest.from_dict(sample_manifest_dict)
     assert m.term_index is None
+
+
+# --- levels ---
+
+def test_levels_default_prd_gui(sample_manifest_dict):
+    assert Manifest.from_dict(sample_manifest_dict).levels == ("PRD", "GUI")
+
+
+def test_levels_explicit_list():
+    m = Manifest.from_dict({"document": {}, "levels": ["BASE", "OPS", "DEV"], "chapters": []})
+    assert m.levels == ("BASE", "OPS", "DEV")
+
+
+# --- metadata_fields ---
+
+def test_metadata_default_empty(sample_manifest_dict):
+    assert Manifest.from_dict(sample_manifest_dict).metadata_fields == ()
+
+
+def test_metadata_false_empty():
+    assert Manifest.from_dict({"document": {}, "metadata": False, "chapters": []}).metadata_fields == ()
+
+
+def test_metadata_true_means_all_fields():
+    assert Manifest.from_dict({"document": {}, "metadata": True, "chapters": []}).metadata_fields == ("level", "status", "hash")
+
+
+def test_metadata_explicit_field_list():
+    assert Manifest.from_dict({"document": {}, "metadata": ["level", "status"], "chapters": []}).metadata_fields == ("level", "status")
+
+
+def test_metadata_rejects_unknown_field():
+    with pytest.raises(ValueError, match="metadata"):
+        Manifest.from_dict({"document": {}, "metadata": ["bogus"], "chapters": []})
