@@ -74,6 +74,61 @@ def test_assemble_markdown_merges_kebab_twins_into_one_section(
     assert 0 < prd_pos < gui_pos < switching_pos
 
 
+def test_assemble_filters_to_manifest_levels(tmp_path):
+    from urs_compile.graph_loader import Graph
+    from urs_compile.manifest import Manifest
+    mod = _load_orchestrator()
+    graph = Graph.from_dict({"nodes": {
+        "DIARY-PRD-alpha": {"id": "DIARY-PRD-alpha", "kind": "REQUIREMENT", "label": "Alpha",
+            "content": {"source_file": "spec/p.md", "parse_line": 1, "level": "PRD", "status": "Active"},
+            "children": [], "edges": []},
+        "DIARY-DEV-beta": {"id": "DIARY-DEV-beta", "kind": "REQUIREMENT", "label": "Beta",
+            "content": {"source_file": "spec/d.md", "parse_line": 1, "level": "DEV", "status": "Active"},
+            "children": [], "edges": []},
+    }, "roots": [], "metadata": {}})
+    manifest = Manifest.from_dict({"document": {}, "levels": ["DEV"], "chapters": [
+        {"number": 9, "title": "Development", "sections": [
+            {"number": "9.1", "title": "All DEV", "levels": ["DEV"]}]}]})
+    md = mod.assemble_markdown(graph, manifest, tmp_path, None)
+    assert "DIARY-DEV-beta" in md      # by-level section selects DEV across whole corpus
+    assert "DIARY-PRD-alpha" not in md  # PRD excluded by levels=[DEV]
+
+
+def test_assemble_threads_metadata_config(tmp_path):
+    from urs_compile.graph_loader import Graph
+    from urs_compile.manifest import Manifest
+    from urs_compile.render import RenderConfig
+    mod = _load_orchestrator()
+    graph = Graph.from_dict({"nodes": {
+        "DIARY-PRD-alpha": {"id": "DIARY-PRD-alpha", "kind": "REQUIREMENT", "label": "Alpha",
+            "content": {"source_file": "spec/p.md", "parse_line": 1, "level": "PRD", "status": "Active"},
+            "children": [], "edges": []},
+    }, "roots": [], "metadata": {}})
+    manifest = Manifest.from_dict({"document": {}, "chapters": [
+        {"number": 4, "title": "C", "sections": [
+            {"number": "4.1", "title": "S", "files": ["spec/p.md"]}]}]})
+    off = mod.assemble_markdown(graph, manifest, tmp_path, None)
+    on = mod.assemble_markdown(graph, manifest, tmp_path, None,
+                               config=RenderConfig(metadata_fields=("status",)))
+    assert "Status:" not in off   # default: no metadata
+    assert "Status:" in on        # config threads through to the renderer
+
+
+def test_build_render_config_overlays_manifest_metadata():
+    """build_render_config keeps the sponsor toggles but pulls
+    metadata_fields from the manifest (the only place metadata reaches
+    the renderer). Pure helper — no I/O, no pandoc."""
+    from urs_compile.manifest import Manifest
+    mod = _load_orchestrator()
+    sponsor_info = {"urs_render": {"show_refines_satisfies": False, "show_rationale": True}}
+    manifest = Manifest.from_dict({"document": {}, "metadata": ["status", "level"],
+                                   "chapters": []})
+    cfg = mod.build_render_config(sponsor_info, manifest)
+    assert cfg.metadata_fields == ("status", "level")  # from the manifest
+    assert cfg.show_refines_satisfies is False          # sponsor toggle preserved
+    assert cfg.show_rationale is True
+
+
 def test_strip_latex_blocks_removes_raw_latex_fences():
     mod = _load_orchestrator()
     text = "before\n\n```{=latex}\n\\setcounter{section}{2}\n```\n\nafter\n"

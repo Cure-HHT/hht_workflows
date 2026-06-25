@@ -51,6 +51,7 @@
         "rationale": "Body prose for RBAC.",
         "level": "prd",
         "status": "Active",
+        "hash": "deadbeef",
         "source_file": "spec/prd-rbac.md",
         "parse_line": 5
       },

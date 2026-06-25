@@ -130,14 +130,21 @@ From the consumer repo's worktree:
     /path/to/associate/worktree   # optional
 ```
 
-Outputs land in `<primary-root>/docs/`:
+Outputs land in `<primary-root>/docs/`. The basename derives from the manifest
+filename (without `.yaml`): manifest `spec/URS-manifest/urs.yaml` (the default)
+produces:
 
 ```text
-docs/urs-compiled.pdf
-docs/urs-compiled.docx
+docs/urs.pdf
+docs/urs.docx
 docs/urs-term-index.pdf
 docs/urs-term-index.docx
+docs/urs-build-provenance.md
 ```
+
+Override the stem with `OUTPUT_BASENAME=custom` to produce `docs/custom.pdf`
+etc., or set `MANIFEST=spec/URS-manifest/other.yaml` to use a different manifest
+(stem `other` derives automatically).
 
 Prerequisites:
 
@@ -158,11 +165,17 @@ In a consumer-repo workflow:
     repository: Cure-HHT/hht_diary
     path: associate
     token: ${{ secrets.ASSOCIATE_REPO_TOKEN }}
-- uses: Cure-HHT/hht_workflows/actions/build-urs@main
+- uses: Cure-HHT/hht_workflows/.github/actions/build-urs@main
   with:
     primary-root: primary
     associate-root: associate
+    elspais-version: ${{ env.ELSPAIS_VERSION }}  # pin from .github/versions.env
 ```
+
+`elspais-version` is required: the action installs that exact PyPI release
+(`pip install elspais==<version>`) so URS builds are reproducible and traceable
+to a known tool version. Source it from the caller repo's
+`.github/versions.env` (`ELSPAIS_VERSION`).
 
 The action installs pandoc, xelatex, and elspais; runs `compile-urs.sh`;
 and uploads the four URS deliverables as a `urs-deliverables` artifact.

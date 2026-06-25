@@ -16,23 +16,47 @@
 #
 # Environment overrides:
 #   PRIMARY_ROOT        Same as positional argument 1.
-#   ASSOCIATE_ROOT      Same as positional argument 2.
+#   ASSOCIATE_ROOT      Same as positional argument 2 (back-compat single
+#                       associate; ignored when ASSOCIATE_ROOTS is set).
+#   ASSOCIATE_ROOTS     Newline-delimited list of associate source paths
+#                       (multi-source; takes precedence over ASSOCIATE_ROOT
+#                       and sources.local.yaml).
+#   MANIFEST            Path to the URS manifest YAML, relative to PRIMARY_ROOT
+#                       (default: spec/URS-manifest/urs.yaml).
+#   OUTPUT_BASENAME     Override the output filename stem (default: manifest
+#                       filename without .yaml extension, e.g. "urs" from
+#                       "urs.yaml"). Affects all four deliverable filenames.
 #   PYTHON              Python interpreter (default: python3).
 #   ELSPAIS             elspais CLI (default: elspais).
 #
+# Associate sources are resolved in this order (first non-empty wins):
+#   1. ASSOCIATE_ROOTS env — newline-delimited paths, blank lines skipped.
+#   2. ASSOCIATE_ROOT env / positional arg 2 — back-compat single path.
+#   3. ${PRIMARY_ROOT}/spec/URS-manifest/sources.local.yaml — gitignored
+#      "name: path" YAML map; values are used as source paths.
+#   4. No associates — single-source build.
+#
+# Each resolved associate root is validated (must be an existing directory)
+# then wired into the elspais federation via `elspais associate <abs-path>`
+# before `elspais graph`. The FIRST associate is also passed to compile-urs.py
+# as --associate-root (prose fallback + resource-path). Build provenance tracks
+# only the first associate; multi-source provenance is out of scope for this
+# task.
+#
 # The script:
-#   1. Runs `elspais graph` from PRIMARY_ROOT to emit a federated graph
-#      JSON. PRIMARY_ROOT's elspais config declares ASSOCIATE_ROOT as an
-#      associate (typically via a gitignored .elspais.local.toml) so the
-#      graph aggregates both repos' REQs.
-#   2. Runs `elspais glossary` and `elspais term-index` from PRIMARY_ROOT
+#   1. Resolves and validates associate sources, wires each into elspais.
+#   2. Runs `elspais graph` from PRIMARY_ROOT to emit a federated graph
+#      JSON. PRIMARY_ROOT's elspais config declares associates (typically
+#      via the gitignored .elspais.local.toml) so the graph aggregates
+#      all repos' REQs.
+#   3. Runs `elspais glossary` and `elspais term-index` from PRIMARY_ROOT
 #      to emit federated glossary and term index markdown.
-#   3. Invokes compile-urs.py, which reads sponsor identity from
+#   4. Invokes compile-urs.py, which reads sponsor identity from
 #      PRIMARY_ROOT/spec/URS-manifest/sponsor-info.yaml, generates a
 #      LaTeX include-in-header overriding the template's sponsor macros,
 #      assembles the markdown, and runs pandoc once per format.
-#   4. Emits a stand-alone term-index PDF + DOCX alongside the URS body.
-#   5. Writes docs/urs-build-provenance.md stamping the out-of-repo input
+#   5. Emits a stand-alone term-index PDF + DOCX alongside the URS body.
+#   6. Writes docs/<name>-build-provenance.md stamping the out-of-repo input
 #      versions (this pipeline's `git describe` and the associate repo's
 #      HEAD) the deliverables were generated from. The consumer repo does
 #      not version-pin this pipeline, so this is the only record tying a
@@ -41,11 +65,87 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --init: delegate to init-manifest.sh, then exit. This early-exit runs
+# before manifest resolution so --init works on repos that have no manifest yet.
+if [ "${1:-}" = "--init" ]; then
+  shift
+  TARGET="${1:-$(pwd)}"
+  # Pass the optional manifest name as a single quoted argument (an unquoted
+  # ${VAR:+"$VAR"} would word-split a name containing spaces).
+  if [ -n "${2:-}" ]; then
+    exec "${SCRIPT_DIR}/init-manifest.sh" "${TARGET}" "${2}"
+  fi
+  exec "${SCRIPT_DIR}/init-manifest.sh" "${TARGET}"
+fi
+
 PRIMARY_ROOT="${1:-${PRIMARY_ROOT:-$(pwd)}}"
 PRIMARY_ROOT="$(cd "$PRIMARY_ROOT" && pwd)"
 ASSOCIATE_ROOT="${2:-${ASSOCIATE_ROOT:-}}"
 PYTHON="${PYTHON:-python3}"
 ELSPAIS="${ELSPAIS:-elspais}"
+
+# Manifest resolution — required; hard-fail with a seeding hint if absent.
+MANIFEST="${MANIFEST:-spec/URS-manifest/urs.yaml}"
+MANIFEST_PATH="${PRIMARY_ROOT}/${MANIFEST}"
+if [ ! -f "${MANIFEST_PATH}" ]; then
+  echo "error: manifest not found at ${MANIFEST_PATH}." >&2
+  echo "       Seed one with: ${SCRIPT_DIR}/init-manifest.sh ${PRIMARY_ROOT}" >&2
+  exit 1
+fi
+NAME="${OUTPUT_BASENAME:-$(basename "${MANIFEST%.yaml}")}"
+
+# Associate source resolution (precedence: ASSOCIATE_ROOTS > ASSOCIATE_ROOT >
+# sources.local.yaml > none).
+SOURCES_LOCAL="${PRIMARY_ROOT}/spec/URS-manifest/sources.local.yaml"
+declare -a ASSOC_ROOTS=()
+
+if [ -n "${ASSOCIATE_ROOTS:-}" ]; then
+  # Newline-delimited list from env; skip blank lines.
+  while IFS= read -r _line; do
+    [ -z "${_line}" ] && continue
+    ASSOC_ROOTS+=("${_line}")
+  done <<< "${ASSOCIATE_ROOTS}"
+elif [ -n "${ASSOCIATE_ROOT:-}" ]; then
+  # Back-compat single associate (positional arg 2 / env).
+  ASSOC_ROOTS+=("${ASSOCIATE_ROOT}")
+elif [ -f "${SOURCES_LOCAL}" ]; then
+  # Parse values from a "name: path" YAML map. Validate it is a mapping and
+  # hard-fail with a clear message (rather than a Python traceback) if the
+  # user-edited file is, say, a list or a bare string. Capture into a var so
+  # a non-zero exit from the parser aborts the build.
+  _local_sources="$("${PYTHON}" -c '
+import yaml, sys
+data = yaml.safe_load(open(sys.argv[1])) or {}
+if not isinstance(data, dict):
+    sys.stderr.write("error: %s must be a YAML mapping of name: path\n" % sys.argv[1])
+    sys.exit(1)
+print("\n".join(str(v) for v in data.values()))
+' "${SOURCES_LOCAL}")" || exit 1
+  while IFS= read -r _line; do
+    [ -z "${_line}" ] && continue
+    ASSOC_ROOTS+=("${_line}")
+  done <<< "${_local_sources}"
+fi
+
+# Validate each source, resolve to absolute, wire into elspais federation.
+declare -a ABS_ASSOC_ROOTS=()
+if [ ${#ASSOC_ROOTS[@]} -gt 0 ]; then
+  for _root in "${ASSOC_ROOTS[@]}"; do
+    if [ ! -d "${_root}" ]; then
+      echo "error: associate source path not found: ${_root}" >&2
+      exit 1
+    fi
+    _abs="$(cd "${_root}" && pwd)"
+    ABS_ASSOC_ROOTS+=("${_abs}")
+    (cd "${PRIMARY_ROOT}" && "${ELSPAIS}" associate "${_abs}")
+  done
+fi
+
+# Back-compat: ASSOCIATE_ROOT = first resolved associate (for --associate-root
+# PY_ARG, provenance, and pandoc resource-path). Provenance tracks only the
+# first associate; multi-source provenance is out of scope.
+ASSOCIATE_ROOT="${ABS_ASSOC_ROOTS[0]:-}"
 
 mkdir -p "${PRIMARY_ROOT}/build/_generated"
 
@@ -61,18 +161,18 @@ mkdir -p "${PRIMARY_ROOT}/build/_generated"
   > "${PRIMARY_ROOT}/build/_generated/term-index.md"
 
 # 3) URS body via the Python orchestrator. compile-urs.py picks up
-#    bundled defaults for --template and --manifest from its own directory;
-#    --cover and --sponsor-info come from PRIMARY_ROOT's spec/URS-manifest/.
+#    bundled defaults for --template from its own directory; --manifest,
+#    --cover, and --sponsor-info come from PRIMARY_ROOT's spec/URS-manifest/.
 PY_ARGS=(
+  --manifest "${MANIFEST_PATH}"
   --graph "${PRIMARY_ROOT}/build/graph.json"
   --output-md "${PRIMARY_ROOT}/build/urs-assembled.md"
-  --output-pdf "${PRIMARY_ROOT}/docs/urs-compiled.pdf"
-  --output-docx "${PRIMARY_ROOT}/docs/urs-compiled.docx"
+  --output-pdf "${PRIMARY_ROOT}/docs/${NAME}.pdf"
+  --output-docx "${PRIMARY_ROOT}/docs/${NAME}.docx"
   --cover "${PRIMARY_ROOT}/spec/URS-manifest/urs-cover.tex"
   --sponsor-info "${PRIMARY_ROOT}/spec/URS-manifest/sponsor-info.yaml"
 )
-if [ -n "${ASSOCIATE_ROOT}" ]; then
-  ASSOCIATE_ROOT="$(cd "${ASSOCIATE_ROOT}" && pwd)"
+if [ -n "${ASSOCIATE_ROOT:-}" ]; then
   PY_ARGS+=(--associate-root "${ASSOCIATE_ROOT}")
 fi
 (cd "${PRIMARY_ROOT}" && "${PYTHON}" "${SCRIPT_DIR}/compile-urs.py" "${PY_ARGS[@]}")
@@ -91,7 +191,7 @@ else
   HEADER_ARG=()
 fi
 pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
-  -o "${PRIMARY_ROOT}/docs/urs-term-index.pdf" \
+  -o "${PRIMARY_ROOT}/docs/${NAME}-term-index.pdf" \
   --pdf-engine xelatex \
   --template "${SCRIPT_DIR}/urs-template.latex" \
   --variable=cover-tex:"${PRIMARY_ROOT}/spec/URS-manifest/urs-term-index-cover.tex" \
@@ -99,7 +199,7 @@ pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
   --top-level-division=chapter \
   "${HEADER_ARG[@]}"
 pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
-  -o "${PRIMARY_ROOT}/docs/urs-term-index.docx"
+  -o "${PRIMARY_ROOT}/docs/${NAME}-term-index.docx"
 
 # 5) Build-provenance record. Stamp the out-of-repo input versions alongside
 #    the committed deliverables. Versions are derived from git so the script
@@ -115,7 +215,7 @@ git_slug() {
   fi
 }
 
-PROVENANCE="${PRIMARY_ROOT}/docs/urs-build-provenance.md"
+PROVENANCE="${PRIMARY_ROOT}/docs/${NAME}-build-provenance.md"
 WF_SLUG="$(git_slug "${SCRIPT_DIR}")"
 WF_VERSION="$(git -C "${SCRIPT_DIR}" describe --tags --always --dirty 2>/dev/null || echo unknown)"
 BUILD_DATE="$(date -u +%Y-%m-%d)"
@@ -129,8 +229,8 @@ XETEX_VERSION="$(xelatex --version 2>/dev/null | head -1 || true)"
 _Generated by \`${WF_SLUG}/scripts/urs-compile/compile-urs.sh\` — do not edit by
 hand; rerun the compile to refresh._
 
-The URS deliverables in this directory (\`urs-compiled.pdf\`, \`urs-compiled.docx\`,
-\`urs-term-index.pdf\`, \`urs-term-index.docx\`) are committed artifacts produced by
+The URS deliverables in this directory (\`${NAME}.pdf\`, \`${NAME}.docx\`,
+\`${NAME}-term-index.pdf\`, \`${NAME}-term-index.docx\`) are committed artifacts produced by
 a local compile run using the external URS compile pipeline, which the consumer
 repo does not version-pin. This file records the versions of the out-of-repo
 inputs the current deliverables were generated from.
@@ -144,7 +244,7 @@ Built: ${BUILD_DATE}
 | URS compile scripts (\`scripts/urs-compile/\`) | \`${WF_SLUG}\` (external) | \`${WF_VERSION}\` |
 EOF
 
-  if [ -n "${ASSOCIATE_ROOT}" ]; then
+  if [ -n "${ASSOCIATE_ROOT:-}" ]; then
     ASSOC_SLUG="$(git_slug "${ASSOCIATE_ROOT}")"
     ASSOC_VERSION="$(git -C "${ASSOCIATE_ROOT}" describe --tags --always --dirty 2>/dev/null \
       || git -C "${ASSOCIATE_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -163,8 +263,8 @@ EOF
 } > "${PROVENANCE}"
 
 echo "Done:"
-echo "  ${PRIMARY_ROOT}/docs/urs-compiled.pdf"
-echo "  ${PRIMARY_ROOT}/docs/urs-compiled.docx"
-echo "  ${PRIMARY_ROOT}/docs/urs-term-index.pdf"
-echo "  ${PRIMARY_ROOT}/docs/urs-term-index.docx"
-echo "  ${PRIMARY_ROOT}/docs/urs-build-provenance.md"
+echo "  ${PRIMARY_ROOT}/docs/${NAME}.pdf"
+echo "  ${PRIMARY_ROOT}/docs/${NAME}.docx"
+echo "  ${PRIMARY_ROOT}/docs/${NAME}-term-index.pdf"
+echo "  ${PRIMARY_ROOT}/docs/${NAME}-term-index.docx"
+echo "  ${PRIMARY_ROOT}/docs/${NAME}-build-provenance.md"
