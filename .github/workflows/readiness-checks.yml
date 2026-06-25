@@ -267,6 +267,43 @@ jobs:
           fi
           echo "Negative identity check correctly rejected wrong-repo identity (outcome: ${OUTCOME})"
 
+  build-urs:
+    # End-to-end readiness check for the build-urs composite action: compiles
+    # the self-contained synthetic URS fixture (a primary + an associate repo)
+    # and asserts the PDF + DOCX deliverables are produced. Exercises
+    # multi-source federation, level filtering, and metadata hiding.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize fixture repos
+        # elspais resolves a project root via `git rev-parse --show-toplevel`.
+        # Inside this checkout the fixture dirs resolve to the hht_workflows
+        # root (no .elspais.toml there), so each fixture repo needs its own
+        # git toplevel. No commit required.
+        run: |
+          git init -q scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          git init -q scripts/urs-compile/test_compile_urs/fixtures/readiness/associate
+      - name: Compile the readiness fixture
+        uses: ./.github/actions/build-urs
+        with:
+          elspais-version: "0.117.81"
+          primary-root: scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          associate-roots: scripts/urs-compile/test_compile_urs/fixtures/readiness/associate
+          manifest: spec/URS-manifest/urs.yaml
+      - name: Assert deliverables exist and have fixture content
+        run: |
+          set -euo pipefail
+          d=scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          test -s "$d/docs/urs.pdf"
+          test -s "$d/docs/urs.docx"
+          # Content assertions on the assembled markdown: sponsor REQ (scope
+          # sponsor) and the by-level DEV REQ both rendered.
+          grep -q "FIX-PRD-sponsor-config" "$d"/build/urs-assembled*.md
+          grep -q "DIARY-DEV-sample-internal" "$d"/build/urs-assembled*.md
+          echo "build-urs readiness OK: urs.pdf + urs.docx produced with expected content."
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.
