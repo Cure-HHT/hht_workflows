@@ -1,0 +1,106 @@
+# hht_workflows/.github/actions/cloud-run-deploy-no-traffic/action.yml
+name: Cloud Run deploy (no traffic, tagged)
+description: >
+  Deploys a new revision of a Cloud Run (v1) service with --no-traffic and a
+  revision tag, so the revision is reachable at a tagged URL for verification
+  while 100% of live traffic stays on the prior healthy revision. Outputs the
+  tagged URL and the new revision name so the caller can verify the candidate
+  and then promote it with cloud-run-migrate-traffic. Caller must already be
+  authenticated to gcloud (e.g. via google-github-actions/auth). Pin by SHA.
+
+inputs:
+  service:            { description: "Cloud Run service name", required: true }
+  region:             { description: "GCP region", required: true }
+  project:            { description: "Deploy project id", required: true }
+  image:              { description: "Immutable image digest reference", required: true }
+  tag:                { description: "Revision tag for the candidate", required: false, default: "candidate" }
+  cloudsql_instances: { description: "--add-cloudsql-instances value", required: true }
+  vpc_connector:      { description: "--vpc-connector value", required: true }
+  update_env_vars:    { description: "Comma-list for --update-env-vars (may contain a secret; never echoed)", required: true }
+  remove_env_vars:    { description: "Comma-list of env var NAMES to remove", required: false, default: "" }
+  cpu:                { description: "--cpu", required: false, default: "2" }
+  memory:             { description: "--memory", required: false, default: "4Gi" }
+  min_instances:      { description: "--min-instances", required: false, default: "1" }
+  max_instances:      { description: "--max-instances", required: false, default: "2" }
+
+outputs:
+  tagged_url:
+    description: "URL of the candidate-tagged, zero-traffic revision"
+    value: ${{ steps.resolve.outputs.tagged_url }}
+  revision_name:
+    description: "Name of the newly created revision"
+    value: ${{ steps.resolve.outputs.revision_name }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: DIARY-OPS-deploy-traffic-gating/A
+    - name: Deploy revision with no traffic and a tag
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        REGION: ${{ inputs.region }}
+        PROJECT: ${{ inputs.project }}
+        IMAGE: ${{ inputs.image }}
+        TAG: ${{ inputs.tag }}
+        CLOUDSQL: ${{ inputs.cloudsql_instances }}
+        VPC: ${{ inputs.vpc_connector }}
+        UPDATE_ENV_VARS: ${{ inputs.update_env_vars }}
+        REMOVE_ENV_VARS: ${{ inputs.remove_env_vars }}
+        CPU: ${{ inputs.cpu }}
+        MEMORY: ${{ inputs.memory }}
+        MIN_INSTANCES: ${{ inputs.min_instances }}
+        MAX_INSTANCES: ${{ inputs.max_instances }}
+      run: |
+        set -euo pipefail
+        # Do NOT echo $UPDATE_ENV_VARS — on the legacy path it can carry a secret.
+        REMOVE_FLAG=()
+        if [ -n "$REMOVE_ENV_VARS" ]; then
+          REMOVE_FLAG=(--remove-env-vars="$REMOVE_ENV_VARS")
+        fi
+        echo "Deploying $SERVICE to $PROJECT with --no-traffic --tag $TAG"
+        gcloud run services update "$SERVICE" \
+          --region="$REGION" \
+          --project="$PROJECT" \
+          --image="$IMAGE" \
+          --no-traffic \
+          --tag="$TAG" \
+          --cpu="$CPU" \
+          --memory="$MEMORY" \
+          --min-instances="$MIN_INSTANCES" \
+          --max-instances="$MAX_INSTANCES" \
+          --add-cloudsql-instances="$CLOUDSQL" \
+          --vpc-connector="$VPC" \
+          --update-env-vars="$UPDATE_ENV_VARS" "${REMOVE_FLAG[@]}"
+
+    # Implements: DIARY-OPS-deploy-traffic-gating/A
+    - name: Resolve tagged URL and revision name
+      id: resolve
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        REGION: ${{ inputs.region }}
+        PROJECT: ${{ inputs.project }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        # Resolve the URL and the revision from the SAME tagged traffic entry,
+        # so the caller verifies and promotes the identical revision. (Reading
+        # the revision from status.latestCreatedRevisionName instead could
+        # diverge from the tagged URL if a concurrent deploy raced in between.)
+        # `first(...)` tolerates a duplicate stale tag entry during a re-tag.
+        ENTRY=$(gcloud run services describe "$SERVICE" \
+          --region="$REGION" --project="$PROJECT" --format=json \
+          | jq -c --arg t "$TAG" 'first(.status.traffic[] | select(.tag==$t)) // empty')
+        TAGGED_URL=$(printf '%s' "$ENTRY" | jq -r '.url // empty')
+        REVISION_NAME=$(printf '%s' "$ENTRY" | jq -r '.revisionName // empty')
+        if [ -z "$REVISION_NAME" ] || [ -z "$TAGGED_URL" ]; then
+          echo "::error::Could not resolve tagged candidate (tag='$TAG', entry='$ENTRY')."
+          exit 1
+        fi
+        echo "Candidate revision: $REVISION_NAME"
+        echo "Candidate URL:      $TAGGED_URL"
+        {
+          echo "revision_name=$REVISION_NAME"
+          echo "tagged_url=$TAGGED_URL"
+        } >> "$GITHUB_OUTPUT"
