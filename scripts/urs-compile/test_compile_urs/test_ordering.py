@@ -137,3 +137,23 @@ def test_section_remainders_walks_file_children(sample_graph_dict):
     rems = section_remainders(g, ["spec/prd-rbac.md"])
     ids = [r.id for r in rems]
     assert ids == ["rem:spec/prd-rbac.md:1", "rem:spec/prd-rbac.md:2"]
+
+
+def test_grouped_respects_explicit_levels():
+    g = _graph(
+        _req("DIARY-PRD-foo", parse_line=10),
+        _req("DIARY-DEV-foo-schema", parse_line=20),
+        _req("DIARY-GUI-bar", parse_line=30),
+    )
+    groups = grouped_section_requirements(g, ["spec/x.md"], scope="core", levels=("DEV",))
+    assert _ids(groups) == [["DIARY-DEV-foo-schema"]]
+
+
+def test_grouped_levels_default_is_prd_gui():
+    g = _graph(
+        _req("DIARY-PRD-foo", parse_line=10),
+        _req("DIARY-DEV-foo-schema", parse_line=20),
+        _req("DIARY-GUI-bar", parse_line=30),
+    )
+    groups = grouped_section_requirements(g, ["spec/x.md"], scope="core")
+    assert _ids(groups) == [["DIARY-PRD-foo"], ["DIARY-GUI-bar"]]

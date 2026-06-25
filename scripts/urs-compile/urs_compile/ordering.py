@@ -52,6 +52,7 @@ def grouped_section_requirements(
     graph: Graph,
     relpaths: Iterable[str],
     scope: str = "core",
+    levels: tuple[str, ...] = URS_LEVELS,
 ) -> list[list[GraphNode]]:
     """Return the section's REQs filtered by `scope`, grouped for the URS.
 
@@ -59,12 +60,18 @@ def grouped_section_requirements(
     - ``"core"`` — REQs in the :data:`CORE_NAMESPACE` only.
     - ``"sponsor"`` — REQs in any other namespace (the sponsor overlay).
 
+    `levels` — the REQ levels to include, in presentation order.  Defaults
+    to :data:`URS_LEVELS` (``("PRD", "GUI")``).  Pass a custom tuple to
+    include different levels (e.g. ``("DEV",)`` for a dev-only build).
+
     Each returned group holds the REQs sharing one kebab name and renders
     as one level-3 section. Groups appear in source order (manifest file
     order, then parse_line of the group's first member); group members
-    are ordered by level (PRD before GUI; the sort is stable, so source
-    order breaks ties).
+    are ordered by level rank within the supplied `levels` tuple (stable
+    sort, so source order breaks ties).
     """
+    level_rank = {lvl: i for i, lvl in enumerate(levels)}
+
     collected: list[tuple[GraphNode, str, str]] = []
     for relpath in relpaths:
         reqs = graph.requirements_for_source_file(relpath)
@@ -74,7 +81,7 @@ def grouped_section_requirements(
             if parsed is None:
                 continue
             namespace, level, name = parsed
-            if level not in _LEVEL_RANK:
+            if level not in level_rank:
                 continue
             if (namespace == CORE_NAMESPACE) != (scope == "core"):
                 continue
@@ -90,7 +97,7 @@ def grouped_section_requirements(
 
     out: list[list[GraphNode]] = []
     for name in group_order:
-        members = sorted(groups[name], key=lambda item: _LEVEL_RANK[item[1]])
+        members = sorted(groups[name], key=lambda item: level_rank[item[1]])
         out.append([req for req, _level in members])
     return out
 
