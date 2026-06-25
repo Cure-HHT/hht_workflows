@@ -1,3 +1,10 @@
 PyYAML>=6.0
 Jinja2>=3.1
 pytest>=7.4
+# python-docx backs the docx post-processing in compile-urs.py
+# (_apply_heading_page_breaks / _move_toc_after_cover /
+# _strip_unreferenced_bookmarks) and the reference-doc builder in
+# build_docx_reference.py. Required whenever the docx deliverable is
+# produced (the default --format both), so the build-urs action's CI
+# install must include it.
+python-docx>=1.1
