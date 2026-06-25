@@ -65,6 +65,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --init: delegate to init-manifest.sh, then exit. This early-exit runs
+# before manifest resolution so --init works on repos that have no manifest yet.
+if [ "${1:-}" = "--init" ]; then
+  shift
+  TARGET="${1:-$(pwd)}"
+  NAME_ARG="${2:-}"
+  exec "${SCRIPT_DIR}/init-manifest.sh" "${TARGET}" ${NAME_ARG:+"${NAME_ARG}"}
+fi
+
 PRIMARY_ROOT="${1:-${PRIMARY_ROOT:-$(pwd)}}"
 PRIMARY_ROOT="$(cd "$PRIMARY_ROOT" && pwd)"
 ASSOCIATE_ROOT="${2:-${ASSOCIATE_ROOT:-}}"

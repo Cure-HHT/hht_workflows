@@ -1,0 +1,94 @@
+# URS Manifest Template
+#
+# This file was seeded by init-manifest.sh. Replace all PLACEHOLDER values
+# before running a compile. Required fields: document.title, document.sponsor,
+# document.protocol. Everything else has a working default.
+#
+# Reference: scripts/urs-compile/README.md
+# Compile:   scripts/urs-compile/compile-urs.sh <path-to-this-repo>
+
+# ---------------------------------------------------------------------------
+# Document identity — appears on the cover page and in PDF metadata.
+# ---------------------------------------------------------------------------
+document:
+  title: "REPLACE ME -- User Requirements Specification"
+  subtitle: "REPLACE ME -- Optional subtitle (delete this line if unused)"
+  sponsor: "REPLACE ME -- Sponsor / customer name"
+  protocol: "REPLACE ME -- Protocol or project code, e.g. HHT-001"
+  version: "REPLACE ME -- Document version, e.g. 0.1"
+
+# ---------------------------------------------------------------------------
+# Requirement levels included in this document (document-wide include-set).
+#
+# PRD = Product Requirements (what the product must do)
+# GUI = GUI/UX Requirements (look, feel, interaction)
+# DEV = Development / internal requirements (excluded from sponsor deliverable
+#       by default; add a by-level chapter below to include them)
+#
+# Change this list only if you need to add or remove entire levels globally.
+# ---------------------------------------------------------------------------
+levels: [PRD, GUI]
+
+# ---------------------------------------------------------------------------
+# Metadata rendered alongside each requirement.
+#
+# false        = no metadata shown (clean deliverable, recommended default)
+# [level, status, hash]  = show selected fields
+# true         = show all fields (level, status, hash)
+# ---------------------------------------------------------------------------
+metadata: false
+
+# ---------------------------------------------------------------------------
+# Chapters
+#
+# Each chapter entry:
+#   number     integer (controls sort order and heading numbering)
+#   title      string  (ALL-CAPS conventional but not required)
+#   scope      "core" (default) | "sponsor" -- which REQ namespace to pull from
+#   intro_file path to a markdown file with prose that appears before the
+#              first section (optional)
+#   sections   list of sections:
+#     number   string, e.g. "4.1"
+#     title    string
+#     files    list of repo-relative markdown paths whose REQs are included
+#              (omit to pull all REQs at the chapter's level slice)
+#     levels   list of levels to override document-wide `levels` for this
+#              section only (optional)
+#
+# BY-FILE CHAPTER (active example):
+#   Use when you want a chapter that groups requirements from specific
+#   spec files (most common pattern for core product requirements).
+# ---------------------------------------------------------------------------
+chapters:
+  - number: 4
+    title: "PLATFORM REQUIREMENTS"
+    # intro_file: spec/URS-manifest/ch4-intro.md   # optional prose intro
+    sections:
+      # `files` groups REQs by topic: only REQs defined in the listed
+      # markdown files are included in this section.
+      - number: "4.1"
+        title: "REPLACE ME -- Section Title"
+        files: [spec/prd-example.md]
+
+# ---------------------------------------------------------------------------
+# BY-LEVEL CHAPTER (commented out -- uncomment and edit to activate)
+#
+# Use when you want a chapter that pulls a whole-corpus level slice instead
+# of cherry-picking files. Common use case: an internal DEV chapter that
+# aggregates all DEV-level requirements regardless of which file they live in.
+# Note: `levels` here overrides the document-wide `levels` list for this
+# chapter's sections; the chapter does NOT use `files`.
+# ---------------------------------------------------------------------------
+#  - number: 9
+#    title: "DEVELOPMENT (INTERNAL)"
+#    sections:
+#      - number: "9.1"
+#        title: "Internal Development Requirements"
+#        levels: [DEV]
+
+# ---------------------------------------------------------------------------
+# Optional: frontmatter and appendices markdown files. These are rendered
+# verbatim before the first chapter and after the last chapter respectively.
+# ---------------------------------------------------------------------------
+# frontmatter: spec/URS-manifest/frontmatter.md
+# appendices:  spec/URS-manifest/appendices.md
