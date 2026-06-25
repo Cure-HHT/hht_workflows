@@ -1,0 +1,52 @@
+# elspais configuration — Readiness Fixture Core Platform (associate)
+#
+# Holds DIARY-* requirements consumed by the core chapters of the
+# readiness fixture URS. Mirrors the structure of hht_diary.
+
+version = 4
+
+[project]
+namespace = "DIARY"
+name = "Fixture Core Platform"
+
+[id-patterns]
+canonical = "{namespace}-{level.letter}-{component}"
+separators = ["-"]
+prefix_optional = false
+
+[id-patterns.component]
+style = "kebab-case"
+
+[levels.PRD]
+rank = 1
+letter = "PRD"
+display_name = "Product"
+implements = ["PRD"]
+
+[levels.GUI]
+rank = 3
+letter = "GUI"
+display_name = "Interface"
+implements = ["GUI", "PRD"]
+
+[levels.DEV]
+rank = 5
+letter = "DEV"
+display_name = "Development"
+implements = ["DEV", "GUI", "PRD"]
+
+[scanning.spec]
+directories = ["spec"]
+file_patterns = ["*.md"]
+skip_dirs = ["URS-manifest", "_generated"]
+
+[rules.format]
+require_hash = false
+require_status = true
+
+[validation]
+hash_mode = "normalized-text"
+hash_algorithm = "sha256"
+hash_length = 8
+
+[associates]

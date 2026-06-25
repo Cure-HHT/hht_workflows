@@ -1,0 +1,11 @@
+primary/build/
+primary/docs/
+primary/.elspais.local.toml
+primary/.elspais/
+primary/missfont.log
+associate/build/
+associate/.elspais.local.toml
+associate/.elspais/
+associate/missfont.log
+# top-level missfont.log from xelatex font-not-found warnings
+missfont.log
