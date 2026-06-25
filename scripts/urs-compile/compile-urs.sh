@@ -71,8 +71,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "${1:-}" = "--init" ]; then
   shift
   TARGET="${1:-$(pwd)}"
-  NAME_ARG="${2:-}"
-  exec "${SCRIPT_DIR}/init-manifest.sh" "${TARGET}" ${NAME_ARG:+"${NAME_ARG}"}
+  # Pass the optional manifest name as a single quoted argument (an unquoted
+  # ${VAR:+"$VAR"} would word-split a name containing spaces).
+  if [ -n "${2:-}" ]; then
+    exec "${SCRIPT_DIR}/init-manifest.sh" "${TARGET}" "${2}"
+  fi
+  exec "${SCRIPT_DIR}/init-manifest.sh" "${TARGET}"
 fi
 
 PRIMARY_ROOT="${1:-${PRIMARY_ROOT:-$(pwd)}}"
@@ -106,13 +110,22 @@ elif [ -n "${ASSOCIATE_ROOT:-}" ]; then
   # Back-compat single associate (positional arg 2 / env).
   ASSOC_ROOTS+=("${ASSOCIATE_ROOT}")
 elif [ -f "${SOURCES_LOCAL}" ]; then
-  # Parse values from a "name: path" YAML map.
+  # Parse values from a "name: path" YAML map. Validate it is a mapping and
+  # hard-fail with a clear message (rather than a Python traceback) if the
+  # user-edited file is, say, a list or a bare string. Capture into a var so
+  # a non-zero exit from the parser aborts the build.
+  _local_sources="$("${PYTHON}" -c '
+import yaml, sys
+data = yaml.safe_load(open(sys.argv[1])) or {}
+if not isinstance(data, dict):
+    sys.stderr.write("error: %s must be a YAML mapping of name: path\n" % sys.argv[1])
+    sys.exit(1)
+print("\n".join(str(v) for v in data.values()))
+' "${SOURCES_LOCAL}")" || exit 1
   while IFS= read -r _line; do
     [ -z "${_line}" ] && continue
     ASSOC_ROOTS+=("${_line}")
-  done < <("${PYTHON}" -c \
-    'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])) or {}; print("\n".join(str(v) for v in d.values()))' \
-    "${SOURCES_LOCAL}")
+  done <<< "${_local_sources}"
 fi
 
 # Validate each source, resolve to absolute, wire into elspais federation.

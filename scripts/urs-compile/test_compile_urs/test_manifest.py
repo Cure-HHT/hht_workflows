@@ -103,3 +103,22 @@ def test_section_levels_explicit():
             {"number": "9.1", "title": "All DEV", "levels": ["DEV"]}]}]})
     assert m.chapters[0].sections[0].levels == ("DEV",)
     assert m.chapters[0].sections[0].files == []
+
+
+# --- input validation (Copilot review): fail loud on malformed YAML types ---
+
+def test_levels_rejects_non_list_scalar():
+    with pytest.raises(ValueError, match="levels"):
+        Manifest.from_dict({"document": {}, "levels": "DEV", "chapters": []})
+
+
+def test_section_levels_rejects_non_list_scalar():
+    with pytest.raises(ValueError, match="levels"):
+        Manifest.from_dict({"document": {}, "chapters": [
+            {"number": 9, "title": "X", "sections": [
+                {"number": "9.1", "title": "S", "levels": "DEV"}]}]})
+
+
+def test_metadata_rejects_non_list_non_bool_scalar():
+    with pytest.raises(ValueError, match="metadata"):
+        Manifest.from_dict({"document": {}, "metadata": "level", "chapters": []})

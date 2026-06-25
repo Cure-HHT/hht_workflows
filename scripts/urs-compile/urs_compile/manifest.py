@@ -8,6 +8,25 @@ from typing import Any
 
 import yaml
 
+# Requirement-metadata fields the URS can render alongside each REQ.
+_VALID_METADATA_FIELDS = ("level", "status", "hash")
+
+
+def _coerce_levels(raw: Any, ctx: str) -> tuple[str, ...] | None:
+    """Validate a manifest ``levels:`` value and return it as a tuple.
+
+    Returns ``None`` when ``raw`` is absent. A ``levels:`` accidentally
+    written as a bare scalar (``levels: DEV``) would otherwise be silently
+    turned into a tuple of characters (``('D', 'E', 'V')``) that matches no
+    requirement level; require a list of strings and fail loud, naming
+    ``ctx`` (e.g. ``"document"`` or ``"section 9.1"``) in the message.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        raise ValueError(f"{ctx}: 'levels' must be a list of strings, got {raw!r}")
+    return tuple(raw)
+
 
 @dataclass(frozen=True)
 class Section:
@@ -68,7 +87,9 @@ class Manifest:
                     number=s["number"],
                     title=s["title"],
                     files=list(s.get("files", [])),
-                    levels=tuple(s["levels"]) if s.get("levels") else None,
+                    levels=_coerce_levels(
+                        s.get("levels"), f"section {s.get('number', '?')}"
+                    ) or None,
                 )
                 for s in ch.get("sections", [])
             ]
@@ -85,15 +106,14 @@ class Manifest:
                 intro_file=ch.get("intro_file"),
                 scope=scope,
             ))
-        levels = tuple(d.get("levels") or ("PRD", "GUI"))
+        levels = _coerce_levels(d.get("levels"), "document") or ("PRD", "GUI")
 
-        _VALID_METADATA_FIELDS = ("level", "status", "hash")
         _raw_metadata = d.get("metadata")
         if not _raw_metadata:
             metadata_fields: tuple[str, ...] = ()
         elif _raw_metadata is True:
             metadata_fields = _VALID_METADATA_FIELDS
-        else:
+        elif isinstance(_raw_metadata, list):
             for _field in _raw_metadata:
                 if _field not in _VALID_METADATA_FIELDS:
                     raise ValueError(
@@ -101,6 +121,11 @@ class Manifest:
                         f"valid fields are {list(_VALID_METADATA_FIELDS)}"
                     )
             metadata_fields = tuple(_raw_metadata)
+        else:
+            raise ValueError(
+                f"metadata must be false, true, or a list of "
+                f"{list(_VALID_METADATA_FIELDS)}; got {_raw_metadata!r}"
+            )
 
         return cls(
             document=d.get("document", {}),
