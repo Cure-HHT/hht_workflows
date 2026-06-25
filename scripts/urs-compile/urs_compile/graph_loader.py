@@ -72,6 +72,18 @@ class Graph:
             if n.kind == "REQUIREMENT" and n.content.get("source_file") == relpath
         ]
 
+    def requirement_source_files(self) -> list[str]:
+        """Distinct source_file values across REQUIREMENT nodes, first-seen order."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for n in self._nodes.values():
+            if n.kind == "REQUIREMENT":
+                sf = n.content.get("source_file")
+                if sf and sf not in seen:
+                    seen.add(sf)
+                    out.append(sf)
+        return out
+
     def remainders_for_source_file(self, relpath: str) -> list[GraphNode]:
         """Return REMAINDER nodes attached to FILE nodes for `relpath`.
 

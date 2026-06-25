@@ -23,6 +23,7 @@ Pipeline:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import re
 import subprocess
 import sys
@@ -429,11 +430,30 @@ def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path,
             # level (### title / #### subsections) and must not be demoted.
             rendered_chunks: list[tuple[str, str]] = []
             if chapter.scope == "core":
+                # REMAINDER / file prose is always driven by section.files
+                # only — a by-level section (files-less, levels-driven)
+                # emits no prose, just the whole-corpus REQs for its levels.
                 for rem in section_remainders(graph, section.files):
                     rendered_chunks.append((rem.kind, render_node(rem, graph, config)))
                     rendered_chunks.append(("SEP", "\n"))
+            # Effective levels for this section: an explicit section override
+            # wins, else the manifest's document-wide levels.
+            eff_levels = section.levels or manifest.levels
+            # Choose which relpaths to pull REQs from:
+            # - explicit section.files -> the section's own files (today's
+            #   behaviour), intersected with eff_levels below.
+            # - section.levels but no files -> a "by-level" section that
+            #   selects across the WHOLE corpus (every distinct REQUIREMENT
+            #   source_file in the graph), filtered to eff_levels.
+            # - neither -> empty section.files -> the existing no-content path.
+            if section.files:
+                req_relpaths: list[str] = section.files
+            elif section.levels:
+                req_relpaths = graph.requirement_source_files()
+            else:
+                req_relpaths = section.files
             groups = grouped_section_requirements(
-                graph, section.files, scope=chapter.scope,
+                graph, req_relpaths, scope=chapter.scope, levels=eff_levels,
             )
             for group in groups:
                 primary_req = group[0]
@@ -864,6 +884,20 @@ def run_pandoc_docx(
     _strip_unreferenced_bookmarks(output_path)
 
 
+def build_render_config(sponsor_info: dict, manifest: Manifest) -> RenderConfig:
+    """Build the RenderConfig from sponsor-info, then overlay manifest metadata.
+
+    `RenderConfig.from_sponsor_info` deliberately keeps `metadata_fields=()`
+    (sponsor-info has no metadata block); the manifest is the only place the
+    metadata field list comes from, so replace it here. RenderConfig is a
+    frozen dataclass, hence `dataclasses.replace`.
+    """
+    render_config = RenderConfig.from_sponsor_info(sponsor_info)
+    return dataclasses.replace(
+        render_config, metadata_fields=manifest.metadata_fields
+    )
+
+
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description=__doc__)
@@ -920,10 +954,15 @@ def main() -> int:
     sponsor_info: dict = {}
     if args.sponsor_info.exists():
         sponsor_info = yaml.safe_load(args.sponsor_info.read_text()) or {}
-    render_config = RenderConfig.from_sponsor_info(sponsor_info)
 
     graph = Graph.from_json_path(args.graph)
     manifest = Manifest.from_yaml_path(args.manifest)
+
+    # Sponsor-info supplies the show_refines_satisfies / show_rationale
+    # toggles; the manifest supplies metadata_fields. build_render_config
+    # merges them (the manifest is the only place metadata reaches the
+    # renderer).
+    render_config = build_render_config(sponsor_info, manifest)
 
     formats = ["pdf", "docx"] if args.format == "both" else [args.format]
 
