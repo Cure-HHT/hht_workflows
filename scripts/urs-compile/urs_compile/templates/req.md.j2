@@ -14,6 +14,18 @@
 {% endif %}
 **REQ ID:** `{{ node.id }}`
 
+{% if metadata_items -%}
+{%- set _parts = [] -%}
+{%- for item in metadata_items -%}
+{%- if item.is_hash -%}
+{%- set _ = _parts.append('*' ~ item.label ~ ':* `' ~ item.value ~ '`') -%}
+{%- else -%}
+{%- set _ = _parts.append('*' ~ item.label ~ ':* ' ~ item.value) -%}
+{%- endif -%}
+{%- endfor -%}
+{{ _parts | join(' · ') }}
+
+{% endif -%}
 {%- if config.show_refines_satisfies %}
 {# Outgoing refs come from content.refines_refs / content.satisfies_refs. -#}
 {# node.edges contains BOTH outgoing AND incoming REFINES — using it would -#}

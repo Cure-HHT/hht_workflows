@@ -1,5 +1,5 @@
 from urs_compile.graph_loader import Graph
-from urs_compile.render import render_node, render_remainder, render_requirement
+from urs_compile.render import RenderConfig, render_node, render_remainder, render_requirement
 
 
 def test_remainder_emits_verbatim(sample_graph_dict):
@@ -59,3 +59,49 @@ def test_render_node_dispatches_on_kind(sample_graph_dict):
     rem = g.get_node("rem:spec/prd-rbac.md:1")
     assert "Customizable" in render_node(req, g)
     assert "Intro prose" in render_node(rem)
+
+
+def test_metadata_hidden_by_default(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    node = g.get_node("DIARY-PRD-rbac")
+    out = render_requirement(node, g)
+    assert "Status:" not in out and "Level:" not in out and "Hash:" not in out
+    # Default output is byte-identical to explicitly-empty metadata_fields.
+    assert out == render_requirement(node, g, RenderConfig(metadata_fields=()))
+
+
+def test_metadata_renders_as_own_paragraph(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    out = render_requirement(g.get_node("DIARY-PRD-rbac"), g,
+                             RenderConfig(metadata_fields=("level", "status", "hash")))
+    # Must NOT fuse onto the REQ-ID line.
+    assert "`DIARY-PRD-rbac`*Level:*" not in out
+    # The metadata line stands alone as its own paragraph.
+    assert any(
+        line.strip() == "*Level:* prd · *Status:* Active · *Hash:* `deadbeef`"
+        for line in out.splitlines()
+    )
+
+
+def test_metadata_skips_unknown_field(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    # An unknown field name must not raise (RenderConfig has no validation).
+    out = render_requirement(g.get_node("DIARY-PRD-rbac"), g,
+                             RenderConfig(metadata_fields=("level", "bogus")))
+    assert "Level:" in out
+    assert "bogus" not in out and "Bogus:" not in out
+
+
+def test_metadata_level_and_status_when_requested(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    out = render_requirement(g.get_node("DIARY-PRD-rbac"), g,
+                             RenderConfig(metadata_fields=("level", "status")))
+    assert "Level:" in out and "Status:" in out
+    assert "Hash:" not in out
+
+
+def test_metadata_hash_when_requested(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    out = render_requirement(g.get_node("DIARY-PRD-rbac"), g,
+                             RenderConfig(metadata_fields=("hash",)))
+    assert "Hash:" in out and "deadbeef" in out

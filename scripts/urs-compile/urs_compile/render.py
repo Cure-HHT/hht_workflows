@@ -11,6 +11,13 @@ import jinja2
 from .graph_loader import Graph, GraphNode
 
 
+_METADATA_LABELS: dict[str, str] = {
+    "level": "Level",
+    "status": "Status",
+    "hash": "Hash",
+}
+
+
 @dataclass(frozen=True)
 class RenderConfig:
     """Per-sponsor toggles for which REQ sections appear in the rendered URS.
@@ -21,6 +28,7 @@ class RenderConfig:
     preserve current behaviour."""
     show_refines_satisfies: bool = True
     show_rationale: bool = True
+    metadata_fields: tuple[str, ...] = ()
 
     @classmethod
     def from_sponsor_info(cls, sponsor_info: dict) -> "RenderConfig":
@@ -99,10 +107,27 @@ def render_requirement(node: GraphNode, graph: Graph,
     `content.rationale` is emitted at the end as a fallback (elspais
     surfaces some rationale prose only via that field).
     """
-    # Header (heading + REQ ID + Refines/Satisfies edges) — Jinja handles these.
+    # Build metadata items for optional rendering. Unknown field names are
+    # skipped (Manifest validates field names, but a directly-constructed
+    # RenderConfig has no such guard — be defensive rather than crash).
+    metadata_items: list[dict] = []
+    for f in config.metadata_fields:
+        label = _METADATA_LABELS.get(f)
+        if label is None:
+            continue
+        val = node.content.get(f)
+        if val:
+            metadata_items.append({
+                "label": label,
+                "value": str(val),
+                "is_hash": f == "hash",
+            })
+
+    # Header (heading + REQ ID + metadata + Refines/Satisfies edges) — Jinja handles these.
     template = _env.get_template("req.md.j2")
     header = template.render(
         node=node, config=config, primary_label=primary_label,
+        metadata_items=metadata_items,
     ).rstrip()
 
     body_parts: list[str] = [header]
