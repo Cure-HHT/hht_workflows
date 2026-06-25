@@ -8,7 +8,7 @@
 # Compile:   scripts/urs-compile/compile-urs.sh <path-to-this-repo>
 
 # ---------------------------------------------------------------------------
-# Document identity — appears on the cover page and in PDF metadata.
+# Document identity -- appears on the cover page and in PDF metadata.
 # ---------------------------------------------------------------------------
 document:
   title: "REPLACE ME -- User Requirements Specification"
