@@ -84,14 +84,18 @@ runs:
         TAG: ${{ inputs.tag }}
       run: |
         set -euo pipefail
-        REVISION_NAME=$(gcloud run services describe "$SERVICE" \
-          --region="$REGION" --project="$PROJECT" \
-          --format='value(status.latestCreatedRevisionName)')
-        TAGGED_URL=$(gcloud run services describe "$SERVICE" \
+        # Resolve the URL and the revision from the SAME tagged traffic entry,
+        # so the caller verifies and promotes the identical revision. (Reading
+        # the revision from status.latestCreatedRevisionName instead could
+        # diverge from the tagged URL if a concurrent deploy raced in between.)
+        # `first(...)` tolerates a duplicate stale tag entry during a re-tag.
+        ENTRY=$(gcloud run services describe "$SERVICE" \
           --region="$REGION" --project="$PROJECT" --format=json \
-          | jq -r --arg t "$TAG" '.status.traffic[] | select(.tag==$t) | .url' | head -n1)
-        if [ -z "$REVISION_NAME" ] || [ -z "$TAGGED_URL" ] || [ "$TAGGED_URL" = "null" ]; then
-          echo "::error::Could not resolve tagged URL / revision (revision='$REVISION_NAME', url='$TAGGED_URL')."
+          | jq -c --arg t "$TAG" 'first(.status.traffic[] | select(.tag==$t)) // empty')
+        TAGGED_URL=$(printf '%s' "$ENTRY" | jq -r '.url // empty')
+        REVISION_NAME=$(printf '%s' "$ENTRY" | jq -r '.revisionName // empty')
+        if [ -z "$REVISION_NAME" ] || [ -z "$TAGGED_URL" ]; then
+          echo "::error::Could not resolve tagged candidate (tag='$TAG', entry='$ENTRY')."
           exit 1
         fi
         echo "Candidate revision: $REVISION_NAME"

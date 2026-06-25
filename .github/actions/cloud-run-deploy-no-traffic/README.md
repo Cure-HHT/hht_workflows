@@ -7,8 +7,10 @@ promote after a passing smoke.
 
 ## Usage
 
-The caller must already be authenticated to gcloud (e.g.
-`google-github-actions/auth`). Pin by commit SHA.
+Prerequisites: the job must be authenticated to GCP (e.g.
+`google-github-actions/auth`), have the gcloud CLI on PATH (e.g.
+`google-github-actions/setup-gcloud`), and have `jq` available (preinstalled on
+GitHub-hosted `ubuntu-*` runners). Pin by commit SHA.
 
     - id: canary
       uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@<sha>
