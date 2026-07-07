@@ -49,3 +49,17 @@ repos:
     rev: v1.7.7
     hooks:
       - id: actionlint
+
+  # Dogfood our own no-or-true-guard hook (hooks/no-or-true-guard/README.md).
+  # language: system (not python) because the console script is already
+  # installed into this environment via `pip install -e .` — see README
+  # "Common commands". Using `language: python` here would make pre-commit
+  # build a second, separate venv for a package that already lives at repo
+  # root, which is redundant.
+  - repo: local
+    hooks:
+      - id: no-or-true-guard
+        name: no-or-true-guard
+        entry: no-or-true-guard
+        language: system
+        types_or: [shell, yaml, dockerfile, makefile]
