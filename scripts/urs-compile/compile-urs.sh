@@ -207,7 +207,7 @@ pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
 git_slug() {
   # owner/repo from the origin remote, falling back to the toplevel dirname.
   local url
-  url="$(git -C "$1" remote get-url origin 2>/dev/null || true)"
+  url="$(git -C "$1" remote get-url origin 2>/dev/null)" || url=""
   if [ -n "${url}" ]; then
     printf '%s\n' "${url%.git}" | sed -E 's#^.*[/:]([^/]+/[^/]+)$#\1#'
   else
@@ -219,8 +219,8 @@ PROVENANCE="${PRIMARY_ROOT}/docs/${NAME}-build-provenance.md"
 WF_SLUG="$(git_slug "${SCRIPT_DIR}")"
 WF_VERSION="$(git -C "${SCRIPT_DIR}" describe --tags --always --dirty 2>/dev/null || echo unknown)"
 BUILD_DATE="$(date -u +%Y-%m-%d)"
-PANDOC_VERSION="$(pandoc --version 2>/dev/null | head -1 || true)"
-XETEX_VERSION="$(xelatex --version 2>/dev/null | head -1 || true)"
+PANDOC_VERSION="$(pandoc --version 2>/dev/null | head -1)" || PANDOC_VERSION=""
+XETEX_VERSION="$(xelatex --version 2>/dev/null | head -1)" || XETEX_VERSION=""
 
 {
   cat <<EOF
