@@ -18,3 +18,11 @@
   pass_filenames: false
   always_run: true
   minimum_pre_commit_version: "2.21.0"
+
+- id: no-or-true-guard
+  name: no-or-true-guard
+  description: Block '|| true' and '|| :' from shell/YAML/Dockerfile/Makefile code — see CLAUDE.md "Shell / Script Conventions".
+  entry: no-or-true-guard
+  language: python
+  types_or: [shell, yaml, dockerfile, makefile]
+  minimum_pre_commit_version: "2.21.0"

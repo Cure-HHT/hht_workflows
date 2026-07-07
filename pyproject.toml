@@ -10,6 +10,7 @@ requires-python = ">=3.9"
 
 [project.scripts]
 release-notes-update = "release_notes_update.__main__:main"
+no-or-true-guard = "no_or_true_guard.__main__:main"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
@@ -20,4 +21,4 @@ test = ["pytest>=7"]
 # second hook, drop its package into hooks/<name>/ and add the path to `where`
 # plus a new [project.scripts] entry above.
 [tool.setuptools.packages.find]
-where = ["hooks/release-notes-update"]
+where = ["hooks/release-notes-update", "hooks/no-or-true-guard"]
