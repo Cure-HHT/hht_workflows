@@ -13,8 +13,9 @@ def scan(paths):
                 for lineno, line in enumerate(f, start=1):
                     if PATTERN.search(line):
                         violations.append((path, lineno, line.strip()))
-        except OSError:
-            continue
+        except OSError as exc:
+            print(f"no-or-true-guard: warning: could not read {path}: {exc}", file=sys.stderr)
+            violations.append((path, 0, "<unreadable — treated as a violation, fail-closed>"))
     return violations
 
 
@@ -25,7 +26,8 @@ def main(argv=None):
         return 0
     print(
         "no-or-true-guard: '|| true' / '|| :' is prohibited — use an explicit "
-        "scoped conditional instead (see CLAUDE.md 'Shell / Script Conventions')."
+        "scoped conditional instead (see hooks/no-or-true-guard/README.md "
+        "'Accepted replacement forms')."
     )
     for path, lineno, line in violations:
         print(f"  {path}:{lineno}: {line}")

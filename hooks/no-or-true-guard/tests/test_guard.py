@@ -51,7 +51,7 @@ def test_multiple_files_multiple_violations(tmp_path):
     assert len(violations) == 2
 
 
-def test_main_returns_zero_when_no_violations(tmp_path, capsys):
+def test_main_returns_zero_when_no_violations(tmp_path):
     f = _write(tmp_path, "a.sh", "echo hi\n")
     assert main([f]) == 0
 
@@ -62,3 +62,16 @@ def test_main_returns_one_and_prints_when_violations(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "no-or-true-guard" in out
     assert f in out
+
+
+def test_unreadable_file_is_treated_as_violation(tmp_path, capsys):
+    # A directory path raises IsADirectoryError (an OSError subclass) when
+    # opened for reading — fail-closed instead of silently skipping it.
+    unreadable = tmp_path / "a_directory"
+    unreadable.mkdir()
+    violations = scan([str(unreadable)])
+    assert len(violations) == 1
+    assert violations[0][0] == str(unreadable)
+    err = capsys.readouterr().err
+    assert "could not read" in err
+    assert str(unreadable) in err

@@ -25,8 +25,23 @@ every `path:line` match if any are found.
 `|| true` (and `|| :`) silently swallows every failure mode of the command it follows —
 network errors, auth failures, typos, real bugs — not just the one failure mode the author
 intended to tolerate. The fix is always an explicit conditional that names what's tolerated
-and why. See the root `~/.claude/CLAUDE.md` "Shell / Script Conventions" section for the
-three accepted replacement forms.
+and why.
+
+## Accepted replacement forms
+
+- **Captured value with fallback:**
+  `VAR=$(cmd || true)` → `VAR="$(cmd)" || VAR="<default>"` (empty string, or another
+  sentinel default appropriate to the variable's use).
+- **Best-effort standalone command:**
+  `cmd || true` → `if ! cmd; then echo "note: <reason>" >&2; fi` (or `::warning::<reason>`
+  in a GitHub Actions `run:` step).
+- **`&&`-chained best-effort:**
+  `[[ cond ]] && cmd || true` → unwrap into a real nested `if`:
+  `if [[ cond ]]; then if ! cmd; then echo "note: <reason>" >&2; fi; fi`
+
+In every form, name what's tolerated and why in the message — a bare `|| true` gives no
+signal that anything happened; the replacement should always tell you which failure was
+intentionally allowed through.
 
 ## Known limitation: Comment and string-literal false positives
 
