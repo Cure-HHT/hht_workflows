@@ -28,6 +28,16 @@ intended to tolerate. The fix is always an explicit conditional that names what'
 and why. See the root `~/.claude/CLAUDE.md` "Shell / Script Conventions" section for the
 three accepted replacement forms.
 
+## Known limitation: Comment and string-literal false positives
+
+The guard scans raw file content by regex — it does not distinguish executable code from comments,
+string literals, or documentation. If you need to reference the literal pattern in a comment or
+doc string inside a shell/yaml/dockerfile/makefile file, reword to avoid the literal `|| true` or
+`|| :` (e.g., write "OR-true" / "OR-colon" instead), exactly as this repo's own `.pre-commit-hooks.yaml`
+file does when describing the guard in its `description:` field. There is currently no inline
+ignore-pragma — that could be added in a future enhancement if the reword workaround proves
+disruptive.
+
 ## Why this lives here
 
 `hooks/` in `cure-hht/hht_workflows` is reserved for Cure-HHT-specific pre-commit hooks
