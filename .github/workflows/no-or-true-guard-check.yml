@@ -6,6 +6,14 @@
 # local pre-commit dogfooding already configured in .pre-commit-config.yaml).
 # Other Cure-HHT repos consume the same logic by
 # `uses: Cure-HHT/hht_workflows/.github/actions/no-or-true-guard-check@<ref>`.
+#
+# Only this repo's own wrapper needs the "Install this repo" step below:
+# the no-or-true-guard hook here is `repo: local` + `language: system`
+# (see .pre-commit-config.yaml for why), which execs whatever's already on
+# PATH rather than installing anything itself — same reason scripts/setup.sh
+# does this for local dev. Consumer repos reference no-or-true-guard via
+# the HOSTED repo (`repo: https://github.com/Cure-HHT/hht_workflows`),
+# which pre-commit installs correctly on its own; they don't need this step.
 
 name: no-or-true-guard
 
@@ -29,4 +37,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4  # required for ./.github/actions resolution
+      - name: Install this repo (for the local no-or-true-guard hook's PATH resolution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install --user .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: ./.github/actions/no-or-true-guard-check

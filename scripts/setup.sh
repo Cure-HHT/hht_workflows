@@ -29,6 +29,23 @@ fi
 
 git config core.hooksPath .githooks
 
+# Install this repo's own console scripts (no-or-true-guard,
+# release-notes-update) so they resolve on PATH — the no-or-true-guard
+# local hook in .pre-commit-config.yaml uses `language: system`, which
+# execs whatever's already on PATH rather than installing anything itself.
+if ! pip install --user -e . >/dev/null; then
+  cat >&2 <<'MSG'
+Error: failed to install this repo's console scripts (pip install --user -e .).
+
+no-or-true-guard depends on this being on PATH. Install manually via one of:
+  pip install --user -e .
+  pipx install --editable . --force
+
+Then re-run scripts/setup.sh.
+MSG
+  exit 1
+fi
+
 # Pre-populate hook environments so the first commit doesn't pay the
 # install latency.
 pre-commit install-hooks

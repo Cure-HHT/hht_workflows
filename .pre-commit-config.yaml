@@ -51,15 +51,19 @@ repos:
       - id: actionlint
 
   # Dogfood our own no-or-true-guard hook (hooks/no-or-true-guard/README.md).
-  # language: python + additional_dependencies: ["."] makes pre-commit build
-  # its own isolated venv and install this repo into it, so a fresh clone
-  # works from `scripts/setup.sh` alone with no separate `pip install -e .`
-  # step required.
+  # language: system, not python: for `repo: local`, pre-commit builds
+  # language: python environments inside its OWN cache directory using a
+  # synthetic placeholder package — `additional_dependencies: ["."]` was
+  # tried here and resolves "." against that placeholder, not this repo,
+  # silently installing an empty package with no entry point (reproduced
+  # in a clean container; see CUR-1640 PR #36). language: system instead
+  # execs whatever `no-or-true-guard` resolves to on PATH; scripts/setup.sh
+  # installs this repo (`pip install --user -e .`) so that resolves
+  # correctly on a fresh clone.
   - repo: local
     hooks:
       - id: no-or-true-guard
         name: no-or-true-guard
         entry: no-or-true-guard
-        language: python
-        additional_dependencies: ["."]
+        language: system
         types_or: [shell, yaml, dockerfile, makefile]
