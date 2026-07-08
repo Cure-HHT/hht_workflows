@@ -49,3 +49,17 @@ repos:
     rev: v1.7.7
     hooks:
       - id: actionlint
+
+  # Dogfood our own no-or-true-guard hook (hooks/no-or-true-guard/README.md).
+  # language: python + additional_dependencies: ["."] makes pre-commit build
+  # its own isolated venv and install this repo into it, so a fresh clone
+  # works from `scripts/setup.sh` alone with no separate `pip install -e .`
+  # step required.
+  - repo: local
+    hooks:
+      - id: no-or-true-guard
+        name: no-or-true-guard
+        entry: no-or-true-guard
+        language: python
+        additional_dependencies: ["."]
+        types_or: [shell, yaml, dockerfile, makefile]

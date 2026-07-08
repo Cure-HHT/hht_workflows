@@ -95,16 +95,16 @@ runs:
                 FAILED=$((FAILED + 1))
                 FAILED_CHECK_NAMES="${FAILED_CHECK_NAMES}, ${NAME}"
 
-                ANNOTATIONS=$(gh api "repos/${REPO}/check-runs/${CHECK_ID}/annotations" \
-                  --jq '[.[] | select(.annotation_level == "failure") | .message] | unique | .[]' 2>/dev/null || true)
+                ANNOTATIONS="$(gh api "repos/${REPO}/check-runs/${CHECK_ID}/annotations" \
+                  --jq '[.[] | select(.annotation_level == "failure") | .message] | unique | .[]' 2>/dev/null)" || ANNOTATIONS=""
                 FAIL_DETAIL=""
                 if [ -n "$ANNOTATIONS" ]; then
                   FAIL_DETAIL=$(echo "$ANNOTATIONS" | grep -vE "Process completed with exit code|^Unexpected failure|^Failed during:" | head -3 | tr '\n' '; ' | sed 's/; $//')
                 fi
 
                 if [ -z "$FAIL_DETAIL" ]; then
-                  FAILED_STEPS=$(gh api "repos/${REPO}/actions/jobs/${CHECK_ID}" \
-                    --jq '[.steps[] | select(.conclusion == "failure") | .name] | join(", ")' 2>/dev/null || true)
+                  FAILED_STEPS="$(gh api "repos/${REPO}/actions/jobs/${CHECK_ID}" \
+                    --jq '[.steps[] | select(.conclusion == "failure") | .name] | join(", ")' 2>/dev/null)" || FAILED_STEPS=""
                   if [ -n "$FAILED_STEPS" ]; then
                     FAIL_DETAIL="Failed step(s): ${FAILED_STEPS}"
                   fi
@@ -138,13 +138,15 @@ runs:
             echo ""
             echo "All ${TOTAL} checks passed (or were skipped)."
             MARKER="<!-- validation-summary -->"
-            EXISTING_IDS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
-              --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" 2>/dev/null || true)
+            EXISTING_IDS="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+              --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" 2>/dev/null)" || EXISTING_IDS=""
             if [ -n "$EXISTING_IDS" ]; then
               DELETED=0
               while IFS= read -r ID; do
                 [ -z "$ID" ] && continue
-                gh api "repos/${REPO}/issues/comments/${ID}" -X DELETE > /dev/null 2>&1 || true
+                if ! gh api "repos/${REPO}/issues/comments/${ID}" -X DELETE > /dev/null 2>&1; then
+                  echo "::warning::failed to delete stale validation-summary comment ${ID} (tolerated: comment may already be gone)"
+                fi
                 DELETED=$((DELETED + 1))
               done <<< "$EXISTING_IDS"
               echo "Cleaned up ${DELETED} previous Validation Summary failure comment(s)"
@@ -190,8 +192,8 @@ runs:
         UPDATED="*Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ) | [View full details](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID})*"
         printf -v BODY '%s\n%s\n\n%s' "$MARKER" "$SUMMARY_CONTENT" "$UPDATED"
 
-        EXISTING_IDS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
-          --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" 2>/dev/null || true)
+        EXISTING_IDS="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+          --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" 2>/dev/null)" || EXISTING_IDS=""
 
         KEEP_ID=""
         while IFS= read -r ID; do
@@ -199,7 +201,9 @@ runs:
           if [ -z "$KEEP_ID" ]; then
             KEEP_ID="$ID"
           else
-            gh api "repos/${REPO}/issues/comments/${ID}" -X DELETE > /dev/null 2>&1 || true
+            if ! gh api "repos/${REPO}/issues/comments/${ID}" -X DELETE > /dev/null 2>&1; then
+              echo "::warning::failed to delete stale validation-summary comment ${ID} (tolerated: comment may already be gone)"
+            fi
           fi
         done <<< "$EXISTING_IDS"
 

@@ -152,7 +152,9 @@ jobs:
           if [ -z "${TOKEN:-}" ] || [ "${#TOKEN}" -lt 20 ]; then
             echo "WIF token mint failed: access_token empty or too short (${#TOKEN} chars)"
             echo "ADC env vars (no values, names only):"
-            env | grep -oE "^(GOOGLE_|CLOUDSDK_)[A-Z_]+" || true
+            if ! env | grep -oE "^(GOOGLE_|CLOUDSDK_)[A-Z_]+"; then
+              echo "::warning::no GOOGLE_/CLOUDSDK_ env vars found (tolerated: informational dump only, script exits below regardless)"
+            fi
             exit 1
           fi
           echo "WIF handshake verified: minted a ${#TOKEN}-char access token (value not printed)"
