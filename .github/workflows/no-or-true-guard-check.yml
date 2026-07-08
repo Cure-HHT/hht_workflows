@@ -1,0 +1,32 @@
+# no-or-true-guard — emits a check named exactly "no-or-true-guard" so it's
+# discoverable by the Validation Summary aggregate.
+#
+# This is hht_workflows's own consumption of the canonical composite action
+# at .github/actions/no-or-true-guard-check/ (CI-side counterpart to the
+# local pre-commit dogfooding already configured in .pre-commit-config.yaml).
+# Other Cure-HHT repos consume the same logic by
+# `uses: Cure-HHT/hht_workflows/.github/actions/no-or-true-guard-check@<ref>`.
+
+name: no-or-true-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+concurrency:
+  group: no-or-true-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: no-or-true-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # required for ./.github/actions resolution
+      - uses: ./.github/actions/no-or-true-guard-check

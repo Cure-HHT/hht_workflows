@@ -1,0 +1,41 @@
+# no-or-true-guard — composite action.
+#
+# Runs the no-or-true-guard pre-commit hook against every file in the
+# consumer repo. This is the CI-side counterpart to the local pre-commit
+# hook (hooks/no-or-true-guard/): a bypassed local hook (--no-verify), a
+# contributor without pre-commit installed, or a bot-authored PR would
+# otherwise reach the consumer repo's default branch with the hook never
+# having run at all. Requires the consumer repo to already have
+# `no-or-true-guard` configured as a hook in its own `.pre-commit-config.yaml`
+# (this action does not add it — see hooks/no-or-true-guard/README.md
+# "Usage in a consumer repo").
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file).
+# Consumer repos invoke this from a thin workflow wrapper:
+#   uses: Cure-HHT/hht_workflows/.github/actions/no-or-true-guard-check@main
+# The wrapper sets the job's `name:` to "no-or-true-guard" so the
+# resulting check is discoverable by the Validation Summary aggregate.
+
+name: 'no-or-true-guard'
+description: "Run the no-or-true-guard pre-commit hook against all files in CI"
+
+runs:
+  using: 'composite'
+  steps:
+    # Caller must `actions/checkout@v4` before invoking this action —
+    # pre-commit needs the working tree to scan.
+    - name: Install pre-commit
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip install --user pre-commit
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Run no-or-true-guard
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! pre-commit run no-or-true-guard --all-files --show-diff-on-failure; then
+          echo "::error::no-or-true-guard found OR-true / OR-colon shell short-circuit-fallback sites — see hooks/no-or-true-guard/README.md 'Accepted replacement forms' in Cure-HHT/hht_workflows for the fix pattern."
+          exit 1
+        fi
