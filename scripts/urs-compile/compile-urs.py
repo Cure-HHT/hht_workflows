@@ -544,12 +544,19 @@ def assemble_full_document(
     chunks.append(assemble_markdown(graph, manifest, primary, associate, config))
     # Each back-matter section carries an explicit heading label so
     # "term_index" renders as "Term Index" (not "Term_index" from .title()).
-    for key, heading in (
-        ("appendices", "Appendices"),
-        ("glossary", "Glossary"),
-        ("term_index", "Term Index"),
-    ):
-        path_str = getattr(manifest, key)
+    # Generated standalone appendices are inserted right after the manifest
+    # `appendices` file and BEFORE the glossary, so glossary pruning sees any
+    # terms they reference.
+    backmatter: list[tuple[str, str | None, str]] = [
+        ("appendices", manifest.appendices, "Appendices"),
+    ]
+    for sa in manifest.standalone_appendices:
+        backmatter.append(("standalone", sa.file, sa.title))
+    backmatter += [
+        ("glossary", manifest.glossary, "Glossary"),
+        ("term_index", manifest.term_index, "Term Index"),
+    ]
+    for key, path_str, heading in backmatter:
         if not path_str:
             continue
         full = _resolve(primary, associate, path_str)
@@ -586,6 +593,30 @@ def assemble_full_document(
     if target_format != "pdf":
         text = _strip_latex_blocks(text)
         text = _normalise_glossary_breaks_for_docx(text)
+    return text
+
+
+def assemble_standalone_appendix(
+    sa,
+    primary: Path,
+    associate: Path | None,
+    target_format: str,
+) -> str | None:
+    """Assemble the markdown for a standalone appendix deliverable.
+
+    Minimal + self-contained: the appendix content under its `# <title>` H1
+    (injected only if the file has none), with the same image-path rewrite and
+    (for docx) latex-block stripping the URS body gets. Returns None if the
+    appendix file can't be resolved."""
+    full = _resolve(primary, associate, sa.file)
+    if full is None:
+        return None
+    text = full.read_text()
+    if not _has_leading_h1(text):
+        text = f"# {sa.title}\n\n{text}"
+    text = _rewrite_image_paths(text)
+    if target_format != "pdf":
+        text = _strip_latex_blocks(text)
     return text
 
 
@@ -1011,6 +1042,25 @@ def main() -> int:
             sponsor_header=sponsor_header,
         )
         print(f"Compiled PDF: {args.output_pdf}", file=sys.stderr)
+        # Standalone appendix deliverables (also appended to the URS above).
+        for sa in manifest.standalone_appendices:
+            sa_md = assemble_standalone_appendix(sa, repo_root, associate_root, "pdf")
+            if sa_md is None:
+                print(f"WARNING: standalone appendix {sa.file!r} not found; "
+                      f"skipping {sa.slug}.pdf", file=sys.stderr)
+                continue
+            sa_md_path = args.output_md.parent / f"{sa.slug}.pdf.md"
+            sa_md_path.write_text(sa_md)
+            sa_pdf = args.output_pdf.parent / f"{sa.slug}.pdf"
+            run_pandoc_pdf(
+                markdown_path=sa_md_path,
+                output_path=sa_pdf,
+                template=args.template,
+                cover=args.cover,
+                resource_paths=resource_paths,
+                sponsor_header=sponsor_header,
+            )
+            print(f"Compiled standalone appendix PDF: {sa_pdf}", file=sys.stderr)
     if "docx" in formats:
         # Regenerate the docx style reference at build time so headers/footers
         # carry the right sponsor identity.
@@ -1023,6 +1073,23 @@ def main() -> int:
             reference_doc=reference_doc,
         )
         print(f"Compiled DOCX: {args.output_docx}", file=sys.stderr)
+        # Standalone appendix deliverables (also appended to the URS above).
+        for sa in manifest.standalone_appendices:
+            sa_md = assemble_standalone_appendix(sa, repo_root, associate_root, "docx")
+            if sa_md is None:
+                print(f"WARNING: standalone appendix {sa.file!r} not found; "
+                      f"skipping {sa.slug}.docx", file=sys.stderr)
+                continue
+            sa_md_path = args.output_md.parent / f"{sa.slug}.docx.md"
+            sa_md_path.write_text(sa_md)
+            sa_docx = args.output_docx.parent / f"{sa.slug}.docx"
+            run_pandoc_docx(
+                markdown_path=sa_md_path,
+                output_path=sa_docx,
+                resource_paths=resource_paths,
+                reference_doc=reference_doc,
+            )
+            print(f"Compiled standalone appendix DOCX: {sa_docx}", file=sys.stderr)
     return 0
 
 
