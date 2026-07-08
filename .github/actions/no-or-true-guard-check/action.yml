@@ -28,14 +28,17 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        pip install --user pre-commit
+        python3 -m pip install --user pre-commit
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
     - name: Run no-or-true-guard
       shell: bash
       run: |
         set -euo pipefail
-        if ! pre-commit run no-or-true-guard --all-files --show-diff-on-failure; then
-          echo "::error::no-or-true-guard found OR-true / OR-colon shell short-circuit-fallback sites — see hooks/no-or-true-guard/README.md 'Accepted replacement forms' in Cure-HHT/hht_workflows for the fix pattern."
-          exit 1
-        fi
+        # Let pre-commit's own output be the failure signal — it already
+        # distinguishes real OR-true/OR-colon violations (see the hook's
+        # own message pointing at hooks/no-or-true-guard/README.md) from
+        # environment/config errors (missing hook ID, broken install,
+        # etc.); wrapping this in a custom "found sites" message would
+        # misreport the latter class of failure.
+        pre-commit run no-or-true-guard --all-files --show-diff-on-failure
