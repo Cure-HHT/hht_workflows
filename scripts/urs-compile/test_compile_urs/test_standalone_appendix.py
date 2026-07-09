@@ -84,7 +84,7 @@ def test_standalone_appendix_appended_to_urs_after_appendices(tmp_path):
     assert out.find("Standard appendix prose") < out.find("CATALOG_CONTENT_MARKER")
 
 
-def test_standalone_appendix_respects_files_own_h1(tmp_path):
+def test_standalone_appendix_title_overrides_files_own_h1(tmp_path):
     from urs_compile.graph_loader import Graph
     from urs_compile.manifest import Manifest
 
@@ -94,9 +94,26 @@ def test_standalone_appendix_respects_files_own_h1(tmp_path):
     manifest = Manifest.from_dict(_manifest_dict())
 
     out = mod.assemble_full_document(graph, manifest, primary)
-    # File already has an H1, so the manifest title is NOT injected.
-    assert "# Event catalog (generated)" in out
-    assert "# Appendix: Event Catalog" not in out
+    # The manifest title governs a generated appendix; the file's own H1 (which
+    # the consumer doesn't control) is dropped.
+    assert "# Appendix: Event Catalog" in out
+    assert "# Event catalog (generated)" not in out
+    assert "CATALOG_CONTENT_MARKER" in out
+
+
+def test_standalone_appendix_missing_file_raises_in_urs(tmp_path):
+    from urs_compile.graph_loader import Graph
+    from urs_compile.manifest import Manifest
+
+    mod = _load_orchestrator()
+    (tmp_path / "spec/URS-manifest").mkdir(parents=True)
+    (tmp_path / "spec/URS-manifest/appendices.md").write_text("# Appendices\n")
+    # docs/reference/event-catalog.md intentionally NOT created — a declared
+    # deliverable that can't resolve must hard-fail, not silently vanish.
+    graph = Graph.from_dict({"nodes": {}})
+    manifest = Manifest.from_dict(_manifest_dict())
+    with pytest.raises(FileNotFoundError):
+        mod.assemble_full_document(graph, manifest, tmp_path)
 
 
 def test_assemble_standalone_appendix_is_self_contained(tmp_path):

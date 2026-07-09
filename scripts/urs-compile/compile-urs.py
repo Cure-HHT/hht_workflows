@@ -333,6 +333,19 @@ def _has_leading_h1(text: str) -> bool:
     return bool(_LEADING_H1_RE.match(cleaned))
 
 
+def _force_title_h1(text: str, title: str) -> str:
+    """Make `# {title}` the document's leading H1, replacing an existing one.
+
+    Used for GENERATED standalone appendices (e.g. the event catalog) whose own
+    H1 (`# Event catalog (generated)`) the consumer doesn't control — the
+    manifest `title` governs the heading in both the URS back-matter and the
+    standalone deliverable. Any leading HTML-comment banner is dropped."""
+    cleaned = _LEADING_COMMENTS_RE.sub("", text).lstrip("\n")
+    # Drop an existing leading H1 line so `title` is authoritative.
+    cleaned = re.sub(r"\A#\s+[^\n]*\n?", "", cleaned, count=1)
+    return f"# {title}\n\n{cleaned.lstrip()}"
+
+
 def demote_headings(md: str, levels: int = 1) -> str:
     """Demote every ATX heading in `md` by `levels` (capped at H6)."""
     def repl(match: re.Match) -> str:
@@ -561,6 +574,11 @@ def assemble_full_document(
             continue
         full = _resolve(primary, associate, path_str)
         if full is None:
+            if key == "standalone":
+                raise FileNotFoundError(
+                    f"standalone appendix {path_str!r} not found in primary or "
+                    "associate — a manifest-declared deliverable must resolve"
+                )
             continue
         text = full.read_text()
         # The term-index file lists every defined term as an H2 (130+ of
@@ -586,7 +604,11 @@ def assemble_full_document(
         # provide one; appendices/glossary/term-index commonly start with
         # `# Appendices` / `# Glossary` / `# Term Index`, possibly after
         # an elspais auto-generated comment banner.
-        if not _has_leading_h1(text):
+        if key == "standalone":
+            # A generated file's own H1 isn't consumer-controlled; the manifest
+            # `title` governs the appendix heading.
+            text = _force_title_h1(text, heading)
+        elif not _has_leading_h1(text):
             chunks.append(f"\n\n# {heading}\n\n")
         chunks.append(text)
     text = _rewrite_image_paths("\n\n".join(chunks))
@@ -611,9 +633,7 @@ def assemble_standalone_appendix(
     full = _resolve(primary, associate, sa.file)
     if full is None:
         return None
-    text = full.read_text()
-    if not _has_leading_h1(text):
-        text = f"# {sa.title}\n\n{text}"
+    text = _force_title_h1(full.read_text(), sa.title)
     text = _rewrite_image_paths(text)
     if target_format != "pdf":
         text = _strip_latex_blocks(text)
@@ -643,7 +663,7 @@ def run_pandoc_pdf(
     markdown_path: Path,
     output_path: Path,
     template: Path,
-    cover: Path,
+    cover: Path | None,
     resource_paths: list[Path],
     sponsor_header: Path | None = None,
     engine: str = "xelatex",
@@ -665,11 +685,6 @@ def run_pandoc_pdf(
         "-f", "markdown+autolink_bare_uris",
         "--pdf-engine", engine,
         "--template", str(template),
-        # Cover is consumed by the template's `$cover-tex$` slot, which
-        # places it before the TOC and applies `\thispagestyle{empty}`.
-        # `--include-before-body` would land it BETWEEN TOC and body, hiding
-        # the cover behind the contents page; use `--variable` instead.
-        f"--variable=cover-tex:{cover}",
         "--toc",
         "--toc-depth=3",
         # report class: map `#` -> \chapter so URS chapter numbering (4, 5, 6)
@@ -692,6 +707,14 @@ def run_pandoc_pdf(
         f"--lua-filter={code_filter}",
         "--resource-path=" + ":".join(str(p) for p in resource_paths),
     ]
+    # Cover is optional. When given, it is consumed by the template's
+    # `$cover-tex$` slot (before the TOC, `\thispagestyle{empty}`); `--variable`
+    # is used rather than `--include-before-body`, which would land it between
+    # the TOC and body. Standalone appendix deliverables pass cover=None — the
+    # template's `$if(cover-tex)$` guard then skips the URS title page, so the
+    # doc opens at the appendix heading instead of the sponsor's URS cover.
+    if cover is not None:
+        cmd.append(f"--variable=cover-tex:{cover}")
     if sponsor_header is not None:
         cmd.append(f"--include-in-header={sponsor_header}")
     subprocess.run(cmd, check=True)
@@ -1046,17 +1069,19 @@ def main() -> int:
         for sa in manifest.standalone_appendices:
             sa_md = assemble_standalone_appendix(sa, repo_root, associate_root, "pdf")
             if sa_md is None:
-                print(f"WARNING: standalone appendix {sa.file!r} not found; "
-                      f"skipping {sa.slug}.pdf", file=sys.stderr)
-                continue
+                raise FileNotFoundError(
+                    f"standalone appendix {sa.file!r} not found in primary or "
+                    "associate — a manifest-declared deliverable must resolve"
+                )
             sa_md_path = args.output_md.parent / f"{sa.slug}.pdf.md"
             sa_md_path.write_text(sa_md)
             sa_pdf = args.output_pdf.parent / f"{sa.slug}.pdf"
+            # cover=None: standalone deliverables render without the URS cover.
             run_pandoc_pdf(
                 markdown_path=sa_md_path,
                 output_path=sa_pdf,
                 template=args.template,
-                cover=args.cover,
+                cover=None,
                 resource_paths=resource_paths,
                 sponsor_header=sponsor_header,
             )
@@ -1077,9 +1102,10 @@ def main() -> int:
         for sa in manifest.standalone_appendices:
             sa_md = assemble_standalone_appendix(sa, repo_root, associate_root, "docx")
             if sa_md is None:
-                print(f"WARNING: standalone appendix {sa.file!r} not found; "
-                      f"skipping {sa.slug}.docx", file=sys.stderr)
-                continue
+                raise FileNotFoundError(
+                    f"standalone appendix {sa.file!r} not found in primary or "
+                    "associate — a manifest-declared deliverable must resolve"
+                )
             sa_md_path = args.output_md.parent / f"{sa.slug}.docx.md"
             sa_md_path.write_text(sa_md)
             sa_docx = args.output_docx.parent / f"{sa.slug}.docx"
