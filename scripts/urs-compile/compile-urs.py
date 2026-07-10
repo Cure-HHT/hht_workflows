@@ -48,6 +48,15 @@ from urs_compile.render import RenderConfig, render_node  # noqa: E402
 _HEADING_RE = re.compile(r"^(#{1,5})(\s+)", re.MULTILINE)
 _LEADING_H1_RE = re.compile(r"\A\s*#\s+[^\n]*(\n+|\Z)")
 _LEADING_COMMENTS_RE = re.compile(r"\A(?:\s*<!--.*?-->\s*\n?)+", re.DOTALL)
+# A generated appendix may mark a section standalone-only — kept in the
+# standalone deliverable, stripped from the copy appended to the URS (e.g. the
+# event catalog's internal audit-log-viewer engineering note, not appropriate
+# in the sponsor-facing URS).
+_STANDALONE_ONLY_RE = re.compile(
+    r"[ \t]*<!--\s*standalone-only:start\s*-->.*?"
+    r"<!--\s*standalone-only:end\s*-->[ \t]*\n?",
+    re.DOTALL | re.IGNORECASE,
+)
 _LATEX_BLOCK_RE = re.compile(r"```\{=latex\}\n.*?\n```\n?", re.DOTALL)
 # elspais-generated glossary entries pack the "Defined in: <REQ-id>"
 # attribution onto the same source line as the definition, separated by
@@ -605,6 +614,9 @@ def assemble_full_document(
         # `# Appendices` / `# Glossary` / `# Term Index`, possibly after
         # an elspais auto-generated comment banner.
         if key == "standalone":
+            # Drop standalone-only sections from the URS-appended copy (they
+            # remain in the standalone deliverable, assembled separately).
+            text = _STANDALONE_ONLY_RE.sub("", text)
             # A generated file's own H1 isn't consumer-controlled; the manifest
             # `title` governs the appendix heading.
             text = _force_title_h1(text, heading)

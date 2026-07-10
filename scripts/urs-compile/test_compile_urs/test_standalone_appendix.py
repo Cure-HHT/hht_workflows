@@ -101,6 +101,37 @@ def test_standalone_appendix_title_overrides_files_own_h1(tmp_path):
     assert "CATALOG_CONTENT_MARKER" in out
 
 
+def test_standalone_only_block_stripped_from_urs_kept_standalone(tmp_path):
+    from urs_compile.graph_loader import Graph
+    from urs_compile.manifest import Manifest
+
+    mod = _load_orchestrator()
+    (tmp_path / "spec/URS-manifest").mkdir(parents=True)
+    (tmp_path / "spec/URS-manifest/appendices.md").write_text("# Appendices\n")
+    (tmp_path / "docs/reference").mkdir(parents=True)
+    (tmp_path / "docs/reference/event-catalog.md").write_text(
+        "# Event catalog (generated)\n\n"
+        "CATALOG_CONTENT_MARKER\n\n"
+        "<!-- standalone-only:start -->\n\n"
+        "## Note: audit-log viewer seam\n\n"
+        "SEAM_NOTE_MARKER internal engineering note.\n\n"
+        "<!-- standalone-only:end -->\n"
+    )
+    graph = Graph.from_dict({"nodes": {}})
+    manifest = Manifest.from_dict(_manifest_dict())
+
+    # URS-appended copy: the standalone-only block is stripped.
+    urs = mod.assemble_full_document(graph, manifest, tmp_path)
+    assert "CATALOG_CONTENT_MARKER" in urs
+    assert "SEAM_NOTE_MARKER" not in urs
+    assert "audit-log viewer seam" not in urs
+
+    # Standalone deliverable: the block is retained.
+    sa = manifest.standalone_appendices[0]
+    standalone = mod.assemble_standalone_appendix(sa, tmp_path, None, "docx")
+    assert "SEAM_NOTE_MARKER" in standalone
+
+
 def test_standalone_appendix_missing_file_raises_in_urs(tmp_path):
     from urs_compile.graph_loader import Graph
     from urs_compile.manifest import Manifest
