@@ -199,6 +199,7 @@ def _add_custom_paragraph_style(
     before_pt: float = 0,
     after_pt: float = 0,
     keep_next: bool = False,
+    keep_together: bool = False,
 ) -> None:
     """Define a custom paragraph style. Idempotent: re-adding the same name
     is a no-op so the function is safe to call against a docx that already
@@ -221,6 +222,38 @@ def _add_custom_paragraph_style(
         pf.space_after = Pt(after_pt)
     if keep_next:
         pf.keep_with_next = True
+    if keep_together:
+        # keepLines: never split this paragraph's own lines across a page,
+        # so a two-line catalog entry stays intact.
+        pf.keep_together = True
+
+
+def _add_custom_character_style(
+    doc,
+    name: str,
+    *,
+    font_name: str | None = None,
+    size_pt: float | None = None,
+    italic: bool = False,
+    bold: bool = False,
+    color: str | None = None,
+) -> None:
+    """Define a custom character (run) style, e.g. for styling a single run
+    inside a table cell. ``color`` is a hex string like ``595959``. Idempotent."""
+    if any(s.name == name for s in doc.styles):
+        return
+    style = doc.styles.add_style(name, WD_STYLE_TYPE.CHARACTER)
+    font = style.font
+    if font_name:
+        font.name = font_name
+    if size_pt is not None:
+        font.size = Pt(size_pt)
+    # Set italic/bold explicitly (including False) so the style overrides an
+    # inherited value — e.g. the bold of a table header row.
+    font.italic = italic
+    font.bold = bold
+    if color:
+        font.color.rgb = RGBColor.from_string(color)
 
 
 def _set_table_style(doc) -> None:
@@ -425,6 +458,22 @@ def build_reference_docx(output_path: Path, sponsor_info: dict) -> None:
     _add_custom_paragraph_style(
         doc, "Assertions Label", base_name="Normal",
         bold=True, before_pt=8, after_pt=4, keep_next=True,
+    )
+
+    # Event-catalog appendix: the merged "display name / entry_type" cell.
+    # The cell paragraph keeps its two lines together and with the following
+    # row; the entry_type line and the kinds values get monospace runs.
+    _add_custom_paragraph_style(
+        doc, "Catalog Entry", base_name="Compact",
+        keep_next=True, keep_together=True,
+    )
+    _add_custom_character_style(
+        doc, "Catalog Entry Type",
+        font_name="Consolas", size_pt=10, italic=True, color="595959",
+    )
+    _add_custom_character_style(
+        doc, "Catalog Kind",
+        font_name="Consolas", size_pt=10,
     )
 
     _set_table_style(doc)

@@ -912,6 +912,7 @@ def run_pandoc_docx(
     """
     filters_dir = Path(__file__).parent / "pandoc-filters"
     linebreak_filter = filters_dir / "html-linebreak.lua"
+    catalog_filter = filters_dir / "catalog-tables.lua"
     image_filter = filters_dir / "image-normalize.lua"
     table_filter = filters_dir / "table-autofit-docx.lua"
     cmd = [
@@ -929,6 +930,11 @@ def run_pandoc_docx(
         # break — the docx writer drops raw inline HTML otherwise. Runs first
         # so downstream filters see real LineBreaks.
         f"--lua-filter={linebreak_filter}",
+        # Lua filter: style the event-catalog appendix tables — the merged
+        # display-name/entry_type cell (keep-together paragraph + grey italic
+        # monospace id) and monospace kinds. Runs after the line-break filter
+        # so it sees the split cell. Other tables pass through untouched.
+        f"--lua-filter={catalog_filter}",
         # Lua filter: cap every Image's width to a uniform docx-friendly
         # size. The same filter sets fig-pos=H for the LaTeX target;
         # other format branches inside the filter pass through unchanged.
