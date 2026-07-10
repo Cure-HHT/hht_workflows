@@ -669,6 +669,7 @@ def run_pandoc_pdf(
     engine: str = "xelatex",
 ) -> None:
     filters_dir = Path(__file__).parent / "pandoc-filters"
+    linebreak_filter = filters_dir / "html-linebreak.lua"
     table_filter = filters_dir / "table-grid.lua"
     assertion_filter = filters_dir / "assertion-label-italic.lua"
     image_filter = filters_dir / "image-normalize.lua"
@@ -691,6 +692,10 @@ def run_pandoc_pdf(
         # survives. pandoc 2.x defaults to \section without this flag, which
         # collapses our chapter headings down a level and yields 0.x numbering.
         "--top-level-division=chapter",
+        # Lua filter: turn raw `<br>` (in-cell line breaks, e.g. the
+        # event-catalog "entry_type / display name" cell) into a real line
+        # break — the LaTeX writer drops raw inline HTML otherwise.
+        f"--lua-filter={linebreak_filter}",
         # Lua filter: re-render every pipe-table as a longtable with full
         # grid lines + shaded header row. LaTeX target only; the filter
         # passes other formats through unchanged.
@@ -906,6 +911,7 @@ def run_pandoc_docx(
     heading styles, header/footer; otherwise pandoc's default styling applies.
     """
     filters_dir = Path(__file__).parent / "pandoc-filters"
+    linebreak_filter = filters_dir / "html-linebreak.lua"
     image_filter = filters_dir / "image-normalize.lua"
     table_filter = filters_dir / "table-autofit-docx.lua"
     cmd = [
@@ -918,6 +924,11 @@ def run_pandoc_docx(
         # Match the PDF's chapter-class mapping so headings line up
         # numerically between the two outputs.
         "--top-level-division=chapter",
+        # Lua filter: turn raw `<br>` (used for in-cell line breaks, e.g. the
+        # event-catalog "entry_type / display name" cell) into a real line
+        # break — the docx writer drops raw inline HTML otherwise. Runs first
+        # so downstream filters see real LineBreaks.
+        f"--lua-filter={linebreak_filter}",
         # Lua filter: cap every Image's width to a uniform docx-friendly
         # size. The same filter sets fig-pos=H for the LaTeX target;
         # other format branches inside the filter pass through unchanged.
