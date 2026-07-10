@@ -48,6 +48,15 @@ from urs_compile.render import RenderConfig, render_node  # noqa: E402
 _HEADING_RE = re.compile(r"^(#{1,5})(\s+)", re.MULTILINE)
 _LEADING_H1_RE = re.compile(r"\A\s*#\s+[^\n]*(\n+|\Z)")
 _LEADING_COMMENTS_RE = re.compile(r"\A(?:\s*<!--.*?-->\s*\n?)+", re.DOTALL)
+# A generated appendix may mark a section standalone-only — kept in the
+# standalone deliverable, stripped from the copy appended to the URS (e.g. the
+# event catalog's internal audit-log-viewer engineering note, not appropriate
+# in the sponsor-facing URS).
+_STANDALONE_ONLY_RE = re.compile(
+    r"[ \t]*<!--\s*standalone-only:start\s*-->.*?"
+    r"<!--\s*standalone-only:end\s*-->[ \t]*\n?",
+    re.DOTALL | re.IGNORECASE,
+)
 _LATEX_BLOCK_RE = re.compile(r"```\{=latex\}\n.*?\n```\n?", re.DOTALL)
 # elspais-generated glossary entries pack the "Defined in: <REQ-id>"
 # attribution onto the same source line as the definition, separated by
@@ -333,6 +342,19 @@ def _has_leading_h1(text: str) -> bool:
     return bool(_LEADING_H1_RE.match(cleaned))
 
 
+def _force_title_h1(text: str, title: str) -> str:
+    """Make `# {title}` the document's leading H1, replacing an existing one.
+
+    Used for GENERATED standalone appendices (e.g. the event catalog) whose own
+    H1 (`# Event catalog (generated)`) the consumer doesn't control — the
+    manifest `title` governs the heading in both the URS back-matter and the
+    standalone deliverable. Any leading HTML-comment banner is dropped."""
+    cleaned = _LEADING_COMMENTS_RE.sub("", text).lstrip("\n")
+    # Drop an existing leading H1 line so `title` is authoritative.
+    cleaned = re.sub(r"\A#\s+[^\n]*\n?", "", cleaned, count=1)
+    return f"# {title}\n\n{cleaned.lstrip()}"
+
+
 def demote_headings(md: str, levels: int = 1) -> str:
     """Demote every ATX heading in `md` by `levels` (capped at H6)."""
     def repl(match: re.Match) -> str:
@@ -544,16 +566,28 @@ def assemble_full_document(
     chunks.append(assemble_markdown(graph, manifest, primary, associate, config))
     # Each back-matter section carries an explicit heading label so
     # "term_index" renders as "Term Index" (not "Term_index" from .title()).
-    for key, heading in (
-        ("appendices", "Appendices"),
-        ("glossary", "Glossary"),
-        ("term_index", "Term Index"),
-    ):
-        path_str = getattr(manifest, key)
+    # Generated standalone appendices are inserted right after the manifest
+    # `appendices` file and BEFORE the glossary, so glossary pruning sees any
+    # terms they reference.
+    backmatter: list[tuple[str, str | None, str]] = [
+        ("appendices", manifest.appendices, "Appendices"),
+    ]
+    for sa in manifest.standalone_appendices:
+        backmatter.append(("standalone", sa.file, sa.title))
+    backmatter += [
+        ("glossary", manifest.glossary, "Glossary"),
+        ("term_index", manifest.term_index, "Term Index"),
+    ]
+    for key, path_str, heading in backmatter:
         if not path_str:
             continue
         full = _resolve(primary, associate, path_str)
         if full is None:
+            if key == "standalone":
+                raise FileNotFoundError(
+                    f"standalone appendix {path_str!r} not found in primary or "
+                    "associate — a manifest-declared deliverable must resolve"
+                )
             continue
         text = full.read_text()
         # The term-index file lists every defined term as an H2 (130+ of
@@ -579,13 +613,43 @@ def assemble_full_document(
         # provide one; appendices/glossary/term-index commonly start with
         # `# Appendices` / `# Glossary` / `# Term Index`, possibly after
         # an elspais auto-generated comment banner.
-        if not _has_leading_h1(text):
+        if key == "standalone":
+            # Drop standalone-only sections from the URS-appended copy (they
+            # remain in the standalone deliverable, assembled separately).
+            text = _STANDALONE_ONLY_RE.sub("", text)
+            # A generated file's own H1 isn't consumer-controlled; the manifest
+            # `title` governs the appendix heading.
+            text = _force_title_h1(text, heading)
+        elif not _has_leading_h1(text):
             chunks.append(f"\n\n# {heading}\n\n")
         chunks.append(text)
     text = _rewrite_image_paths("\n\n".join(chunks))
     if target_format != "pdf":
         text = _strip_latex_blocks(text)
         text = _normalise_glossary_breaks_for_docx(text)
+    return text
+
+
+def assemble_standalone_appendix(
+    sa,
+    primary: Path,
+    associate: Path | None,
+    target_format: str,
+) -> str | None:
+    """Assemble the markdown for a standalone appendix deliverable.
+
+    Minimal + self-contained: the appendix content under its `# <title>` H1
+    (the manifest `title` is authoritative — any existing leading H1 in the
+    file is replaced), with the same image-path rewrite and (for docx)
+    latex-block stripping the URS body gets. Returns None if the appendix file
+    can't be resolved."""
+    full = _resolve(primary, associate, sa.file)
+    if full is None:
+        return None
+    text = _force_title_h1(full.read_text(), sa.title)
+    text = _rewrite_image_paths(text)
+    if target_format != "pdf":
+        text = _strip_latex_blocks(text)
     return text
 
 
@@ -612,12 +676,13 @@ def run_pandoc_pdf(
     markdown_path: Path,
     output_path: Path,
     template: Path,
-    cover: Path,
+    cover: Path | None,
     resource_paths: list[Path],
     sponsor_header: Path | None = None,
     engine: str = "xelatex",
 ) -> None:
     filters_dir = Path(__file__).parent / "pandoc-filters"
+    linebreak_filter = filters_dir / "html-linebreak.lua"
     table_filter = filters_dir / "table-grid.lua"
     assertion_filter = filters_dir / "assertion-label-italic.lua"
     image_filter = filters_dir / "image-normalize.lua"
@@ -634,17 +699,16 @@ def run_pandoc_pdf(
         "-f", "markdown+autolink_bare_uris",
         "--pdf-engine", engine,
         "--template", str(template),
-        # Cover is consumed by the template's `$cover-tex$` slot, which
-        # places it before the TOC and applies `\thispagestyle{empty}`.
-        # `--include-before-body` would land it BETWEEN TOC and body, hiding
-        # the cover behind the contents page; use `--variable` instead.
-        f"--variable=cover-tex:{cover}",
         "--toc",
         "--toc-depth=3",
         # report class: map `#` -> \chapter so URS chapter numbering (4, 5, 6)
         # survives. pandoc 2.x defaults to \section without this flag, which
         # collapses our chapter headings down a level and yields 0.x numbering.
         "--top-level-division=chapter",
+        # Lua filter: turn raw `<br>` (in-cell line breaks, e.g. the
+        # event-catalog "entry_type / display name" cell) into a real line
+        # break — the LaTeX writer drops raw inline HTML otherwise.
+        f"--lua-filter={linebreak_filter}",
         # Lua filter: re-render every pipe-table as a longtable with full
         # grid lines + shaded header row. LaTeX target only; the filter
         # passes other formats through unchanged.
@@ -661,6 +725,14 @@ def run_pandoc_pdf(
         f"--lua-filter={code_filter}",
         "--resource-path=" + ":".join(str(p) for p in resource_paths),
     ]
+    # Cover is optional. When given, it is consumed by the template's
+    # `$cover-tex$` slot (before the TOC, `\thispagestyle{empty}`); `--variable`
+    # is used rather than `--include-before-body`, which would land it between
+    # the TOC and body. Standalone appendix deliverables pass cover=None — the
+    # template's `$if(cover-tex)$` guard then skips the URS title page, so the
+    # doc opens at the appendix heading instead of the sponsor's URS cover.
+    if cover is not None:
+        cmd.append(f"--variable=cover-tex:{cover}")
     if sponsor_header is not None:
         cmd.append(f"--include-in-header={sponsor_header}")
     subprocess.run(cmd, check=True)
@@ -852,6 +924,8 @@ def run_pandoc_docx(
     heading styles, header/footer; otherwise pandoc's default styling applies.
     """
     filters_dir = Path(__file__).parent / "pandoc-filters"
+    linebreak_filter = filters_dir / "html-linebreak.lua"
+    catalog_filter = filters_dir / "catalog-tables.lua"
     image_filter = filters_dir / "image-normalize.lua"
     table_filter = filters_dir / "table-autofit-docx.lua"
     cmd = [
@@ -864,6 +938,16 @@ def run_pandoc_docx(
         # Match the PDF's chapter-class mapping so headings line up
         # numerically between the two outputs.
         "--top-level-division=chapter",
+        # Lua filter: turn raw `<br>` (used for in-cell line breaks, e.g. the
+        # event-catalog "entry_type / display name" cell) into a real line
+        # break — the docx writer drops raw inline HTML otherwise. Runs first
+        # so downstream filters see real LineBreaks.
+        f"--lua-filter={linebreak_filter}",
+        # Lua filter: style the event-catalog appendix tables — the merged
+        # display-name/entry_type cell (keep-together paragraph + grey italic
+        # monospace id) and monospace kinds. Runs after the line-break filter
+        # so it sees the split cell. Other tables pass through untouched.
+        f"--lua-filter={catalog_filter}",
         # Lua filter: cap every Image's width to a uniform docx-friendly
         # size. The same filter sets fig-pos=H for the LaTeX target;
         # other format branches inside the filter pass through unchanged.
@@ -1011,6 +1095,27 @@ def main() -> int:
             sponsor_header=sponsor_header,
         )
         print(f"Compiled PDF: {args.output_pdf}", file=sys.stderr)
+        # Standalone appendix deliverables (also appended to the URS above).
+        for sa in manifest.standalone_appendices:
+            sa_md = assemble_standalone_appendix(sa, repo_root, associate_root, "pdf")
+            if sa_md is None:
+                raise FileNotFoundError(
+                    f"standalone appendix {sa.file!r} not found in primary or "
+                    "associate — a manifest-declared deliverable must resolve"
+                )
+            sa_md_path = args.output_md.parent / f"{sa.slug}.pdf.md"
+            sa_md_path.write_text(sa_md)
+            sa_pdf = args.output_pdf.parent / f"{sa.slug}.pdf"
+            # cover=None: standalone deliverables render without the URS cover.
+            run_pandoc_pdf(
+                markdown_path=sa_md_path,
+                output_path=sa_pdf,
+                template=args.template,
+                cover=None,
+                resource_paths=resource_paths,
+                sponsor_header=sponsor_header,
+            )
+            print(f"Compiled standalone appendix PDF: {sa_pdf}", file=sys.stderr)
     if "docx" in formats:
         # Regenerate the docx style reference at build time so headers/footers
         # carry the right sponsor identity.
@@ -1023,6 +1128,24 @@ def main() -> int:
             reference_doc=reference_doc,
         )
         print(f"Compiled DOCX: {args.output_docx}", file=sys.stderr)
+        # Standalone appendix deliverables (also appended to the URS above).
+        for sa in manifest.standalone_appendices:
+            sa_md = assemble_standalone_appendix(sa, repo_root, associate_root, "docx")
+            if sa_md is None:
+                raise FileNotFoundError(
+                    f"standalone appendix {sa.file!r} not found in primary or "
+                    "associate — a manifest-declared deliverable must resolve"
+                )
+            sa_md_path = args.output_md.parent / f"{sa.slug}.docx.md"
+            sa_md_path.write_text(sa_md)
+            sa_docx = args.output_docx.parent / f"{sa.slug}.docx"
+            run_pandoc_docx(
+                markdown_path=sa_md_path,
+                output_path=sa_docx,
+                resource_paths=resource_paths,
+                reference_doc=reference_doc,
+            )
+            print(f"Compiled standalone appendix DOCX: {sa_docx}", file=sys.stderr)
     return 0
 
 

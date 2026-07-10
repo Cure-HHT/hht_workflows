@@ -54,6 +54,20 @@ class Chapter:
 
 
 @dataclass(frozen=True)
+class StandaloneAppendix:
+    """A generated markdown appendix (e.g. the event catalog) that is BOTH
+    appended to the URS back-matter AND emitted as its own deliverable.
+
+    `file` is a repo-relative path (resolved primary-then-associate, like other
+    manifest prose). `slug` names the standalone output (`<slug>.pdf/.docx`).
+    `title` is the appendix's H1 — a required field here; `Manifest.from_dict`
+    defaults it to `slug` when the manifest omits it."""
+    file: str
+    slug: str
+    title: str
+
+
+@dataclass(frozen=True)
 class Manifest:
     document: dict[str, Any]
     frontmatter: str | None
@@ -61,6 +75,8 @@ class Manifest:
     glossary: str | None
     term_index: str | None
     chapters: list[Chapter]
+    # Generated appendices appended to the URS back-matter AND emitted standalone.
+    standalone_appendices: tuple[StandaloneAppendix, ...] = ()
     # When True, glossary and references entries whose term is not
     # referenced anywhere in the assembled document body are dropped.
     # The federated glossary aggregates every defined term across all
@@ -106,6 +122,18 @@ class Manifest:
                 intro_file=ch.get("intro_file"),
                 scope=scope,
             ))
+        standalone: list[StandaloneAppendix] = []
+        for sa in d.get("standalone_appendices", []):
+            if "file" not in sa or "slug" not in sa:
+                raise ValueError(
+                    f"standalone_appendices entry needs 'file' and 'slug': {sa}"
+                )
+            standalone.append(StandaloneAppendix(
+                file=sa["file"],
+                slug=sa["slug"],
+                title=sa.get("title", sa["slug"]),
+            ))
+
         levels = _coerce_levels(d.get("levels"), "document") or ("PRD", "GUI")
 
         _raw_metadata = d.get("metadata")
@@ -134,6 +162,7 @@ class Manifest:
             glossary=d.get("glossary"),
             term_index=d.get("term_index"),
             chapters=chapters,
+            standalone_appendices=tuple(standalone),
             prune_glossary=bool(d.get("prune_glossary", True)),
             levels=levels,
             metadata_fields=metadata_fields,
