@@ -60,7 +60,8 @@ class StandaloneAppendix:
 
     `file` is a repo-relative path (resolved primary-then-associate, like other
     manifest prose). `slug` names the standalone output (`<slug>.pdf/.docx`).
-    `title` is the appendix's H1 (defaults to `slug`)."""
+    `title` is the appendix's H1 — a required field here; `Manifest.from_dict`
+    defaults it to `slug` when the manifest omits it."""
     file: str
     slug: str
     title: str

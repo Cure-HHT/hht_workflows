@@ -639,9 +639,10 @@ def assemble_standalone_appendix(
     """Assemble the markdown for a standalone appendix deliverable.
 
     Minimal + self-contained: the appendix content under its `# <title>` H1
-    (injected only if the file has none), with the same image-path rewrite and
-    (for docx) latex-block stripping the URS body gets. Returns None if the
-    appendix file can't be resolved."""
+    (the manifest `title` is authoritative — any existing leading H1 in the
+    file is replaced), with the same image-path rewrite and (for docx)
+    latex-block stripping the URS body gets. Returns None if the appendix file
+    can't be resolved."""
     full = _resolve(primary, associate, sa.file)
     if full is None:
         return None
