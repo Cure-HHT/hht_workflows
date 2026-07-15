@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -euo pipefail
+unset CLOUDSDK_CORE_PROJECT  # prevent auth step env override
+
+PROJECT_ID="${GCP_PROJECT_ID:-cure-hht-qa}"
+FLAVOR="${FLAVOR:-qa}"
+TIMEOUT="${TEST_TIMEOUT:-15m}"
+APP_APK="${APP_APK:?APP_APK is required}"
+TEST_APK="${TEST_APK:?TEST_APK is required}"
+RESULTS_DIR="${RESULTS_DIR:?RESULTS_DIR is required}"
+EVIDENCE_DIR="${EVIDENCE_DIR:-build/firebase-test-lab/android/evidence}"
+# Default device matrix: 12 coverage tiers (Google/Samsung/Motorola/OnePlus/Oppo
+# + virtual profiles), grounded in the FTL model catalog (gcloud models list,
+# 2026-07-01). Model+version pairs verified against supported combos; earlier
+# incompatible combos (r0q/33, g0q/31, redfin/31, redfin/28) remain excluded.
+# One spec per line: model=<id>,version=<api>,locale=en,orientation=portrait
+# Override at runtime via the android_devices workflow_dispatch input.
+DEFAULT_DEVICE_SPECS=$(printf '%s\n' \
+  'model=shiba,version=35,locale=en,orientation=portrait' \
+  'model=tokay,version=35,locale=en,orientation=portrait' \
+  'model=panther,version=33,locale=en,orientation=portrait' \
+  'model=cheetah,version=33,locale=en,orientation=portrait' \
+  'model=redfin,version=30,locale=en,orientation=portrait' \
+  'model=oriole,version=33,locale=en,orientation=portrait' \
+  'model=dm1q,version=35,locale=en,orientation=portrait' \
+  'model=e1q,version=34,locale=en,orientation=portrait' \
+  'model=pa1q,version=36,locale=en,orientation=portrait' \
+  'model=o1q,version=34,locale=en,orientation=portrait' \
+  'model=r0q,version=34,locale=en,orientation=portrait' \
+  'model=a54x,version=34,locale=en,orientation=portrait' \
+  'model=a35x,version=35,locale=en,orientation=portrait' \
+  'model=cancunf,version=34,locale=en,orientation=portrait' \
+  'model=dubai,version=34,locale=en,orientation=portrait' \
+  'model=CPH2449,version=34,locale=en,orientation=portrait' \
+  'model=OP573DL1,version=34,locale=en,orientation=portrait' \
+  'model=e3q,version=34,locale=en,orientation=portrait' \
+  'model=a10,version=29,locale=en,orientation=portrait' \
+  'model=MediumPhone.arm,version=31,locale=en,orientation=portrait' \
+  'model=MediumPhone.arm,version=30,locale=en,orientation=portrait' \
+  'model=MediumPhone.arm,version=33,locale=en,orientation=portrait' \
+  'model=MediumPhone.arm,version=28,locale=en,orientation=portrait' \
+)
+DEVICE_SPECS="${ANDROID_DEVICES:-${DEFAULT_DEVICE_SPECS}}"
+DEVICES_EXCLUDE="${ANDROID_DEVICES_EXCLUDE:-}"
+if [[ -n "$DEVICES_EXCLUDE" ]]; then
+  FILTERED_SPECS=""
+  while IFS= read -r spec; do
+    spec="${spec%$'\r'}"
+    [[ -z "${spec//[[:space:]]/}" ]] && continue
+    model="$(sed -n 's/.*model=\([^,]*\).*/\1/p' <<< "$spec")"
+    skip=false
+    for ex in $DEVICES_EXCLUDE; do
+      [[ "$model" == "$ex" ]] && { skip=true; break; }
+    done
+    [[ "$skip" == false ]] && FILTERED_SPECS+="$spec"$'\n'
+  done <<< "$DEVICE_SPECS"
+  DEVICE_SPECS="$FILTERED_SPECS"
+fi
+USE_ORCHESTRATOR="${USE_ORCHESTRATOR:-true}"
+RESULTS_BUCKET="${FIREBASE_RESULTS_BUCKET:-}"
+
+mkdir -p "$EVIDENCE_DIR"
+
+[[ -f "$APP_APK" ]] || { echo "ERROR: app APK not found: $APP_APK" >&2; exit 1; }
+[[ -f "$TEST_APK" ]] || { echo "ERROR: test APK not found: $TEST_APK" >&2; exit 1; }
+
+ACTIVE_PROJECT="$(gcloud config get-value project 2>/dev/null)"
+if [[ "$ACTIVE_PROJECT" != "$PROJECT_ID" ]]; then
+  echo "ERROR: active gcloud project '$ACTIVE_PROJECT' does not match '$PROJECT_ID'" >&2
+  exit 1
+fi
+
+# Traceability: the consuming workflow step carries the REQ annotation.
+cmd=(
+  gcloud firebase test android run
+  --project="$PROJECT_ID"
+  --type=instrumentation
+  --app="$APP_APK"
+  --test="$TEST_APK"
+  --timeout="$TIMEOUT"
+  --results-dir="$RESULTS_DIR"
+  --client-details="matrixLabel=hht-${FLAVOR}-${GITHUB_RUN_ID:-local}-${GITHUB_SHA:-unknown}"
+)
+
+if [[ -n "$RESULTS_BUCKET" ]]; then
+  RESULTS_BUCKET="${RESULTS_BUCKET#gs://}"
+  cmd+=(--results-bucket="$RESULTS_BUCKET")
+fi
+
+if [[ "$USE_ORCHESTRATOR" == "true" ]]; then
+  cmd+=(--use-orchestrator)
+  cmd+=(--environment-variables clearPackageData=true)
+else
+  cmd+=(--no-use-orchestrator)
+fi
+
+# Re-run any test case that fails, up to FLAKY_TEST_ATTEMPTS extra times.
+# Firebase Test Lab reruns only the failed cases and reports the run as
+# passing if a retry succeeds (helps absorb occasional device flakiness).
+FLAKY_TEST_ATTEMPTS="${FLAKY_TEST_ATTEMPTS:-1}"
+if [[ "$FLAKY_TEST_ATTEMPTS" -gt 0 ]]; then
+  cmd+=(--num-flaky-test-attempts="$FLAKY_TEST_ATTEMPTS")
+fi
+
+while IFS= read -r spec; do
+  spec="${spec%$'\r'}"
+  [[ -z "${spec//[[:space:]]/}" ]] && continue
+  cmd+=(--device="$spec")
+done <<< "$DEVICE_SPECS"
+
+printf '%q ' "${cmd[@]}" > "$EVIDENCE_DIR/command.txt"
+printf '\n' >> "$EVIDENCE_DIR/command.txt"
+
+set +e
+"${cmd[@]}" 2>&1 | tee "$EVIDENCE_DIR/gcloud-output.log"
+status=${PIPESTATUS[0]}
+set -e
+
+printf '%s\n' "$status" > "$EVIDENCE_DIR/exit-code.txt"
+
+# When a dedicated bucket is configured, copy the complete Firebase result tree
+# (JUnit, logs, screenshots, videos, and performance files when present) into
+# the GitHub evidence artifact. A copy failure must not hide the matrix result.
+if [[ -n "$RESULTS_BUCKET" ]]; then
+  BUCKET_NAME="${RESULTS_BUCKET#gs://}"
+  mkdir -p "$EVIDENCE_DIR/raw-results"
+  set +e
+  gcloud storage cp --recursive \
+    "gs://${BUCKET_NAME}/${RESULTS_DIR}" \
+    "$EVIDENCE_DIR/raw-results/" \
+    > "$EVIDENCE_DIR/result-download.log" 2>&1
+  download_status=$?
+  set -e
+  if [[ $download_status -ne 0 ]]; then
+    echo "WARN: Firebase result download failed; results remain in Cloud Storage/Test Lab." \
+      | tee -a "$EVIDENCE_DIR/result-download.log"
+  fi
+fi
+
+cat > "$EVIDENCE_DIR/execution-summary.json" <<JSON
+{
+  "platform": "android",
+  "project": "$PROJECT_ID",
+  "flavor": "$FLAVOR",
+  "resultsDir": "$RESULTS_DIR",
+  "timeout": "$TIMEOUT",
+  "exitCode": $status,
+  "gitSha": "${GITHUB_SHA:-unknown}",
+  "runId": "${GITHUB_RUN_ID:-local}"
+}
+JSON
+
+exit "$status"

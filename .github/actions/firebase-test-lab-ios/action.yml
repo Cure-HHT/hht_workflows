@@ -1,0 +1,221 @@
+name: Firebase Test Lab iOS run (org-standard)
+description: >
+  Runs an iOS XCTest matrix on Firebase Test Lab. Sets up the gcloud SDK
+  (GCP WIF auth must already have happened, e.g. via the gcp-wif-auth
+  action), verifies the active identity and project, captures the Test Lab
+  device catalog as evidence, resolves an available (non-deprecated) device
+  from a fallback priority list against that catalog, executes the matrix
+  via the bundled run-ios-test-lab.sh with retries on Test Lab
+  infrastructure errors (exit 15), and appends a job-summary table. This
+  action NEVER fails the job on a matrix failure: the matrix exit code is
+  exposed as the exit_code output so callers can upload evidence artifacts
+  first and enforce the result last. Pin this action by SHA from consumer
+  workflows; never by branch or tag.
+
+inputs:
+  gcp_project_id:
+    description: GCP project hosting Firebase Test Lab (e.g. cure-hht-qa).
+    required: true
+  flavor:
+    description: Application flavor label used in the summary.
+    required: true
+  timeout:
+    description: Per-device Test Lab timeout (gcloud duration, e.g. 30m).
+    required: false
+    default: '30m'
+  xctest_zip:
+    description: Path to the XCTest zip, relative to working_directory.
+    required: true
+  results_dir:
+    description: Cloud Storage results directory for this run (unique per run/attempt).
+    required: true
+  results_bucket:
+    description: Optional Cloud Storage results bucket. Blank uses the Test Lab default (and skips the raw-result download).
+    required: false
+    default: ''
+  devices:
+    description: >
+      Device specs used when no fallback-list device is available in the
+      catalog, one per line
+      (model=...,version=...,locale=...,orientation=...).
+    required: false
+    default: ''
+  devices_exclude:
+    description: Optional model IDs to exclude from the fallback priority list, space or newline separated.
+    required: false
+    default: ''
+  device_fallbacks:
+    description: >
+      Space-separated model:version fallback priority list checked against
+      the live Test Lab catalog (first available, non-deprecated,
+      version-supported entry wins).
+    required: false
+    default: 'iphone14pro:16.6 iphone11pro:16.6 iphone8:16.6 iphonese3:18.4 iphone16pro:18.3'
+  xcode_version:
+    description: Optional Firebase-supported Xcode version. Blank uses the Test Lab default.
+    required: false
+    default: ''
+  max_attempts:
+    description: Maximum matrix attempts; only Test Lab infrastructure/inconclusive results (exit 15) are retried.
+    required: false
+    default: '3'
+  evidence_dir:
+    description: Directory (relative to working_directory) receiving command.txt, gcloud-output.log, exit-code.txt, catalog inventory, selected-device.txt, raw results, and execution-summary.json.
+    required: true
+  working_directory:
+    description: Directory the run executes from (zip and evidence paths are relative to it).
+    required: false
+    default: '.'
+  test_target:
+    description: Display-only test target string for the job summary.
+    required: false
+    default: ''
+
+outputs:
+  exit_code:
+    description: >
+      gcloud firebase test exit code of the final attempt: 0 pass, 10 test
+      failures, 15 infrastructure/inconclusive, 19 canceled. Callers MUST
+      enforce this after uploading evidence (the action itself never fails
+      the job on a matrix result).
+    value: ${{ steps.run.outputs.exit_code }}
+  attempts:
+    description: Number of matrix attempts executed.
+    value: ${{ steps.run.outputs.attempts }}
+  devices:
+    description: The device spec the matrix ran on (catalog-resolved or the devices input).
+    value: ${{ steps.device.outputs.devices }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+      with:
+        project_id: ${{ inputs.gcp_project_id }}
+
+    - name: Verify Test Lab identity and inventory
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        GCP_PROJECT_ID: ${{ inputs.gcp_project_id }}
+        EVIDENCE_DIR: ${{ inputs.evidence_dir }}
+      run: |
+        set -euo pipefail
+        unset CLOUDSDK_CORE_PROJECT  # prevent CLOUDSDK_CORE_PROJECT env override from auth step
+        mkdir -p "$EVIDENCE_DIR"
+        gcloud config set project "$GCP_PROJECT_ID"
+        ACTIVE_PROJECT="$(gcloud config get-value project 2>/dev/null)"
+        ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+        test "$ACTIVE_PROJECT" = "$GCP_PROJECT_ID"
+        test -n "$ACTIVE_ACCOUNT"
+        echo "Authenticated principal: $ACTIVE_ACCOUNT"
+        echo "Firebase Test Lab project: $ACTIVE_PROJECT"
+        gcloud firebase test ios models list --format=json \
+          > "$EVIDENCE_DIR/models.json"
+        gcloud firebase test ios versions list --format=json \
+          > "$EVIDENCE_DIR/versions.json"
+
+    - name: Resolve available iOS device from catalog
+      id: device
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        EVIDENCE_DIR: ${{ inputs.evidence_dir }}
+        IOS_DEVICE_FALLBACKS: ${{ inputs.device_fallbacks }}
+        IOS_DEVICES_EXCLUDE: ${{ inputs.devices_exclude }}
+        IOS_DEVICES_INPUT: ${{ inputs.devices }}
+      run: |
+        set -euo pipefail
+        CATALOG="$EVIDENCE_DIR/models.json"
+        SELECTED=""
+        for PAIR in $IOS_DEVICE_FALLBACKS; do
+          MODEL="${PAIR%%:*}"
+          VERSION="${PAIR##*:}"
+          if printf '%s\n' "$IOS_DEVICES_EXCLUDE" | tr ' ' '\n' | grep -qxF "$MODEL"; then continue; fi
+          EXISTS=$(jq -r --arg m "$MODEL" '[.[] | select(.id==$m)] | length' "$CATALOG")
+          if [ "$EXISTS" = "0" ]; then continue; fi
+          DEPRECATED=$(jq -r --arg m "$MODEL" '.[] | select(.id==$m) | (.tags // []) | index("deprecated") != null' "$CATALOG")
+          if [ "$DEPRECATED" = "true" ]; then continue; fi
+          HASVER=$(jq -r --arg m "$MODEL" --arg v "$VERSION" '.[] | select(.id==$m) | (.supportedVersionIds // []) | index($v) != null' "$CATALOG")
+          if [ "$HASVER" != "true" ]; then continue; fi
+          SELECTED="model=$MODEL,version=$VERSION,locale=en_US,orientation=portrait"
+          break
+        done
+        if [ -z "$SELECTED" ]; then
+          echo "No fallback device available in catalog; using the devices input."
+          SELECTED="$IOS_DEVICES_INPUT"
+        fi
+        echo "Selected iOS device: $SELECTED"
+        echo "$SELECTED" > "$EVIDENCE_DIR/selected-device.txt"
+        echo "devices=$SELECTED" >> "$GITHUB_OUTPUT"
+
+    # The matrix result is captured, not enforced: evidence upload and the
+    # summary must run before the caller fails the job on exit_code.
+    # Only exit 15 (Test Lab infrastructure/inconclusive) is retried;
+    # genuine test failures (10) and other codes are NOT.
+    - name: Run iOS Firebase Test Lab matrix
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        GCP_PROJECT_ID: ${{ inputs.gcp_project_id }}
+        FLAVOR: ${{ inputs.flavor }}
+        TEST_TIMEOUT: ${{ inputs.timeout }}
+        IOS_DEVICES: ${{ steps.device.outputs.devices }}
+        IOS_XCODE_VERSION: ${{ inputs.xcode_version }}
+        FIREBASE_RESULTS_BUCKET: ${{ inputs.results_bucket }}
+        XCTEST_ZIP: ${{ inputs.xctest_zip }}
+        RESULTS_DIR: ${{ inputs.results_dir }}
+        EVIDENCE_DIR: ${{ inputs.evidence_dir }}
+        MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+      run: |
+        attempt=1
+        status=0
+        while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+          echo "::group::iOS Firebase Test Lab attempt ${attempt}/${MAX_ATTEMPTS}"
+          set +e
+          bash "$GITHUB_ACTION_PATH/run-ios-test-lab.sh"
+          status=$?
+          set -e
+          echo "::endgroup::"
+          if [ "$status" -ne 15 ]; then
+            break
+          fi
+          echo "::warning::iOS Test Lab returned exit 15 (infrastructure/inconclusive) on attempt ${attempt}; retrying."
+          attempt=$((attempt + 1))
+          sleep 30
+        done
+        echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+        echo "attempts=$attempt" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Write iOS summary
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.run.outputs.exit_code }}
+        GCP_PROJECT_ID: ${{ inputs.gcp_project_id }}
+        FLAVOR: ${{ inputs.flavor }}
+        TEST_TARGET: ${{ inputs.test_target }}
+      run: |
+        case "${EXIT_CODE:-missing}" in
+          0) RESULT="Passed" ;;
+          10) RESULT="Test cases failed" ;;
+          15) RESULT="Indeterminate / infrastructure error" ;;
+          19) RESULT="Canceled" ;;
+          missing|'') RESULT="Did not execute" ;;
+          *) RESULT="Failed (gcloud exit ${EXIT_CODE})" ;;
+        esac
+        {
+          echo "### iOS Firebase Test Lab"
+          echo ""
+          echo "| Field | Value |"
+          echo "|---|---|"
+          echo "| Project | \`$GCP_PROJECT_ID\` |"
+          echo "| Flavor | \`$FLAVOR\` |"
+          echo "| Test target | \`${TEST_TARGET:-n/a}\` |"
+          echo "| Result | **$RESULT** |"
+          echo "| gcloud exit code | \`${EXIT_CODE:-n/a}\` |"
+          echo "| Commit | \`${GITHUB_SHA::7}\` |"
+          echo "| Firebase console | https://console.firebase.google.com/project/$GCP_PROJECT_ID/testlab |"
+        } >> "$GITHUB_STEP_SUMMARY"
