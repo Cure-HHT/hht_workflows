@@ -114,8 +114,12 @@ runs:
         fi
         echo "fetched=true" >> "$GITHUB_OUTPUT"
 
+    # continue-on-error keeps the best-effort contract: a checkout failure
+    # becomes published=false in the publish step, not a job failure.
     - name: Checkout dashboard repo
+      id: dashboard-checkout
       if: steps.fetch.outputs.fetched == 'true'
+      continue-on-error: true
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.dashboard_repository }}
@@ -123,6 +127,8 @@ runs:
         token: ${{ inputs.token }}
         path: .testlab-dashboard-publish
 
+    # Best-effort throughout: every failure mode is caught explicitly and
+    # degrades to a warning + published=false rather than failing the job.
     - name: Publish dashboard data
       id: publish
       if: steps.fetch.outputs.fetched == 'true'
@@ -131,20 +137,43 @@ runs:
         DATA_PATH: ${{ inputs.dashboard_data_path }}
         COMMIT_CONTEXT: ${{ inputs.commit_context }}
         DASHBOARD_REF: ${{ inputs.dashboard_ref }}
+        CHECKOUT_OUTCOME: ${{ steps.dashboard-checkout.outcome }}
       run: |
         set -euo pipefail
-        cp "$RUNNER_TEMP/dashboard_data.json" ".testlab-dashboard-publish/$DATA_PATH"
-        cd .testlab-dashboard-publish
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git add "$DATA_PATH"
+        if [ "$CHECKOUT_OUTCOME" != "success" ]; then
+          echo "::warning::dashboard repo checkout failed; skipping the publish"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        rc=0
+        {
+          mkdir -p ".testlab-dashboard-publish/$(dirname "$DATA_PATH")" &&
+          cp "$RUNNER_TEMP/dashboard_data.json" ".testlab-dashboard-publish/$DATA_PATH" &&
+          cd .testlab-dashboard-publish &&
+          git config user.name "github-actions[bot]" &&
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com" &&
+          git add "$DATA_PATH"
+        } || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::staging dashboard data failed (rc=$rc); skipping the publish"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         if git diff --cached --quiet; then
           echo "No dashboard changes to publish."
           echo "published=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        git commit -m "chore: update dashboard data${COMMIT_CONTEXT:+ ($COMMIT_CONTEXT)}"
-        git push origin "HEAD:$DASHBOARD_REF"
+        rc=0
+        {
+          git commit -m "chore: update dashboard data${COMMIT_CONTEXT:+ ($COMMIT_CONTEXT)}" &&
+          git push origin "HEAD:$DASHBOARD_REF"
+        } || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::dashboard commit/push failed (rc=$rc); the dashboard was not updated"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         echo "published=true" >> "$GITHUB_OUTPUT"
 
     - name: Write publish summary

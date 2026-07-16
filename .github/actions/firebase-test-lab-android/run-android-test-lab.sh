@@ -42,7 +42,10 @@ DEFAULT_DEVICE_SPECS=$(printf '%s\n' \
 )
 DEVICE_SPECS="${ANDROID_DEVICES:-${DEFAULT_DEVICE_SPECS}}"
 DEVICES_EXCLUDE="${ANDROID_DEVICES_EXCLUDE:-}"
-if [[ -n "$DEVICES_EXCLUDE" ]]; then
+# Exclusions apply to the DEFAULT matrix only: an explicit ANDROID_DEVICES
+# list is taken verbatim (input contract: devices_exclude is ignored when
+# devices is set).
+if [[ -n "$DEVICES_EXCLUDE" && -z "${ANDROID_DEVICES:-}" ]]; then
   FILTERED_SPECS=""
   while IFS= read -r spec; do
     spec="${spec%$'\r'}"
