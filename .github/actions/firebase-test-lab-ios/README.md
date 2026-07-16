@@ -20,12 +20,13 @@ matrix result.
         results_dir: my-run/${{ github.run_id }}/${{ github.run_attempt }}
         evidence_dir: build/firebase-test-lab/ios/evidence
         working_directory: apps/daily-diary/clinical_diary
-        devices: model=iphone16pro,version=18.3,locale=en_US,orientation=portrait
         # Optional:
+        # devices: model=iphone16pro,version=18.3,locale=en_US,orientation=portrait
+        #   (explicit override; blank resolves from device_fallbacks)
         # timeout: 30m
         # results_bucket: ${{ vars.FIREBASE_TEST_LAB_RESULTS_BUCKET }}
-        # devices_exclude: 'iphone8'
-        # device_fallbacks: 'iphone14pro:16.6 iphone11pro:16.6'
+        # devices_exclude: 'iphonese3'
+        # device_fallbacks: 'iphonese3:18.4 iphone16pro:18.3'
         # xcode_version: '16.4'
         # max_attempts: '3'
         # test_target: integration_test/my_smoke_test.dart
@@ -40,7 +41,7 @@ matrix result.
         if [ -z "${EXIT_CODE:-}" ]; then
           echo "::error::matrix did not execute."; exit 1
         fi
-        if [ "$EXIT_CODE" -eq 15 ]; then
+        if [ "$EXIT_CODE" -eq 15 ] || [ "$EXIT_CODE" -eq 20 ]; then
           echo "::warning::infrastructure/inconclusive after retries; not failing."; exit 0
         fi
         exit "$EXIT_CODE"
@@ -57,13 +58,16 @@ matrix result.
    already exist (use `gcp-wif-auth` first).
 2. Verifies the active gcloud identity and project, and writes the Test
    Lab device catalog into `evidence_dir`.
-3. Resolves the first available, non-deprecated, version-supported
-   device from `device_fallbacks` against the live catalog, falling back
-   to the `devices` input when none match; records the choice in
+3. Uses the explicit `devices` input when set; otherwise resolves the
+   first available, non-deprecated, version-supported device from
+   `device_fallbacks` against the live catalog. Errors when neither
+   yields a device; records the choice in
    `evidence_dir/selected-device.txt` and the `devices` output.
 4. Runs the matrix via the bundled `run-ios-test-lab.sh`, retrying only
-   Test Lab infrastructure/inconclusive results (exit 15) up to
-   `max_attempts` times.
+   Test Lab infrastructure/inconclusive results (exit 15 or 20) up to
+   `max_attempts` times — each attempt in its own results dir and
+   evidence subdir, with the final attempt mirrored to the top-level
+   evidence paths.
 5. Appends a result table to the job summary.
 
 The matrix result is **captured, not enforced**: `exit_code` and

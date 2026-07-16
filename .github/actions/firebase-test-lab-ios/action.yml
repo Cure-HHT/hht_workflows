@@ -35,9 +35,10 @@ inputs:
     default: ''
   devices:
     description: >
-      Device specs used when no fallback-list device is available in the
-      catalog, one per line
-      (model=...,version=...,locale=...,orientation=...).
+      Optional explicit device specs, one per line
+      (model=...,version=...,locale=...,orientation=...). When set, this
+      overrides catalog fallback resolution entirely. Blank resolves a
+      device from device_fallbacks against the live catalog.
     required: false
     default: ''
   devices_exclude:
@@ -50,13 +51,13 @@ inputs:
       the live Test Lab catalog (first available, non-deprecated,
       version-supported entry wins).
     required: false
-    default: 'iphone14pro:16.6 iphone11pro:16.6 iphone8:16.6 iphonese3:18.4 iphone16pro:18.3'
+    default: 'iphonese3:18.4 iphone16pro:18.3'
   xcode_version:
     description: Optional Firebase-supported Xcode version. Blank uses the Test Lab default.
     required: false
     default: ''
   max_attempts:
-    description: Maximum matrix attempts; only Test Lab infrastructure/inconclusive results (exit 15) are retried.
+    description: Maximum matrix attempts; only Test Lab infrastructure/inconclusive results (exit 15 or 20) are retried.
     required: false
     default: '3'
   evidence_dir:
@@ -128,32 +129,43 @@ runs:
       run: |
         set -euo pipefail
         CATALOG="$EVIDENCE_DIR/models.json"
-        SELECTED=""
-        for PAIR in $IOS_DEVICE_FALLBACKS; do
-          MODEL="${PAIR%%:*}"
-          VERSION="${PAIR##*:}"
-          if printf '%s\n' "$IOS_DEVICES_EXCLUDE" | tr ' ' '\n' | grep -qxF "$MODEL"; then continue; fi
-          EXISTS=$(jq -r --arg m "$MODEL" '[.[] | select(.id==$m)] | length' "$CATALOG")
-          if [ "$EXISTS" = "0" ]; then continue; fi
-          DEPRECATED=$(jq -r --arg m "$MODEL" '.[] | select(.id==$m) | (.tags // []) | index("deprecated") != null' "$CATALOG")
-          if [ "$DEPRECATED" = "true" ]; then continue; fi
-          HASVER=$(jq -r --arg m "$MODEL" --arg v "$VERSION" '.[] | select(.id==$m) | (.supportedVersionIds // []) | index($v) != null' "$CATALOG")
-          if [ "$HASVER" != "true" ]; then continue; fi
-          SELECTED="model=$MODEL,version=$VERSION,locale=en_US,orientation=portrait"
-          break
-        done
+        SELECTED="$IOS_DEVICES_INPUT"
+        if [ -n "$SELECTED" ]; then
+          echo "Using explicit iOS device override."
+        else
+          for PAIR in $IOS_DEVICE_FALLBACKS; do
+            MODEL="${PAIR%%:*}"
+            VERSION="${PAIR##*:}"
+            if printf '%s\n' "$IOS_DEVICES_EXCLUDE" | tr ' ' '\n' | grep -qxF "$MODEL"; then continue; fi
+            EXISTS=$(jq -r --arg m "$MODEL" '[.[] | select(.id==$m)] | length' "$CATALOG")
+            if [ "$EXISTS" = "0" ]; then continue; fi
+            DEPRECATED=$(jq -r --arg m "$MODEL" '.[] | select(.id==$m) | (.tags // []) | index("deprecated") != null' "$CATALOG")
+            if [ "$DEPRECATED" = "true" ]; then continue; fi
+            HASVER=$(jq -r --arg m "$MODEL" --arg v "$VERSION" '.[] | select(.id==$m) | (.supportedVersionIds // []) | index($v) != null' "$CATALOG")
+            if [ "$HASVER" != "true" ]; then continue; fi
+            SELECTED="model=$MODEL,version=$VERSION,locale=en_US,orientation=portrait"
+            break
+          done
+        fi
         if [ -z "$SELECTED" ]; then
-          echo "No fallback device available in catalog; using the devices input."
-          SELECTED="$IOS_DEVICES_INPUT"
+          echo "::error::No requested or fallback iOS device is available in the Firebase catalog."
+          exit 1
         fi
         echo "Selected iOS device: $SELECTED"
         echo "$SELECTED" > "$EVIDENCE_DIR/selected-device.txt"
-        echo "devices=$SELECTED" >> "$GITHUB_OUTPUT"
+        {
+          echo "devices<<EOF"
+          echo "$SELECTED"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
     # The matrix result is captured, not enforced: evidence upload and the
     # summary must run before the caller fails the job on exit_code.
-    # Only exit 15 (Test Lab infrastructure/inconclusive) is retried;
-    # genuine test failures (10) and other codes are NOT.
+    # Only exit 15/20 (Test Lab infrastructure/inconclusive) is retried;
+    # genuine test failures (10) and other codes are NOT. Each attempt gets
+    # a unique Firebase results dir and its own evidence subdir; the final
+    # attempt is mirrored to the top-level evidence paths for downstream
+    # consumers.
     - name: Run iOS Firebase Test Lab matrix
       id: run
       shell: bash
@@ -172,19 +184,33 @@ runs:
       run: |
         attempt=1
         status=0
+        base_results_dir="$RESULTS_DIR"
+        evidence_root="$EVIDENCE_DIR"
         while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
           echo "::group::iOS Firebase Test Lab attempt ${attempt}/${MAX_ATTEMPTS}"
+          attempt_results_dir="${base_results_dir}-attempt-${attempt}"
+          attempt_evidence_dir="${evidence_root}/attempt-${attempt}"
           set +e
-          bash "$GITHUB_ACTION_PATH/run-ios-test-lab.sh"
+          RESULTS_DIR="$attempt_results_dir" EVIDENCE_DIR="$attempt_evidence_dir" \
+            bash "$GITHUB_ACTION_PATH/run-ios-test-lab.sh"
           status=$?
           set -e
+          # Keep each attempt intact and mirror the final attempt at the
+          # established top-level evidence paths for downstream consumers.
+          rm -rf "$evidence_root/raw-results"
+          cp -R "$attempt_evidence_dir"/. "$evidence_root"/
           echo "::endgroup::"
-          if [ "$status" -ne 15 ]; then
+          case "$status" in
+            15|20) ;;
+            *) break ;;
+          esac
+          if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+            echo "::warning::iOS Test Lab returned exit ${status} (infrastructure/inconclusive) on final attempt ${attempt}."
             break
           fi
-          echo "::warning::iOS Test Lab returned exit 15 (infrastructure/inconclusive) on attempt ${attempt}; retrying."
-          attempt=$((attempt + 1))
+          echo "::warning::iOS Test Lab returned exit ${status} (infrastructure/inconclusive) on attempt ${attempt}; retrying."
           sleep 30
+          attempt=$((attempt + 1))
         done
         echo "exit_code=$status" >> "$GITHUB_OUTPUT"
         echo "attempts=$attempt" >> "$GITHUB_OUTPUT"
@@ -202,6 +228,7 @@ runs:
           0) RESULT="Passed" ;;
           10) RESULT="Test cases failed" ;;
           15) RESULT="Indeterminate / infrastructure error" ;;
+          20) RESULT="Infrastructure failure" ;;
           19) RESULT="Canceled" ;;
           missing|'') RESULT="Did not execute" ;;
           *) RESULT="Failed (gcloud exit ${EXIT_CODE})" ;;
