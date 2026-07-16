@@ -1,0 +1,196 @@
+name: Test Lab dashboard publish (org-standard)
+description: >
+  Publishes Firebase Test Lab results to the testlab-dashboard repo.
+  Recovers the Test Lab history/execution IDs from the run evidence
+  (gcloud-output.log), fetches the run's device/test outcomes from the Tool
+  Results API using the job's existing gcloud credentials (WIF; no extra
+  secret), and commits the assembled dashboard_data.json to the dashboard
+  repo with the caller-supplied token. Publishing is best-effort: every
+  stage degrades to a warning and published=false rather than failing the
+  job. The token MUST be a short-lived per-job GitHub App installation
+  token scoped to the dashboard repo with contents:write only
+  (HHT-OPS-cicd-app-operations/B,J) — never a PAT
+  (HHT-OPS-identity-over-keys/C). Pin this action by SHA from consumer
+  workflows; never by branch or tag.
+
+inputs:
+  gcp_project_id:
+    description: GCP project the Test Lab run executed in (Tool Results API project).
+    required: true
+  evidence_dirs:
+    description: Evidence directories to scan for gcloud-output.log, one per line (first match wins).
+    required: true
+  token:
+    description: Short-lived GitHub App installation token with contents:write on the dashboard repo. Never a PAT.
+    required: true
+  dashboard_repository:
+    description: Dashboard repo (owner/name).
+    required: false
+    default: 'Cure-HHT/testlab-dashboard'
+  dashboard_ref:
+    description: Branch of the dashboard repo to commit to.
+    required: false
+    default: 'initial-import'
+  dashboard_data_path:
+    description: Path of the data file inside the dashboard repo.
+    required: false
+    default: 'testlab-dashboard-main/dashboard_data.json'
+  dashboard_url:
+    description: Display-only dashboard URL for the job summary.
+    required: false
+    default: 'https://cure-hht.github.io/testlab-dashboard/testlab-dashboard-main/'
+  commit_context:
+    description: Display-only run context appended to the commit message (e.g. "run 123, qa/android").
+    required: false
+    default: ''
+
+outputs:
+  published:
+    description: "'true' when a dashboard commit was pushed; 'false' otherwise (no IDs found, fetch failed, or no data change)."
+    value: ${{ steps.publish.outputs.published || 'false' }}
+  history_id:
+    description: Test Lab history ID recovered from the evidence, when found.
+    value: ${{ steps.ids.outputs.history_id }}
+  execution_id:
+    description: Test Lab execution ID recovered from the evidence, when found.
+    value: ${{ steps.ids.outputs.execution_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+      with:
+        project_id: ${{ inputs.gcp_project_id }}
+
+    # Neither run-android-test-lab.sh nor run-ios-test-lab.sh writes the
+    # Test Lab history/execution IDs into execution-summary.json, so recover
+    # them from the gcloud-output.log console-URL banner. Best-effort: a miss
+    # is a warning, not a failure.
+    - name: Locate Test Lab history/execution IDs
+      id: ids
+      shell: bash
+      env:
+        EVIDENCE_DIRS: ${{ inputs.evidence_dirs }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r dir; do
+          [ -z "${dir//[[:space:]]/}" ] && continue
+          args+=(--evidence-dir "$dir")
+        done <<<"$EVIDENCE_DIRS"
+        rc=0
+        python3 "$GITHUB_ACTION_PATH/extract_test_lab_ids.py" \
+          "${args[@]}" --output "$RUNNER_TEMP/testlab-ids.json" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::could not locate Test Lab history/execution IDs in the evidence (rc=$rc); skipping the dashboard publish"
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "found=true" >> "$GITHUB_OUTPUT"
+        echo "history_id=$(jq -r '.historyId' "$RUNNER_TEMP/testlab-ids.json")" >> "$GITHUB_OUTPUT"
+        echo "execution_id=$(jq -r '.executionId' "$RUNNER_TEMP/testlab-ids.json")" >> "$GITHUB_OUTPUT"
+
+    - name: Fetch Tool Results and build dashboard data
+      id: fetch
+      if: steps.ids.outputs.found == 'true'
+      shell: bash
+      env:
+        GCP_PROJECT_ID: ${{ inputs.gcp_project_id }}
+        HISTORY_ID: ${{ steps.ids.outputs.history_id }}
+        EXECUTION_ID: ${{ steps.ids.outputs.execution_id }}
+      run: |
+        set -euo pipefail
+        rc=0
+        python3 "$GITHUB_ACTION_PATH/fetch_toolresults.py" \
+          --project "$GCP_PROJECT_ID" \
+          --history "$HISTORY_ID" \
+          --execution "$EXECUTION_ID" \
+          --out "$RUNNER_TEMP/dashboard_data.json" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::Tool Results fetch failed (rc=$rc); skipping the dashboard publish"
+          echo "fetched=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "fetched=true" >> "$GITHUB_OUTPUT"
+
+    # continue-on-error keeps the best-effort contract: a checkout failure
+    # becomes published=false in the publish step, not a job failure.
+    - name: Checkout dashboard repo
+      id: dashboard-checkout
+      if: steps.fetch.outputs.fetched == 'true'
+      continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.dashboard_repository }}
+        ref: ${{ inputs.dashboard_ref }}
+        token: ${{ inputs.token }}
+        path: .testlab-dashboard-publish
+
+    # Best-effort throughout: every failure mode is caught explicitly and
+    # degrades to a warning + published=false rather than failing the job.
+    - name: Publish dashboard data
+      id: publish
+      if: steps.fetch.outputs.fetched == 'true'
+      shell: bash
+      env:
+        DATA_PATH: ${{ inputs.dashboard_data_path }}
+        COMMIT_CONTEXT: ${{ inputs.commit_context }}
+        DASHBOARD_REF: ${{ inputs.dashboard_ref }}
+        CHECKOUT_OUTCOME: ${{ steps.dashboard-checkout.outcome }}
+      run: |
+        set -euo pipefail
+        if [ "$CHECKOUT_OUTCOME" != "success" ]; then
+          echo "::warning::dashboard repo checkout failed; skipping the publish"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        rc=0
+        {
+          mkdir -p ".testlab-dashboard-publish/$(dirname "$DATA_PATH")" &&
+          cp "$RUNNER_TEMP/dashboard_data.json" ".testlab-dashboard-publish/$DATA_PATH" &&
+          cd .testlab-dashboard-publish &&
+          git config user.name "github-actions[bot]" &&
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com" &&
+          git add "$DATA_PATH"
+        } || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::staging dashboard data failed (rc=$rc); skipping the publish"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if git diff --cached --quiet; then
+          echo "No dashboard changes to publish."
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        rc=0
+        {
+          git commit -m "chore: update dashboard data${COMMIT_CONTEXT:+ ($COMMIT_CONTEXT)}" &&
+          git push origin "HEAD:$DASHBOARD_REF"
+        } || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::dashboard commit/push failed (rc=$rc); the dashboard was not updated"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "published=true" >> "$GITHUB_OUTPUT"
+
+    - name: Write publish summary
+      shell: bash
+      env:
+        HISTORY_ID: ${{ steps.ids.outputs.history_id }}
+        EXECUTION_ID: ${{ steps.ids.outputs.execution_id }}
+        PUBLISHED: ${{ steps.publish.outputs.published }}
+        DASHBOARD_URL: ${{ inputs.dashboard_url }}
+      run: |
+        {
+          echo "### Test Lab dashboard"
+          echo ""
+          echo "| Field | Value |"
+          echo "|---|---|"
+          echo "| History ID | \`${HISTORY_ID:-not found}\` |"
+          echo "| Execution ID | \`${EXECUTION_ID:-not found}\` |"
+          echo "| Published | \`${PUBLISHED:-false}\` |"
+          echo "| Dashboard | $DASHBOARD_URL |"
+        } >> "$GITHUB_STEP_SUMMARY"
