@@ -24,14 +24,19 @@ CONSOLE_URL_RE = re.compile(
 
 
 def find_ids(evidence_dirs):
+    # Search recursively: the evidence artifact roots at the platform dir
+    # (e.g. android/), so after download the log sits one level deeper
+    # (evidence/android/evidence/gcloud-output.log), and future layout
+    # changes shouldn't silently break ID recovery.
     for evidence_dir in evidence_dirs:
-        log_path = Path(evidence_dir) / "gcloud-output.log"
-        if not log_path.is_file():
+        base = Path(evidence_dir)
+        if not base.is_dir():
             continue
-        text = log_path.read_text(errors="replace")
-        match = CONSOLE_URL_RE.search(text)
-        if match:
-            return match.group("history_id"), match.group("execution_id"), str(log_path)
+        for log_path in sorted(base.rglob("gcloud-output.log")):
+            text = log_path.read_text(errors="replace")
+            match = CONSOLE_URL_RE.search(text)
+            if match:
+                return match.group("history_id"), match.group("execution_id"), str(log_path)
     return None, None, None
 
 
