@@ -1,0 +1,111 @@
+name: Previous run conclusion (same workflow, same branch)
+description: >
+  Determines the conclusion of the previous completed run of the current
+  workflow on the current branch, so pager workflows can post a green
+  "recovered" message after a red run without maintaining any state store
+  (Linear ticket CUR-1700). One GitHub API call with the ambient token:
+  list the workflow's completed runs for the branch, pick the most recent
+  one that is not the current run, and expose its conclusion.
+
+  Pin this action by SHA from consumer workflows; never by branch or tag.
+
+inputs:
+  github-token:
+    description: >
+      Token used for the runs-list API call. The ambient
+      `${{ github.token }}` is sufficient (`actions: read`); pass a
+      GitHub App token only when querying a different repository's runs
+      is ever needed (not currently supported — the action always queries
+      the current repository).
+    required: true
+  workflow:
+    description: >
+      Workflow file name to query (e.g. `pager.yml`). Defaults to the
+      current workflow's file name, derived from GITHUB_WORKFLOW_REF.
+    required: false
+    default: ""
+  branch:
+    description: >
+      Branch whose runs to query. Defaults to the current branch
+      (GITHUB_HEAD_REF for pull_request events, else GITHUB_REF_NAME).
+    required: false
+    default: ""
+
+outputs:
+  conclusion:
+    description: >
+      Conclusion of the most recent completed run of the workflow on the
+      branch, excluding the current run: `success`, `failure`,
+      `cancelled` (or any other conclusion string GitHub reports, e.g.
+      `skipped`, `timed_out`); `none` when no previous completed run
+      exists; `unknown` when the API call failed (a ::warning:: is
+      emitted and the action stays green — a flaky lookup must not fail
+      the pager itself).
+    value: ${{ steps.lookup.outputs.conclusion }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-composite-action-library/A,F
+    #   Recurring cross-repo CI primitive (pager "recovered" detection)
+    #   implemented once here, not inlined per consumer; contract declared
+    #   via inputs/outputs above.
+    - name: Look up previous completed run's conclusion
+      id: lookup
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        WORKFLOW_INPUT: ${{ inputs.workflow }}
+        BRANCH_INPUT: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+
+        # Default workflow: the current workflow's file name.
+        # GITHUB_WORKFLOW_REF looks like
+        #   owner/repo/.github/workflows/pager.yml@refs/heads/main
+        workflow="$WORKFLOW_INPUT"
+        if [ -z "$workflow" ]; then
+          workflow="${GITHUB_WORKFLOW_REF##*/.github/workflows/}"
+          workflow="${workflow%%@*}"
+        fi
+        if [ -z "$workflow" ]; then
+          echo "::error::Could not determine workflow file name (workflow input empty and GITHUB_WORKFLOW_REF unparsable: '${GITHUB_WORKFLOW_REF:-}')"
+          exit 1
+        fi
+
+        # Default branch: the current branch. For pull_request events
+        # GITHUB_REF_NAME is '<pr>/merge', so prefer GITHUB_HEAD_REF.
+        branch="$BRANCH_INPUT"
+        if [ -z "$branch" ]; then
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}"
+        fi
+        if [ -z "$branch" ]; then
+          echo "::error::Could not determine branch (branch input empty and GITHUB_HEAD_REF/GITHUB_REF_NAME unset)"
+          exit 1
+        fi
+
+        # One API call: the workflow's completed runs on the branch,
+        # newest first. per_page=5 gives headroom to skip the current
+        # run (which is 'completed' from its own final job's viewpoint
+        # in re-run scenarios) plus concurrent siblings. An API failure
+        # is soft: the pager consuming this must not go red because the
+        # recovered-detection lookup was flaky — it reports `unknown`
+        # and the caller treats that as "don't post a recovered message".
+        rc=0
+        resp=$(gh api -X GET \
+          "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+          -f "branch=${branch}" \
+          -f "status=completed" \
+          -F "per_page=5") || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::previous-run-conclusion: GitHub API call failed (rc=$rc) for workflow '${workflow}' branch '${branch}'. Reporting conclusion=unknown."
+          echo "conclusion=unknown" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        conclusion=$(printf '%s' "$resp" | jq -r \
+          --arg rid "$GITHUB_RUN_ID" \
+          '[.workflow_runs[] | select((.id | tostring) != $rid)][0].conclusion // "none"')
+
+        echo "Previous completed run of '${workflow}' on '${branch}': ${conclusion}"
+        echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"

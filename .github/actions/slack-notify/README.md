@@ -26,6 +26,8 @@ secret rotation.
    - `groups:read` (only if any routed channel is private)
    - `bookmarks:read` + `bookmarks:write` (only when `bookmark-title` is
      set — see [Channel bookmark](#channel-bookmark))
+   - `users:read.email` + `im:write` (only when `dm-user-email` is set —
+     see [DM copy](#dm-copy))
 
 ## Inputs
 
@@ -38,6 +40,7 @@ secret rotation.
 | `bookmark-title` | no     | `""`                             | When non-empty, maintain a channel bookmark with this exact title pointing at the just-posted message. The title is the dedup key: an existing bookmark with the same title is edited; otherwise a new one is added. Opt-in (no auto-on). See [Channel bookmark](#channel-bookmark). |
 | `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                                                                 |
 | `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                                                          |
+| `dm-user-email` | no      | `""`                             | Optional email of a Slack workspace user who also receives the message as a DM after the channel posts. Failures are soft (warning only). See [DM copy](#dm-copy). |
 | `thread-reply-text` | no       | `""`                             | Optional mrkdwn body posted as a thread reply to the main message in each routed channel. Failures are soft (warning only). |
 
 ## Outputs
@@ -47,6 +50,7 @@ secret rotation.
 | `channel-ids`  | Comma-separated list of channel IDs the message was posted to.                                                                       |
 | `message-tss`  | Comma-separated chat.postMessage `ts` values, in the same order as `channel-ids`.                                                    |
 | `bookmark-status` | Comma-separated per-channel bookmark outcome, aligned with `channel-ids`: `bookmarked` (added or edited), `skipped` (no `bookmark-title`), or `soft-failed` (Slack API error; deploy stayed green). |
+| `dm-status`    | Outcome of the optional `dm-user-email` copy: `sent` (user resolved and DMed), `skipped` (no `dm-user-email`), or `soft-failed` (lookup or DM failed; warning emitted, action stayed green). |
 
 ## Routing file shape
 
@@ -190,6 +194,37 @@ token (only when `bookmark-title` is set).
 bookmark cycle entirely. There is no auto-on / "always run for
 `deploy-success*`" mode — bookmarks are opt-in, since not every caller
 wants persistent channel-level state.
+
+## DM copy
+
+When `dm-user-email` is non-empty, the action — after the normal channel
+routing/posting — resolves the Slack user via `users.lookupByEmail` and
+sends the same `text`/`blocks` as a direct message (`chat.postMessage`
+to the user ID). Use this when a specific person should be paged in
+addition to the routed channels (e.g. the on-call owner of a pager
+workflow).
+
+**Failures are soft.** A lookup failure (no workspace user with that
+email, missing `users:read.email` scope) or a DM post failure (missing
+`im:write` scope) emits a `::warning::` and sets `dm-status` to
+`soft-failed` — the action stays green, because the routed channels
+already received the message. `dm-status` is `sent` on success and
+`skipped` when the input is empty.
+
+**Required scopes.** `users:read.email` (lookup) + `im:write` (open the
+DM conversation) on the bot token — only when `dm-user-email` is set.
+
+**Example.**
+
+```yaml
+- uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<sha>
+  with:
+    event: deploy-failure
+    env:   prod
+    text:  ":rotating_light: prod deploy failed — <...|run>"
+    dm-user-email: oncall@example.org
+    slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+```
 
 ## Thread-reply pattern
 

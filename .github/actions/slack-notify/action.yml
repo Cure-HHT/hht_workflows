@@ -18,6 +18,12 @@ description: >
   deploy message" approach (which Slack's pinned_item rendering made
   visually noisy for Block Kit messages).
 
+  When `dm-user-email` is provided, the action additionally resolves the
+  Slack user via users.lookupByEmail and sends the same text/blocks as a
+  direct message after the channel posts. DM delivery is best-effort:
+  lookup or DM failures are soft (::warning::, `dm-status: soft-failed`)
+  because the routed channels have already received the message.
+
   Required Slack bot scopes on the supplied token:
     - chat:write
     - channels:read    (conversations.list)
@@ -25,6 +31,8 @@ description: >
     - groups:read      (only if any routed channel is private)
     - bookmarks:read   (only when bookmark-title is set — bookmarks.list)
     - bookmarks:write  (only when bookmark-title is set — bookmarks.add/edit)
+    - users:read.email (only when dm-user-email is set — users.lookupByEmail)
+    - im:write         (only when dm-user-email is set — open the DM conversation)
 
 inputs:
   event:
@@ -86,6 +94,19 @@ inputs:
     description: Path to routing YAML, relative to caller's workspace.
     required: false
     default: .github/slack-channels.yml
+  dm-user-email:
+    description: >
+      Optional email address of a Slack workspace user who should also
+      receive the message as a direct message, after the normal channel
+      routing/posting. The user is resolved via users.lookupByEmail and
+      the same text/blocks are sent via chat.postMessage to the user ID.
+      Lookup or DM failures are soft (::warning::, action stays green,
+      `dm-status: soft-failed`) — the routed channels already got the
+      message, so a DM-side hiccup must not paint the run red. Requires
+      `users:read.email` + `im:write` on the bot token. Empty (default)
+      disables the DM entirely.
+    required: false
+    default: ""
   thread-reply-text:
     description: >
       Optional mrkdwn body posted as a thread reply on the main message,
@@ -117,6 +138,14 @@ outputs:
       stays green and the channel's bookmark may still reference the
       prior message).
     value: ${{ steps.post.outputs.bookmark-status }}
+  dm-status:
+    description: >
+      Outcome of the optional `dm-user-email` copy. One of `sent` (user
+      resolved and DM delivered), `skipped` (no dm-user-email given), or
+      `soft-failed` (users.lookupByEmail or the DM chat.postMessage
+      errored; a ::warning:: was emitted and the action stayed green —
+      the routed channels already received the message).
+    value: ${{ steps.dm.outputs.dm-status }}
 
 runs:
   using: composite
@@ -507,3 +536,79 @@ runs:
             fi
           ) || echo "::warning::thread-reply to $ch (ts $ts) failed: unexpected error (curl/jq aborted)"
         done
+
+    # Implements: HHT-OPS-composite-action-library/A,F
+    #   Deploy-notification primitive lives here, not inlined in consumers;
+    #   dm-user-email/dm-status extend the declared input/output contract.
+    - name: Send DM copy to dm-user-email (opt-in, soft-fail)
+      id: dm
+      shell: bash
+      env:
+        SLACK_TOKEN: ${{ inputs.slack-token }}
+        DM_EMAIL: ${{ inputs.dm-user-email }}
+        TEXT: ${{ inputs.text }}
+        BLOCKS: ${{ inputs.blocks }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "$DM_EMAIL" ]; then
+          echo "dm-status=skipped" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # All DM failures are soft: the routed channels already received
+        # the message (the post step above would have failed the action
+        # otherwise), so a lookup/DM-side hiccup must not paint the run
+        # red. The outcome is reported via `dm-status`.
+        soft_fail() {
+          echo "::warning::$1"
+          echo "dm-status=soft-failed" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        # 1. Resolve the workspace user by email. Requires the
+        # users:read.email bot scope.
+        lookup_resp=$(curl -sS --max-time 15 -G \
+          -H "Authorization: Bearer $SLACK_TOKEN" \
+          --data-urlencode "email=$DM_EMAIL" \
+          'https://slack.com/api/users.lookupByEmail') || lookup_resp=""
+
+        if ! printf '%s' "$lookup_resp" | jq -e . >/dev/null 2>&1; then
+          soft_fail "Slack users.lookupByEmail returned non-JSON response. DM not sent (channels already notified)."
+        fi
+        if [ "$(echo "$lookup_resp" | jq -r '.ok')" != "true" ]; then
+          lookup_err=$(echo "$lookup_resp" | jq -r '.error // "unknown"')
+          soft_fail "Slack users.lookupByEmail failed: $lookup_err. Bot may need 'users:read.email' scope, or no workspace user has this email. DM not sent (channels already notified)."
+        fi
+        user_id=$(echo "$lookup_resp" | jq -r '.user.id')
+
+        # 2. Post the same text/blocks to the user ID. chat.postMessage
+        # opens the IM conversation implicitly (requires im:write). The
+        # blocks JSON was already validated by the post step above — a
+        # malformed payload never reaches this step.
+        payload=$(jq -n \
+          --arg ch "$user_id" \
+          --arg txt "$TEXT" \
+          '{channel: $ch, text: $txt}')
+
+        if [ -n "$BLOCKS" ]; then
+          payload=$(printf '%s' "$payload" \
+            | jq --argjson blks "$BLOCKS" '. + {blocks: $blks}')
+        fi
+
+        dm_resp=$(curl -sS --max-time 15 -X POST \
+          -H "Authorization: Bearer $SLACK_TOKEN" \
+          -H 'Content-Type: application/json; charset=utf-8' \
+          --data "$payload" \
+          'https://slack.com/api/chat.postMessage') || dm_resp=""
+
+        if ! printf '%s' "$dm_resp" | jq -e . >/dev/null 2>&1; then
+          soft_fail "Slack chat.postMessage (DM to $user_id) returned non-JSON response. DM not sent (channels already notified)."
+        fi
+        if [ "$(echo "$dm_resp" | jq -r '.ok')" != "true" ]; then
+          dm_err=$(echo "$dm_resp" | jq -r '.error // "unknown"')
+          soft_fail "Slack chat.postMessage (DM to $user_id) failed: $dm_err. Bot may need 'im:write' scope. Channels already notified."
+        fi
+
+        echo "DM sent to user $user_id (ts=$(echo "$dm_resp" | jq -r '.ts'))"
+        echo "dm-status=sent" >> "$GITHUB_OUTPUT"
