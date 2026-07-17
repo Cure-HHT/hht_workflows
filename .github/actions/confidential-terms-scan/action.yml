@@ -75,13 +75,11 @@ runs:
 
     - name: Fetch CONFIDENTIAL_PROHIBIT_LIST via Doppler OIDC
       if: inputs.test_terms == ''
-      uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534  # v2.0.0
+      uses: ./.github/actions/doppler-oidc-auth
       with:
-        auth-method: oidc
-        doppler-identity-id: ${{ inputs.doppler_identity_id }}
-        doppler-project: ${{ inputs.doppler_project }}
-        doppler-config: ${{ inputs.doppler_config }}
-        inject-env-vars: true
+        doppler_identity_id: ${{ inputs.doppler_identity_id }}
+        doppler_project: ${{ inputs.doppler_project }}
+        doppler_config: ${{ inputs.doppler_config }}
 
     - name: Scan four surfaces
       shell: bash
