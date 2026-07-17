@@ -53,6 +53,12 @@ def test_scan_content_lines_reports_location_never_text():
     assert scan_content_lines(p, lines) == [("content", "src/a.py:3")]
 
 
+def test_scan_content_lines_masks_matching_path_segments():
+    p = build_pattern(["zebra"])
+    findings = scan_content_lines(p, [("docs/zebra.md", 2, "a zebra line")])
+    assert findings == [("content", "docs/***:2")]
+
+
 def test_mask_path_masks_only_matching_segments():
     p = build_pattern(["zebra"])
     assert mask_path("docs/zebra/notes.md", p) == ("docs/%s/notes.md" % MASK, True)

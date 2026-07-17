@@ -56,6 +56,7 @@ def fetch_from_doppler(project, config):
     except FileNotFoundError:
         return None
     if proc.returncode != 0:
+        print("%s: doppler exited with status %d" % (PROG, proc.returncode), file=sys.stderr)
         return None
     return proc.stdout.rstrip("\r\n")
 
@@ -100,23 +101,28 @@ def main(argv=None):
     )
     to_ref = args.to_ref or os.environ.get("PRE_COMMIT_TO_REF") or "HEAD"
 
-    findings = []
-    findings += scan_content_lines(
-        pattern,
-        (
-            (path, lineno, text)
-            for path, lineno, text in gitio.added_lines(from_ref, to_ref)
-            if not is_allowed(path, allow)
-        ),
-    )
-    findings += scan_paths(
-        pattern,
-        [
-            path
-            for path in gitio.added_or_renamed_paths(from_ref, to_ref)
-            if not is_allowed(path, allow)
-        ],
-    )
+    try:
+        findings = []
+        findings += scan_content_lines(
+            pattern,
+            (
+                (path, lineno, text)
+                for path, lineno, text in gitio.added_lines(from_ref, to_ref)
+                if not is_allowed(path, allow)
+            ),
+        )
+        findings += scan_paths(
+            pattern,
+            [
+                path
+                for path in gitio.added_or_renamed_paths(from_ref, to_ref)
+                if not is_allowed(path, allow)
+            ],
+        )
+    except gitio.GitError as exc:
+        print("%s: git error: %s" % (PROG, exc), file=sys.stderr)
+        return 2
+
     findings += scan_metadata(
         pattern,
         {

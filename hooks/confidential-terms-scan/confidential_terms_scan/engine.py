@@ -26,15 +26,6 @@ def build_pattern(terms):
     return re.compile(r"\b(?:%s)\b" % alternation, re.IGNORECASE)
 
 
-def scan_content_lines(pattern, lines):
-    """lines: iterable of (path, lineno, text). Location is path:lineno."""
-    return [
-        ("content", "%s:%d" % (path, lineno))
-        for path, lineno, text in lines
-        if pattern.search(text)
-    ]
-
-
 def mask_path(path, pattern):
     """Replace each matching path segment with MASK. -> (masked, hit)."""
     hit = False
@@ -46,6 +37,15 @@ def mask_path(path, pattern):
         else:
             out.append(segment)
     return "/".join(out), hit
+
+
+def scan_content_lines(pattern, lines):
+    """lines: iterable of (path, lineno, text). Location is masked-path:lineno."""
+    return [
+        ("content", "%s:%d" % (mask_path(path, pattern)[0], lineno))
+        for path, lineno, text in lines
+        if pattern.search(text)
+    ]
 
 
 def scan_paths(pattern, paths):
