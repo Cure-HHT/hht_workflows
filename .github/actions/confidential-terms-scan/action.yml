@@ -1,0 +1,109 @@
+# Confidential Terms Scan — composite action.
+#
+# Fetches CONFIDENTIAL_PROHIBIT_LIST from the consumer's admin-owned
+# scan-* Doppler project via OIDC (env only — never disk), then scans
+# the PR range across four surfaces: added content lines, file
+# basenames, path segments of added/renamed paths, and PR metadata
+# (title, body, branch name). Reports counts, file:line locations,
+# masked paths, and metadata field names only; matched text is never
+# echoed.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file).
+# Consumers SHA-pin:
+#   uses: Cure-HHT/hht_workflows/.github/actions/confidential-terms-scan@<sha>
+# Caller MUST `actions/checkout` with fetch-depth: 0 first (the scan
+# diffs base..head).
+
+name: 'Confidential Terms Scan'
+description: 'Scan added content, names, paths, and PR metadata for confidential terms fetched at scan time from Doppler'
+
+inputs:
+  doppler_identity_id:
+    description: >
+      UUID of the consumer's scan-time Doppler identity (read access to
+      exactly its own scan-* project). Pass via vars.<NAME>; do NOT
+      hardcode. Required unless test_terms is set.
+    required: false
+    default: ''
+  doppler_project:
+    description: >
+      The consumer's scan-* Doppler project slug, e.g. 'scan-hht-diary'.
+      Required unless test_terms is set.
+    required: false
+    default: ''
+  doppler_config:
+    description: Doppler config slug within the scan-* project.
+    required: false
+    default: 'prod'
+  base_ref:
+    description: >
+      Base commit for the diff. Defaults to the PR base SHA on
+      pull_request events; required for other events.
+    required: false
+    default: ''
+  head_ref:
+    description: >
+      Head commit for the diff. Defaults to the PR head SHA on
+      pull_request events; required for other events.
+    required: false
+    default: ''
+  test_terms:
+    description: >
+      INTERNAL (readiness tests in hht_workflows only): comma-separated
+      synthetic terms; skips the Doppler fetch. Consumers must never set
+      this — a term list in workflow YAML self-discloses the terms.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-confidential-keywords-scrubbing/C,D
+    # Implements: HHT-OPS-composite-action-library/A,B,F
+    - name: Validate inputs
+      shell: bash
+      env:
+        TEST_TERMS: ${{ inputs.test_terms }}
+        DOPPLER_IDENTITY_ID: ${{ inputs.doppler_identity_id }}
+        DOPPLER_PROJECT: ${{ inputs.doppler_project }}
+      run: |
+        set -euo pipefail
+        if [ -z "$TEST_TERMS" ] && { [ -z "$DOPPLER_IDENTITY_ID" ] || [ -z "$DOPPLER_PROJECT" ]; }; then
+          echo "::error::confidential-terms-scan needs doppler_identity_id + doppler_project (or test_terms for readiness tests)"
+          exit 1
+        fi
+
+    - name: Fetch CONFIDENTIAL_PROHIBIT_LIST via Doppler OIDC
+      if: inputs.test_terms == ''
+      uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534  # v2.0.0
+      with:
+        auth-method: oidc
+        doppler-identity-id: ${{ inputs.doppler_identity_id }}
+        doppler-project: ${{ inputs.doppler_project }}
+        doppler-config: ${{ inputs.doppler_config }}
+        inject-env-vars: true
+
+    - name: Scan four surfaces
+      shell: bash
+      env:
+        TEST_TERMS: ${{ inputs.test_terms }}
+        FROM_REF: ${{ inputs.base_ref != '' && inputs.base_ref || github.event.pull_request.base.sha }}
+        TO_REF: ${{ inputs.head_ref != '' && inputs.head_ref || github.event.pull_request.head.sha }}
+        BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        if [ -n "$TEST_TERMS" ]; then
+          export CONFIDENTIAL_PROHIBIT_LIST="$TEST_TERMS"
+        fi
+        if [ -z "${CONFIDENTIAL_PROHIBIT_LIST+x}" ]; then
+          echo "::error::CONFIDENTIAL_PROHIBIT_LIST was not injected by the Doppler fetch"
+          exit 1
+        fi
+        if [ -z "$FROM_REF" ] || [ -z "$TO_REF" ]; then
+          echo "::error::base_ref/head_ref are required outside pull_request events"
+          exit 1
+        fi
+        export PYTHONPATH="$GITHUB_ACTION_PATH/../../../hooks/confidential-terms-scan"
+        python3 -m confidential_terms_scan --from-ref "$FROM_REF" --to-ref "$TO_REF"
