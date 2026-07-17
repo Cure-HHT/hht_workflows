@@ -1,0 +1,3 @@
+# Paths that legitimately contain scanner fixture literals.
+# Globs only - never terms. See hooks/confidential-terms-scan/README.md.
+.github/workflows/readiness-checks.yml

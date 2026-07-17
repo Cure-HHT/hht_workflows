@@ -20,13 +20,22 @@ Doppler project; it is never committed, written to disk, echoed, or logged.
 
 ## Consumer wiring (pre-push)
 
+This hook's `stages` is `pre-push`; it only runs if the consumer repo has
+pre-push hooks installed. `pre-commit install` alone (the default, hook-type
+`pre-commit`) does not install it — run
+`pre-commit install --hook-type pre-push` as well, or set
+`default_install_hook_types: [pre-commit, pre-push]` in the consumer's
+`.pre-commit-config.yaml` so a plain `pre-commit install` covers both.
+
 ```yaml
 # .pre-commit-config.yaml
-- repo: https://github.com/Cure-HHT/hht_workflows
-  rev: <tag>
-  hooks:
-    - id: confidential-terms-scan
-      args: [--doppler-project=scan-<consumer>, --on-fetch-error=warn]
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: https://github.com/Cure-HHT/hht_workflows
+    rev: <tag>
+    hooks:
+      - id: confidential-terms-scan
+        args: [--doppler-project=scan-<consumer>, --on-fetch-error=warn]
 ```
 
 `--on-fetch-error=warn` degrades to a loud warning when the developer's

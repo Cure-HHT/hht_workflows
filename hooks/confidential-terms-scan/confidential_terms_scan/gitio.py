@@ -56,7 +56,9 @@ def added_lines(from_ref, to_ref):
     lineno = 0
     for line in out.splitlines():
         if line.startswith("+++ b/"):
-            path = line[len("+++ b/"):]
+            # git appends a trailing tab to the header when the path
+            # contains spaces.
+            path = line[len("+++ b/"):].rstrip("\t")
         elif line.startswith("@@"):
             match = _HUNK_RE.match(line)
             if not match:

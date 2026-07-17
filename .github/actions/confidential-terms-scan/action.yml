@@ -74,12 +74,18 @@ runs:
         fi
 
     - name: Fetch CONFIDENTIAL_PROHIBIT_LIST via Doppler OIDC
+      # Same fetch contract as .github/actions/doppler-oidc-auth (the
+      # canonical home of this pin; keep the two SHAs in lockstep). Invoked
+      # directly here because a relative `uses:` inside a composite action
+      # resolves against the consumer's workspace, not this repo.
       if: inputs.test_terms == ''
-      uses: ./.github/actions/doppler-oidc-auth
+      uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534  # v2.0.0
       with:
-        doppler_identity_id: ${{ inputs.doppler_identity_id }}
-        doppler_project: ${{ inputs.doppler_project }}
-        doppler_config: ${{ inputs.doppler_config }}
+        auth-method: oidc
+        doppler-identity-id: ${{ inputs.doppler_identity_id }}
+        doppler-project: ${{ inputs.doppler_project }}
+        doppler-config: ${{ inputs.doppler_config }}
+        inject-env-vars: true
 
     - name: Scan four surfaces
       shell: bash
@@ -103,5 +109,8 @@ runs:
           echo "::error::base_ref/head_ref are required outside pull_request events"
           exit 1
         fi
+        # base.sha is the base-branch tip, not the fork point: resolve to
+        # the merge base so base-branch drift can't produce false positives.
+        FROM_REF="$(git merge-base "$FROM_REF" "$TO_REF")"
         export PYTHONPATH="$GITHUB_ACTION_PATH/../../../hooks/confidential-terms-scan"
         python3 -m confidential_terms_scan --from-ref "$FROM_REF" --to-ref "$TO_REF"

@@ -88,3 +88,11 @@ def test_non_ascii_path_is_returned_unescaped(repo):
     git(repo, "commit", "-qm", "unicode")
     assert added_or_renamed_paths(base, "HEAD") == ["résumé.txt"]
     assert ("résumé.txt", 1, "alpha") in list(added_lines(base, "HEAD"))
+
+
+def test_path_with_spaces_has_no_trailing_tab(repo):
+    base = head(repo)
+    (repo / "space name.txt").write_text("alpha\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "space")
+    assert ("space name.txt", 1, "alpha") in list(added_lines(base, "HEAD"))

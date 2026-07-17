@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import gitio
 from .engine import (
+    MASK,
     build_pattern,
     is_allowed,
     load_allow_globs,
@@ -120,7 +121,7 @@ def main(argv=None):
             ],
         )
     except gitio.GitError as exc:
-        print("%s: git error: %s" % (PROG, exc), file=sys.stderr)
+        print("%s: git error: %s" % (PROG, pattern.sub(MASK, str(exc))), file=sys.stderr)
         return 2
 
     findings += scan_metadata(
