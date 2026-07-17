@@ -20,6 +20,7 @@ create a circular dependency.
     - `no-op` (placeholder; replace with real jobs as actions are added)
     - `release-notes-publish` (release-notes-publish smoke; covers the composite action end-to-end)
     - `build-urs` (URS compile readiness; compiles the synthetic fixture to PDF + DOCX end-to-end)
+    - `confidential-terms-scan` (scanner action readiness; test_terms happy path + all-four-surfaces negative fixture, plus a Doppler-gated nested-composite check)
     - `Release Notes Tests` (pytest suite for the hook + publish action)
 - Require conversation resolution before merging: enabled
 - Enforce all the above settings on admins: enabled (`enforce_admins=true`)
@@ -47,6 +48,7 @@ ignored by the GitHub API.
       -F 'required_status_checks[contexts][]=no-op' \
       -F 'required_status_checks[contexts][]=release-notes-publish' \
       -F 'required_status_checks[contexts][]=build-urs' \
+      -F 'required_status_checks[contexts][]=confidential-terms-scan' \
       -F 'required_status_checks[contexts][]=Release Notes Tests' \
       -F required_conversation_resolution=true \
       -F enforce_admins=true \
@@ -59,6 +61,10 @@ those are display affordances; the stored name and the matcher use the
 bare job name only.) As jobs are added, append more
 `-F 'required_status_checks[contexts][]=...'` entries with the new
 bare job names.
+
+`confidential-terms-scan` is added to this doc in the same PR that adds
+the readiness job; applying it to the live protection rule via the
+`gh api` invocation above happens when that PR merges to `main`.
 
 ## Deferred: review enforcement
 
