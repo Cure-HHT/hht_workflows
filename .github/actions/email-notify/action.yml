@@ -1,0 +1,241 @@
+name: Email notify (Gmail API via WIF + domain-wide delegation)
+description: >
+  Sends a plain-text email via the Gmail API as an org Workspace sending
+  identity, using WIF-minted credentials plus domain-wide delegation —
+  no static keys, no SMTP credentials. The caller MUST already be
+  authenticated to GCP (e.g. via this repo's gcp-wif-auth composite) as
+  an identity allowed to sign JWTs as the Gmail service account
+  (roles/iam.serviceAccountTokenCreator on it). The action then mints a
+  Gmail-scoped access token by signing a JWT via iamcredentials signJwt
+  with sub=<sender> (domain-wide delegation) and exchanging it at the
+  OAuth token endpoint, and calls gmail users.messages.send.
+
+  Email addresses are masked in log output (first char + domain, e.g.
+  o***@example.org) so run logs don't accumulate full recipient lists.
+
+  Pin this action by SHA from consumer workflows; never by branch or tag.
+
+inputs:
+  to:
+    description: >
+      Recipient email address(es), comma-separated.
+    required: true
+  subject:
+    description: Subject line (single line; CR/LF are rejected).
+    required: true
+  body:
+    description: Plain-text message body (UTF-8).
+    required: true
+  sender:
+    description: >
+      Workspace email to send as (e.g. support@anspar.org). Domain-wide
+      delegation lets the Gmail SA impersonate this user; the Workspace
+      admin must have granted the SA's client the gmail.send scope.
+    required: true
+  gmail-service-account:
+    description: >
+      Email of the Gmail service account with domain-wide delegation
+      (e.g. org-gmail-sender@cure-hht-admin.iam.gserviceaccount.com).
+      The WIF-authenticated caller identity must hold
+      roles/iam.serviceAccountTokenCreator on this SA.
+    required: true
+  cc:
+    description: Optional Cc address(es), comma-separated.
+    required: false
+    default: ""
+  soft-fail:
+    description: >
+      When "true", a send failure emits a ::warning:: and sets
+      `status: failed` but does NOT fail the action — use this for
+      deploy notifications, where a mail-side hiccup must not break the
+      deploy. Default "false": a send failure fails the action.
+    required: false
+    default: "false"
+
+outputs:
+  message-id:
+    description: >
+      Gmail message id of the sent message; empty when the send failed.
+    value: ${{ steps.send.outputs.message-id }}
+  status:
+    description: >
+      `sent` on success, `failed` on any failure (auth, JWT mint/exchange,
+      or Gmail API error). With soft-fail "true" the action stays green
+      on failure; callers can branch on this output.
+    value: ${{ steps.send.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-identity-over-keys/A,D
+    #   Gmail access is minted from the job's WIF credentials (signJwt as
+    #   the DWD SA, exchanged for a <1h Gmail-scoped token); no SA JSON
+    #   key and no SMTP password exist anywhere.
+    # Implements: HHT-OPS-composite-action-library/A,F
+    #   Deploy-notification primitive implemented once here, not inlined
+    #   in consumer workflow YAML; contract declared via inputs/outputs.
+    - name: Mint Gmail token via signJwt and send via Gmail API
+      id: send
+      shell: bash
+      env:
+        TO: ${{ inputs.to }}
+        CC: ${{ inputs.cc }}
+        SUBJECT: ${{ inputs.subject }}
+        BODY: ${{ inputs.body }}
+        SENDER: ${{ inputs.sender }}
+        GMAIL_SA: ${{ inputs.gmail-service-account }}
+        SOFT_FAIL: ${{ inputs.soft-fail }}
+      run: |
+        set -euo pipefail
+
+        # Single failure funnel: always emit the status/message-id
+        # outputs, then either warn (soft-fail) or error out.
+        fail() {
+          echo "status=failed" >> "$GITHUB_OUTPUT"
+          echo "message-id=" >> "$GITHUB_OUTPUT"
+          if [ "$SOFT_FAIL" = "true" ]; then
+            echo "::warning::email-notify: $1 (soft-fail enabled; action stays green)"
+            exit 0
+          fi
+          echo "::error::email-notify: $1"
+          exit 1
+        }
+
+        # Mask an address for logs: first char of the local part + the
+        # domain (e.g. o***@example.org). Same intent as the portal's
+        # maskEmail — never echo full addresses into run logs.
+        mask_addr() {
+          local a="$1"
+          case "$a" in
+            ?*@?*) printf '%s***@%s' "${a:0:1}" "${a#*@}" ;;
+            *)     printf '***' ;;
+          esac
+        }
+        mask_list() {
+          local out="" addr
+          IFS=',' read -ra addrs <<< "$1"
+          for addr in "${addrs[@]}"; do
+            # Trim surrounding whitespace.
+            addr="${addr#"${addr%%[![:space:]]*}"}"
+            addr="${addr%"${addr##*[![:space:]]}"}"
+            [ -z "$addr" ] && continue
+            out="${out:+$out, }$(mask_addr "$addr")"
+          done
+          printf '%s' "$out"
+        }
+
+        # Reject CR/LF in header-bound inputs — a newline in an address
+        # or subject would be header injection into the RFC822 message.
+        for pair in "to:$TO" "cc:$CC" "subject:$SUBJECT" "sender:$SENDER"; do
+          val="${pair#*:}"
+          if [ "$val" != "${val//$'\n'/}" ] || [ "$val" != "${val//$'\r'/}" ]; then
+            fail "input '${pair%%:*}' contains a newline (RFC822 header injection rejected)"
+          fi
+        done
+
+        echo "Sending as $(mask_addr "$SENDER") to $(mask_list "$TO")${CC:+ (cc: $(mask_list "$CC"))}"
+
+        # 1. Get an access token for the WIF-authenticated job identity.
+        # Precondition: the caller already ran gcp-wif-auth (or
+        # equivalent); google-github-actions/auth exports ADC env vars
+        # that gcloud picks up. We deliberately do NOT re-implement auth
+        # here (and never touch a JSON key).
+        rc=0
+        adc_token=$(gcloud auth print-access-token 2>/dev/null) || rc=$?
+        if [ "$rc" -ne 0 ] || [ -z "$adc_token" ]; then
+          fail "could not obtain an access token from gcloud. Did the caller authenticate first (e.g. via the gcp-wif-auth composite action)?"
+        fi
+
+        # 2. Sign a JWT as the Gmail SA with sub=<sender> (domain-wide
+        # delegation). The job identity needs
+        # roles/iam.serviceAccountTokenCreator on the SA.
+        now=$(date +%s)
+        exp=$((now + 3600))
+        jwt_claims=$(jq -n \
+          --arg iss "$GMAIL_SA" \
+          --arg sub "$SENDER" \
+          --arg aud "https://oauth2.googleapis.com/token" \
+          --argjson iat "$now" \
+          --argjson exp "$exp" \
+          '{
+            iss: $iss,
+            sub: $sub,
+            scope: "https://www.googleapis.com/auth/gmail.send",
+            aud: $aud,
+            iat: $iat,
+            exp: $exp
+          }')
+
+        sign_resp=$(curl -sS --max-time 15 -X POST \
+          "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GMAIL_SA}:signJwt" \
+          -H "Authorization: Bearer ${adc_token}" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg payload "$jwt_claims" '{payload: $payload}')") || sign_resp=""
+
+        if ! printf '%s' "$sign_resp" | jq -e . >/dev/null 2>&1; then
+          fail "iamcredentials signJwt returned non-JSON response"
+        fi
+        signed_jwt=$(printf '%s' "$sign_resp" | jq -r '.signedJwt // empty')
+        if [ -z "$signed_jwt" ]; then
+          sign_err=$(printf '%s' "$sign_resp" | jq -r '.error.message // "unknown"')
+          fail "iamcredentials signJwt failed for ${GMAIL_SA}: ${sign_err}. Does the WIF identity hold roles/iam.serviceAccountTokenCreator on the SA?"
+        fi
+
+        # 3. Exchange the signed JWT for a Gmail-scoped access token.
+        # This is where domain-wide delegation is enforced: the exchange
+        # fails unless the Workspace admin granted the SA's client the
+        # gmail.send scope for the sender's domain.
+        exch_resp=$(curl -sS --max-time 15 -X POST \
+          'https://oauth2.googleapis.com/token' \
+          -H 'Content-Type: application/x-www-form-urlencoded' \
+          --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
+          --data-urlencode "assertion=${signed_jwt}") || exch_resp=""
+
+        if ! printf '%s' "$exch_resp" | jq -e . >/dev/null 2>&1; then
+          fail "OAuth token exchange returned non-JSON response"
+        fi
+        gmail_token=$(printf '%s' "$exch_resp" | jq -r '.access_token // empty')
+        if [ -z "$gmail_token" ]; then
+          exch_err=$(printf '%s' "$exch_resp" | jq -r '.error_description // .error // "unknown"')
+          fail "OAuth token exchange failed: ${exch_err}. Check the SA's domain-wide delegation grant (gmail.send scope) for ${GMAIL_SA}."
+        fi
+
+        # 4. Build the RFC822 message (CRLF line endings) and base64url
+        # encode it, per the Gmail API's `raw` field requirement.
+        # Each header value goes through printf %s (never %b) so
+        # backslash sequences in inputs are data, not escapes.
+        raw=$(
+          {
+            printf 'From: %s\r\n' "$SENDER"
+            printf 'To: %s\r\n' "$TO"
+            if [ -n "$CC" ]; then
+              printf 'Cc: %s\r\n' "$CC"
+            fi
+            printf 'Subject: %s\r\n' "$SUBJECT"
+            printf 'MIME-Version: 1.0\r\n'
+            printf 'Content-Type: text/plain; charset=utf-8\r\n'
+            printf '\r\n'
+            printf '%s' "$BODY"
+          } | base64 | tr '+/' '-_' | tr -d '=\n'
+        )
+
+        # 5. Send. userId 'me' resolves to the delegated sender the
+        # token was minted for.
+        send_resp=$(curl -sS --max-time 30 -X POST \
+          'https://gmail.googleapis.com/gmail/v1/users/me/messages/send' \
+          -H "Authorization: Bearer ${gmail_token}" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg raw "$raw" '{raw: $raw}')") || send_resp=""
+
+        if ! printf '%s' "$send_resp" | jq -e . >/dev/null 2>&1; then
+          fail "Gmail messages.send returned non-JSON response"
+        fi
+        message_id=$(printf '%s' "$send_resp" | jq -r '.id // empty')
+        if [ -z "$message_id" ]; then
+          send_err=$(printf '%s' "$send_resp" | jq -r '.error.message // "unknown"')
+          fail "Gmail messages.send failed: ${send_err}"
+        fi
+
+        echo "Email sent (messageId: ${message_id}) to $(mask_list "$TO")"
+        echo "message-id=${message_id}" >> "$GITHUB_OUTPUT"
+        echo "status=sent" >> "$GITHUB_OUTPUT"

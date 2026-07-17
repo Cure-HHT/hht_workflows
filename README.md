@@ -27,7 +27,9 @@ each action's README for usage):
 
 | Action | Purpose |
 | --- | --- |
-| [`slack-notify`](.github/actions/slack-notify/) | Resolves channel routing from caller's `slack-channels.yml` and posts via Slack `chat.postMessage` |
+| [`slack-notify`](.github/actions/slack-notify/) | Resolves channel routing from caller's `slack-channels.yml` and posts via Slack `chat.postMessage`; optionally DMs a user resolved by email (`dm-user-email`) |
+| [`email-notify`](.github/actions/email-notify/) | Send an email via the Gmail API as the org sending identity using WIF + domain-wide delegation — no static keys, no SMTP |
+| [`previous-run-conclusion`](.github/actions/previous-run-conclusion/) | Report the previous completed run's conclusion for the current workflow/branch, so pager workflows can post green "recovered" messages after red runs |
 | [`release-notes-publish`](.github/actions/release-notes-publish/) | Slice the current version's section from `RELEASE_NOTES.md` + pending fragments and emit as step outputs for downstream Slack/release tooling |
 | [`confidential-terms-scan`](.github/actions/confidential-terms-scan/) | Four-surface confidential-terms scan (content, names, paths, PR metadata); prohibit list fetched at scan time from the consumer's scan-* Doppler project |
 | [`firebase-test-lab-android`](.github/actions/firebase-test-lab-android/) | Run an Android instrumentation matrix on Firebase Test Lab; capture evidence + catalog, expose the matrix exit code as an output |
