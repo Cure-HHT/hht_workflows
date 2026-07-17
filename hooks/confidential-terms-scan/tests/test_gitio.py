@@ -70,3 +70,21 @@ def test_resolve_from_ref_zero_sha_falls_back_to_empty_tree(repo):
     # fails and the empty tree (scan everything) is returned.
     assert resolve_from_ref(ZERO_SHA, "origin/main") == EMPTY_TREE
     assert resolve_from_ref(None, "origin/main") == EMPTY_TREE
+
+
+def test_added_lines_from_empty_tree_scans_everything(repo):
+    got = list(added_lines(EMPTY_TREE, "HEAD"))
+    assert ("base.txt", 1, "base line") in got
+
+
+def test_added_or_renamed_paths_from_empty_tree_lists_all_tracked(repo):
+    assert added_or_renamed_paths(EMPTY_TREE, "HEAD") == ["base.txt"]
+
+
+def test_non_ascii_path_is_returned_unescaped(repo):
+    base = head(repo)
+    (repo / "résumé.txt").write_text("alpha\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "unicode")
+    assert added_or_renamed_paths(base, "HEAD") == ["résumé.txt"]
+    assert ("résumé.txt", 1, "alpha") in list(added_lines(base, "HEAD"))

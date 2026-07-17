@@ -20,8 +20,13 @@ class GitError(Exception):
 
 
 def run_git(args, cwd=None):
+    # Config-proof diff headers: core.quotePath=false prevents octal escaping of
+    # non-ASCII paths, and diff.mnemonicPrefix=false ensures consistent "+++ b/"
+    # format instead of mnemonic prefixes. This module parses diff headers that
+    # depend on this exact format.
     proc = subprocess.run(
-        ["git"] + list(args), capture_output=True, text=True, cwd=cwd
+        ["git", "-c", "core.quotePath=false", "-c", "diff.mnemonicPrefix=false"]
+        + list(args), capture_output=True, text=True, cwd=cwd
     )
     if proc.returncode != 0:
         raise GitError(proc.stderr.strip())
@@ -54,8 +59,11 @@ def added_lines(from_ref, to_ref):
             path = line[len("+++ b/"):]
         elif line.startswith("@@"):
             match = _HUNK_RE.match(line)
+            if not match:
+                raise GitError("malformed hunk header in git diff output")
             lineno = int(match.group(1))
         elif line.startswith("+") and not line.startswith("+++") and path:
+            # +++ /dev/null cannot appear here: --diff-filter=AMR excludes deletions.
             yield (path, lineno, line[1:])
             lineno += 1
 
