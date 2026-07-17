@@ -24,9 +24,14 @@ def run_git(args, cwd=None):
     # non-ASCII paths, and diff.mnemonicPrefix=false ensures consistent "+++ b/"
     # format instead of mnemonic prefixes. This module parses diff headers that
     # depend on this exact format.
+    # Explicit UTF-8 decode: with quotePath disabled git emits raw path
+    # bytes, and locale-based decoding (text=True alone) would break on
+    # non-UTF-8 developer machines. errors="replace" keeps the scan
+    # running on malformed bytes instead of crashing the hook.
     proc = subprocess.run(
         ["git", "-c", "core.quotePath=false", "-c", "diff.mnemonicPrefix=false"]
-        + list(args), capture_output=True, text=True, cwd=cwd
+        + list(args), capture_output=True, text=True, encoding="utf-8",
+        errors="replace", cwd=cwd
     )
     if proc.returncode != 0:
         raise GitError(proc.stderr.strip())

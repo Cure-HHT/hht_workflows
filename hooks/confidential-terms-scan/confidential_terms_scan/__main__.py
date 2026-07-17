@@ -53,6 +53,10 @@ def fetch_from_doppler(project, config):
             ],
             capture_output=True,
             text=True,
+            # Explicit UTF-8 decode: locale-based decoding would break
+            # non-ASCII terms on non-UTF-8 developer machines.
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         return None
