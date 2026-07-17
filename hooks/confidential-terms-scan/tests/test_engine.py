@@ -39,11 +39,12 @@ def test_pattern_escapes_metacharacters():
     assert not p.search("x aXb y")
 
 
-def test_hyphenated_prefix_term_matches_prefix_use_only_at_word_start():
+def test_hyphenated_term_matches_at_plain_word_boundaries():
     p = build_pattern(["acme-x"])
     assert p.search("the acme-x build")
-    assert p.search("ACME-X1 unit")
+    assert p.search("The ACME-X tool")
     assert not p.search("macme-x")
+    assert not p.search("acme-x1")  # \b: no boundary inside a longer token
 
 
 def test_scan_content_lines_reports_location_never_text():

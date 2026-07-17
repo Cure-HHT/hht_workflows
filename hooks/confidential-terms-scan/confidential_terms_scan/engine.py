@@ -22,18 +22,8 @@ def build_pattern(terms):
     """Word-boundary, case-insensitive alternation. None when no terms."""
     if not terms:
         return None
-    # For terms with hyphens, match as prefix (allow word chars after).
-    # For other terms, use word boundaries on both sides.
-    sorted_terms = sorted(terms)
-    patterns = []
-    for term in sorted_terms:
-        escaped = re.escape(term)
-        if "-" in term:
-            patterns.append(r"\b%s\w*" % escaped)
-        else:
-            patterns.append(r"\b%s\b" % escaped)
-    alternation = "|".join(patterns)
-    return re.compile("(?:%s)" % alternation, re.IGNORECASE)
+    alternation = "|".join(re.escape(t) for t in sorted(terms))
+    return re.compile(r"\b(?:%s)\b" % alternation, re.IGNORECASE)
 
 
 def scan_content_lines(pattern, lines):
