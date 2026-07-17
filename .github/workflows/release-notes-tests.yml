@@ -8,6 +8,7 @@ on:
     paths:
       - 'hooks/release-notes-update/**'
       - 'hooks/no-or-true-guard/**'
+      - 'hooks/confidential-terms-scan/**'
       - '.github/actions/release-notes-publish/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'hooks/release-notes-update/**'
       - 'hooks/no-or-true-guard/**'
+      - 'hooks/confidential-terms-scan/**'
       - '.github/actions/release-notes-publish/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
@@ -51,6 +53,10 @@ jobs:
         run: |
           set -euo pipefail
           pytest hooks/no-or-true-guard/tests/ -v
+      - name: Run confidential-terms-scan tests
+        run: |
+          set -euo pipefail
+          pytest hooks/confidential-terms-scan/tests/ -v
       - name: Run publish action tests
         run: |
           set -euo pipefail

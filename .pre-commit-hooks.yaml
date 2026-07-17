@@ -26,3 +26,13 @@
   language: python
   types_or: [shell, yaml, dockerfile, makefile]
   minimum_pre_commit_version: "2.21.0"
+
+- id: confidential-terms-scan
+  name: confidential-terms-scan
+  description: Block confidential terms (fetched at scan time from the consumer's scan-* Doppler project) from added content, file/directory names, and the branch name. See hooks/confidential-terms-scan/README.md.
+  entry: confidential-terms-scan
+  language: python
+  stages: [pre-push]
+  pass_filenames: false
+  always_run: true
+  minimum_pre_commit_version: "2.21.0"
