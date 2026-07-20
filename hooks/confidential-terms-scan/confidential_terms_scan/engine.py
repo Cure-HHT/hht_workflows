@@ -18,12 +18,26 @@ def parse_prohibit_list(raw):
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
+# A term matches at a letter boundary: nothing letter-like immediately
+# before it, or a lowercase-to-uppercase transition (camelCase embedding).
+# There is no trailing constraint: identifier tails (for_callisto,
+# callisto4, CallistoService, callistos) are exactly the mistakes the
+# guard exists to catch, and the registry lint requires terms distinctive
+# enough that substring tails cannot collide with ordinary words.
+_LEAD = r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))"
+
+
 def build_pattern(terms):
-    """Word-boundary, case-insensitive alternation. None when no terms."""
+    """Letter-boundary, case-insensitive alternation. None when no terms.
+
+    Case-insensitivity is scoped to the terms via (?i:...) so the
+    case-transition lookaround stays case-sensitive; a global IGNORECASE
+    would make (?=[A-Z]) match lowercase and erase the boundary.
+    """
     if not terms:
         return None
     alternation = "|".join(re.escape(t) for t in sorted(terms))
-    return re.compile(r"\b(?:%s)\b" % alternation, re.IGNORECASE)
+    return re.compile(_LEAD + r"(?i:%s)" % alternation)
 
 
 def mask_path(path, pattern):

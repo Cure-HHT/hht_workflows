@@ -26,11 +26,29 @@ def test_build_pattern_none_when_no_terms():
     assert build_pattern([]) is None
 
 
-def test_pattern_is_word_boundary_and_case_insensitive():
+def test_pattern_is_letter_bounded_and_case_insensitive():
     p = build_pattern(["zebra"])
     assert p.search("a ZEBRA here")
-    assert not p.search("zebrafish")
-    assert not p.search("subzebra")
+    assert not p.search("subzebra")  # lowercase letter run before the term
+    assert not p.search("SUBZEBRA")  # uppercase letter run before the term
+
+
+def test_pattern_has_no_trailing_constraint():
+    # Identifier tails are the mistake class the guard exists to catch.
+    p = build_pattern(["zebra"])
+    assert p.search("zebras")
+    assert p.search("zebrafish")
+    assert p.search("zebra4")
+    assert p.search("ZebraService")
+
+
+def test_pattern_matches_identifier_embeddings():
+    p = build_pattern(["zebra"])
+    assert p.search("for_zebra")
+    assert p.search("hht_diary_zebra")
+    assert p.search("myZebraService")  # lower->Upper camelCase transition
+    assert p.search("MyZEBRAService")  # My|ZEBRA... is a camelCase component
+    assert not p.search("MYZEBRA")  # uppercase run before, no transition
 
 
 def test_pattern_escapes_metacharacters():
@@ -39,12 +57,21 @@ def test_pattern_escapes_metacharacters():
     assert not p.search("x aXb y")
 
 
-def test_hyphenated_term_matches_at_plain_word_boundaries():
+def test_hyphenated_term_matches_at_letter_boundaries():
     p = build_pattern(["acme-x"])
     assert p.search("the acme-x build")
     assert p.search("The ACME-X tool")
-    assert not p.search("macme-x")
-    assert not p.search("acme-x1")  # \b: no boundary inside a longer token
+    assert p.search("acme-x1")  # digit tail: no trailing constraint
+    assert p.search("for_acme-x")
+    assert not p.search("macme-x")  # MEDICAL- shape: letter run before
+    assert not p.search("PHARMACME-X")
+
+
+def test_multiple_terms_alternate_under_one_boundary():
+    p = build_pattern(["zebra", "acme-x"])
+    assert p.search("an acme-x unit")
+    assert p.search("for_zebra")
+    assert not p.search("macme-x or subzebra")
 
 
 def test_scan_content_lines_reports_location_never_text():
