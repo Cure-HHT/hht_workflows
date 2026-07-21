@@ -45,6 +45,8 @@ in their `.pre-commit-config.yaml`:
 | Hook | Purpose |
 | --- | --- |
 | [`release-notes-update`](hooks/release-notes-update/) | Maintain per-PR release-notes fragments and consolidate them into a versioned `RELEASE_NOTES.md` |
+| [`no-or-true-guard`](hooks/no-or-true-guard/) | Block the `\|\| true` / `\|\| :` shell short-circuit fallback in shell/YAML/Dockerfile/Makefile content |
+| [`confidential-terms-scan`](hooks/confidential-terms-scan/) | Pre-push scan of added content, file/dir names, and branch name for confidential terms fetched at scan time from the consumer's `scan-*` Doppler project |
 
 ## Consuming from another Cure-HHT repo
 
@@ -157,8 +159,9 @@ This repo and its consumers standardize on the
 [pre-commit framework](https://pre-commit.com) for local git hooks.
 Hook configuration is in `.pre-commit-config.yaml`; thin wrappers in
 `.githooks/` invoke the framework via `core.hooksPath`. Cure-HHT-specific
-hooks that aren't appropriate for a public hooks repo live in `hooks/`
-(currently empty; will be populated as cross-cutting needs emerge).
+hooks live in `hooks/` (`release-notes-update`, `no-or-true-guard`,
+`confidential-terms-scan`) and are shared to consumer repos via the
+`.pre-commit-hooks.yaml` manifest at the repo root.
 
 ### Setup
 
@@ -176,9 +179,11 @@ and exits.
 ### What runs
 
 - `pre-commit/pre-commit-hooks` — trailing-whitespace, end-of-file-fixer, check-merge-conflict, check-yaml, check-added-large-files
-- `gitleaks/gitleaks` — secret scanning (mirrors the org-required CI Security check)
+- `gitleaks/gitleaks` — secret scanning at pre-commit and pre-push (mirrors the org-required CI Security check)
 - `igorshubovych/markdownlint-cli` — markdown linting
 - `rhysd/actionlint` — GitHub Actions YAML validation
+- `no-or-true-guard` — blocks the `|| true` / `|| :` shell short-circuit fallback
+- `confidential-terms-scan` — pre-push confidential-terms scan (dogfoods the shared hook)
 
 ### Manual run
 
