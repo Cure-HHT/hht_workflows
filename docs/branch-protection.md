@@ -38,9 +38,8 @@ From `release-notes-tests.yml`:
 purpose: the fixture-only readiness job holds the bare id
 `confidential-terms-scan`, so the real gate uses the id
 `confidential-terms-gate` (no `name:` override) and that is the name the
-ruleset requires. `cosign-verify` was previously absent from this list even
-though it runs on every PR; the Terraform resource includes it so the
-one-entry-per-job invariant holds.
+ruleset requires. `cosign-verify` runs on every PR and is a required check
+here too, so the one-entry-per-job invariant holds.
 
 ## Review requirements
 
