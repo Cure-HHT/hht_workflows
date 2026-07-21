@@ -1,6 +1,6 @@
 """Pure scan primitives for the confidential-terms guard.
 
-Implements: HHT-OPS-confidential-keywords-scrubbing/C,D
+Implements: HHT-OPS-confidential-keywords-scrubbing/F,G
 
 The prohibit list is held in memory only. Nothing in this module may emit
 matched text: findings are (surface, location) tuples where location is a
