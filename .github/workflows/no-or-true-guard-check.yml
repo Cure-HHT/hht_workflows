@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4  # required for ./.github/actions resolution
+      - uses: actions/checkout@v7  # required for ./.github/actions resolution
       - name: Install this repo (for the local no-or-true-guard hook's PATH resolution)
         shell: bash
         run: |
