@@ -12,11 +12,13 @@ description: >
 inputs:
   github-token:
     description: >
-      Token used for the runs-list API call. The ambient
-      `${{ github.token }}` is sufficient (`actions: read`); pass a
-      GitHub App token only when querying a different repository's runs
-      is ever needed (not currently supported — the action always queries
-      the current repository).
+      Token used for the runs-list API call. The ambient workflow token
+      (`github.token`) is sufficient (`actions: read`); pass a GitHub
+      App token only when querying a different repository's runs is ever
+      needed (not currently supported — the action always queries the
+      current repository). Written without expression braces here:
+      GitHub Actions template validation parses expressions even inside
+      description strings and rejects github.token in that context.
     required: true
   workflow:
     description: >
