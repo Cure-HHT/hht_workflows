@@ -369,18 +369,58 @@ jobs:
             exit 1
           fi
           echo "All four surfaces trip; no matched text in output."
-      - name: Doppler path - nested composite fetch feeds the scan (gated)
-        # Runs only when an operator has (1) added a synthetic
-        # CONFIDENTIAL_PROHIBIT_LIST secret (e.g. zzyzx-readiness-fixture-term)
-        # to the readiness Doppler project and (2) set the repo variable
-        # READINESS_SCAN_DOPPLER_READY=true. Proves env injected by the
-        # nested doppler-oidc-auth composite reaches the scan step.
+      - name: Doppler path - inlined fetch feeds the scan (gated)
+        # Gated off by default. The question this step was written for -
+        # does a fetch reach the scan step? - is resolved: action.yml fetches
+        # CONFIDENTIAL_PROHIBIT_LIST inline via dopplerhq/secrets-fetch-action
+        # (action.yml L77-80, no nested composite), and the confidential-terms-gate
+        # job below plus the consumer gates (hht_diary et al.) exercise that
+        # path live against real scan-* projects. Turning this on adds value
+        # only against a dedicated synthetic fixture project - never admin/prod,
+        # which holds real secrets - so it stays gated behind an operator who
+        # has (1) added a synthetic CONFIDENTIAL_PROHIBIT_LIST secret to a
+        # fixture Doppler project and (2) set READINESS_SCAN_DOPPLER_READY=true.
         if: vars.READINESS_SCAN_DOPPLER_READY == 'true'
         uses: ./.github/actions/confidential-terms-scan
         with:
           doppler_identity_id: ${{ vars.READINESS_DOPPLER_IDENTITY_ID }}
           doppler_project: ${{ vars.READINESS_DOPPLER_PROJECT }}
           doppler_config: ${{ vars.READINESS_DOPPLER_CONFIG }}
+          base_ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          head_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  confidential-terms-gate:
+    # Implements: HHT-OPS-confidential-keywords-scrubbing/H,I
+    #   The REAL confidential-terms gate for this repo (assertion I): scans
+    #   the PR range against the live scan-hht-workflows Doppler prohibit list,
+    #   dogfooding the action the same way consumers invoke it. Distinct from
+    #   the confidential-terms-scan readiness job above, which is fixture-only
+    #   (test_terms, no Doppler identity) and whose bare id is therefore taken;
+    #   Phase 6's per-repo ruleset requires THIS job's bare id
+    #   `confidential-terms-gate` (no `name:` override, so the reported
+    #   check-run name equals the job id).
+    #
+    # D7 (public repo): fork PRs have no OIDC token, so the Doppler fetch
+    # cannot run on them. The guard skips fork PRs - reported `skipped`, which
+    # both validation-summary and a required-check rule accept - while
+    # same-repo PRs and pushes to the default branch always run. `push` is
+    # kept in the condition so the required check still resolves on `main`.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required by the Doppler OIDC fetch inside the action
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the scan diffs base..head
+      - name: Scan four surfaces for confidential terms
+        uses: ./.github/actions/confidential-terms-scan
+        with:
+          doppler_identity_id: ${{ vars.CONFIDENTIAL_SCAN_DOPPLER_IDENTITY_ID }}
+          doppler_project: scan-hht-workflows
           base_ref: ${{ github.event.pull_request.base.sha || github.event.before }}
           head_ref: ${{ github.event.pull_request.head.sha || github.sha }}
 

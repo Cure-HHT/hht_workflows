@@ -1,9 +1,9 @@
 # Pre-commit hooks for cure-hht/hht_workflows.
 #
 # This repo is the canonical home for shared Cure-HHT-specific hooks
-# (the `hooks/` directory; currently empty pending the first cross-cutting
-# hook). Other Cure-HHT repos pull their hook list from a mix of public
-# pre-commit-hooks repos and (in time) `hooks/` here.
+# (the `hooks/` directory: release-notes-update, no-or-true-guard, and
+# confidential-terms-scan). Other Cure-HHT repos pull their hook list from
+# a mix of public pre-commit-hooks repos and `hooks/` here.
 #
 # Setup:
 #   scripts/setup.sh      # configures core.hooksPath and warms cache
@@ -11,6 +11,11 @@
 # Manual run:
 #   pre-commit run --all-files
 
+# Install both hook types on `pre-commit install`: pre-commit hooks run at
+# commit time, and the pre-push stage (gitleaks, confidential-terms-scan)
+# runs at push time. scripts/setup.sh drives `core.hooksPath = .githooks`,
+# whose pre-commit + pre-push wrappers cover both stages regardless.
+default_install_hook_types: [pre-commit, pre-push]
 default_stages: [pre-commit]
 
 repos:
@@ -67,3 +72,31 @@ repos:
         entry: no-or-true-guard
         language: system
         types_or: [shell, yaml, dockerfile, makefile]
+
+      # Dogfood our own confidential-terms-scan hook at pre-push
+      # (hooks/confidential-terms-scan/README.md). Same `repo: local` +
+      # `language: system` rationale as no-or-true-guard above: for
+      # `repo: local`, pre-commit builds `language: python` environments in
+      # its OWN cache using a synthetic placeholder package, so
+      # `additional_dependencies: ["."]` installs that empty placeholder
+      # (no entry point), not this repo. `language: system` execs whatever
+      # `confidential-terms-scan` resolves to on PATH; scripts/setup.sh
+      # installs this repo (`pip install --user -e .`) so the console script
+      # resolves on a fresh clone. The hosted manifest (.pre-commit-hooks.yaml)
+      # keeps `language: python` — consumers clone this repo and `pip install`
+      # it, which resolves the console script correctly there.
+      # Implements: HHT-OPS-confidential-keywords-scrubbing/H,I
+      - id: confidential-terms-scan
+        name: confidential-terms-scan
+        entry: confidential-terms-scan
+        # --on-fetch-error=warn: this public repo has no scan-hht-workflows
+        # Doppler project provisioned for developer CLIs yet, and fork
+        # contributors never will — a fetch failure degrades to a loud
+        # warning locally rather than blocking the push. PR CI
+        # (readiness-checks.yml `confidential-terms-gate`) is the
+        # authoritative gate, fetching via OIDC.
+        args: [--doppler-project=scan-hht-workflows, --on-fetch-error=warn]
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true

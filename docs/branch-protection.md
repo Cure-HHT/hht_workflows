@@ -1,102 +1,64 @@
 # Branch protection (hht_workflows)
 
-The `main` branch of `Cure-HHT/hht_workflows` MUST have the following
-protection rules. They are intentionally documented here (not encoded in
-Terraform) because this repo is the bootstrap for the composite-action
-library — managing its own protection from a Terraform consumer would
-create a circular dependency.
+The `main` branch of `Cure-HHT/hht_workflows` is protected by a
+`github_repository_ruleset` resource for this repo, declared in
+`cure-hht/hht_admin/terraform/branch-protection.tf`. Terraform is the single
+owner: the required-check list, review requirements, and merge rules live in
+that resource, are reviewed as code, and are applied by the `hht_admin`
+`terraform.yml` pipeline. This document describes what that ruleset enforces
+and how the required-check names are chosen; it is not applied from here.
 
-## Required settings
+## Required status checks
 
-- Require a pull request before merging
-  - Require approvals: **0** during the bootstrap phase (raise to 1 alongside re-enabling Code Owner review — see note below)
-  - Dismiss stale approvals on new commits: enabled
-  - Require review from Code Owners: **disabled** (see note below)
-- Require status checks to pass before merging
-  - Required checks: one entry per job in `readiness-checks.yml`, by the bare **job name** (NOT `workflow-name / job-name` — that's what the UI displays, but the check-run is stored under just the job name on the commit; matching is by the stored name):
-    - `doppler-oidc-auth` (Doppler OIDC handshake readiness check; secrets-injection variant)
-    - `doppler-cli-oidc-auth` (Doppler OIDC handshake readiness check; CLI-token-mint variant)
-    - `gcp-wif-auth` (real WIF handshake readiness check)
-    - `no-op` (placeholder; replace with real jobs as actions are added)
-    - `release-notes-publish` (release-notes-publish smoke; covers the composite action end-to-end)
-    - `build-urs` (URS compile readiness; compiles the synthetic fixture to PDF + DOCX end-to-end)
-    - `confidential-terms-scan` (scanner action readiness; test_terms happy path + all-four-surfaces negative fixture, plus a Doppler-gated nested-composite check)
-    - `Release Notes Tests` (pytest suite for the hook + publish action)
-- Require conversation resolution before merging: enabled
-- Enforce all the above settings on admins: enabled (`enforce_admins=true`)
-- Push restrictions: not used. The require-a-pull-request rule already prevents
-  direct pushes to `main` by non-admins; combined with `enforce_admins=true`,
-  even admins must go through PR review. An explicit push-restriction list
-  becomes useful only with a larger team than this repo currently has.
+The ruleset requires every job in this repo's PR gates to pass before a merge
+to `main`, referenced by the **bare check-run name** GitHub stores on the
+commit. For a job with no `name:` override that is the **job id**; for a job
+that sets `name:`, it is that display name. (The UI shows
+`<workflow-name> / <job-name>` and may append `(<event>)`, but those are
+display affordances — the stored name, and the ruleset matcher, use the bare
+name only.)
 
-## How to apply
+From `readiness-checks.yml` — one entry per job:
 
-Apply via GitHub UI (Settings -> Branches -> Add rule) or via gh CLI.
+- `doppler-oidc-auth` — Doppler OIDC handshake readiness (secrets-injection variant)
+- `doppler-cli-oidc-auth` — Doppler OIDC handshake readiness (CLI-token-mint variant)
+- `gcp-wif-auth` — real WIF handshake readiness
+- `release-notes-publish` — release-notes-publish composite action, end-to-end
+- `cosign-verify` — cosign-verify composite action: keyless sign + verify happy path and a negative wrong-identity case
+- `build-urs` — URS compile readiness (synthetic fixture to PDF + DOCX)
+- `confidential-terms-scan` — scanner-action readiness: `test_terms` happy path plus the all-four-surfaces negative fixture (fixture-only; no Doppler identity)
+- `confidential-terms-gate` — the real confidential-terms gate for this repo: scans the PR range against the live `scan-hht-workflows` Doppler prohibit list (assertion I)
+- `no-op` — placeholder; retired as real jobs replace it
 
-Note: `gh api` `-F` flags require bracket notation for nested JSON keys.
-Dot-notation (`a.b=value`) is sent as a literal flat key and silently
-ignored by the GitHub API.
+From `release-notes-tests.yml`:
 
-    gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
-      -F 'required_pull_request_reviews[required_approving_review_count]=0' \
-      -F 'required_pull_request_reviews[require_code_owner_reviews]=false' \
-      -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
-      -F 'required_status_checks[strict]=true' \
-      -F 'required_status_checks[contexts][]=doppler-oidc-auth' \
-      -F 'required_status_checks[contexts][]=doppler-cli-oidc-auth' \
-      -F 'required_status_checks[contexts][]=gcp-wif-auth' \
-      -F 'required_status_checks[contexts][]=no-op' \
-      -F 'required_status_checks[contexts][]=release-notes-publish' \
-      -F 'required_status_checks[contexts][]=build-urs' \
-      -F 'required_status_checks[contexts][]=confidential-terms-scan' \
-      -F 'required_status_checks[contexts][]=Release Notes Tests' \
-      -F required_conversation_resolution=true \
-      -F enforce_admins=true \
-      -F restrictions=null
+- `Release Notes Tests` — pytest suite for the hooks (`release-notes-update`, `no-or-true-guard`, `confidential-terms-scan`) and the publish action
 
-The `contexts[]` entry must match the bare check-run name GitHub stores
-on the commit — which is the **job name** alone. (The UI displays
-`<workflow-name> / <job-name>` and sometimes appends `(<event>)`, but
-those are display affordances; the stored name and the matcher use the
-bare job name only.) As jobs are added, append more
-`-F 'required_status_checks[contexts][]=...'` entries with the new
-bare job names.
+`confidential-terms-gate` and `confidential-terms-scan` are distinct on
+purpose: the fixture-only readiness job holds the bare id
+`confidential-terms-scan`, so the real gate uses the id
+`confidential-terms-gate` (no `name:` override) and that is the name the
+ruleset requires. `cosign-verify` runs on every PR and is a required check
+here too, so the one-entry-per-job invariant holds.
 
-`confidential-terms-scan` is added to this doc in the same PR that adds
-the readiness job; applying it to the live protection rule via the
-`gh api` invocation above happens when that PR merges to `main`.
+## Review requirements
 
-## Deferred: review enforcement
+The ruleset requires a pull request before merging and requires conversation
+resolution. Code Owner review (`.github/CODEOWNERS`) and a minimum approval
+count are enforced through the same resource; changing either is a change to
+`branch-protection.tf`, reviewed like any other Terraform change.
 
-Both `required_approving_review_count` (=0) and `require_code_owner_reviews`
-(=false) are intentionally relaxed until consumer repos (`hht_diary`,
-`hht_diary_callisto`, etc.) actually pin and depend on these composite
-actions in production workflows. Until then, no deploy chain depends on
-this repo, so the marginal safety from forcing review on every change
-is outweighed by the friction of single-person admin authoring during
-the bootstrap phase. Required *status checks* (smoke tests + secret
-scan + PR title) still gate every merge.
+## Why Terraform owns this
 
-`.github/CODEOWNERS` remains in the repo as a documented intent
-declaration; only the *enforcement* is paused. Re-enable both
-requirements when the first consumer repo lands a workflow that
-`uses:` an action from here on a deployment path:
+Branch protection for every Covered Repo — this one included — is declared as
+`github_repository_ruleset` resources in `hht_admin/terraform`, so the
+required-check set is version-controlled, reviewed, and applied uniformly
+rather than hand-poked per repo. The org-wide ruleset stays separate: the
+`confidential-terms-gate` and per-action readiness checks are repo-specific
+and are required only through this repo's own `github_repository_ruleset`,
+never added to the organization ruleset (repos that never report them would
+otherwise wedge at "Expected" forever).
 
-    gh api -X PUT repos/Cure-HHT/hht_workflows/branches/main/protection \
-      ... \
-      -F 'required_pull_request_reviews[required_approving_review_count]=1' \
-      -F 'required_pull_request_reviews[require_code_owner_reviews]=true' \
-      ...
-
-(or update the full block above and re-apply).
-
-## Why not Terraform
-
-Managing this repo's protection from `hht_admin/terraform` would require
-`hht_admin` to be set up first, then `hht_workflows` to be set up, then
-back to `hht_admin` to apply protection. Since `hht_admin` consumes from
-`hht_workflows` (composite actions), this creates a bootstrap cycle.
-
-Encoding the rules in markdown is the simpler answer: the rules are
-checked into the repo they govern, applied once via gh CLI, and the
-review history is in git.
+Adding a new required check here is therefore a two-repo change: add the job
+(and its bare name) in this repo, and add that name to this repo's
+`github_repository_ruleset` in `hht_admin/terraform/branch-protection.tf`.

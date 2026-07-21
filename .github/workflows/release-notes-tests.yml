@@ -4,15 +4,11 @@
 name: Release Notes Tests
 
 on:
+  # No paths filter on pull_request: this is a REQUIRED check (classic
+  # protection today, the hht_admin ruleset next), and a paths-filtered
+  # required check wedges any PR that does not touch a matching file at
+  # "Expected" forever. The suite is cheap; run it on every PR.
   pull_request:
-    paths:
-      - 'hooks/release-notes-update/**'
-      - 'hooks/no-or-true-guard/**'
-      - 'hooks/confidential-terms-scan/**'
-      - '.github/actions/release-notes-publish/**'
-      - 'pyproject.toml'
-      - '.pre-commit-hooks.yaml'
-      - '.github/workflows/release-notes-tests.yml'
   push:
     branches: [main]
     paths:
