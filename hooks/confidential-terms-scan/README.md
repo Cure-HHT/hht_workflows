@@ -1,6 +1,6 @@
 # confidential-terms-scan
 
-**Why this exists:** `HHT-OPS-confidential-keywords-scrubbing/C,D` — block
+**Why this exists:** `HHT-OPS-confidential-keywords-scrubbing/B,C,F,G,H` — block
 project-confidential terms from entering repos where they do not belong,
 across four surfaces: added content lines, file basenames, path segments of
 added/renamed paths, and PR metadata (title, body, branch name). The term

@@ -1,6 +1,6 @@
 # confidential-terms-scan (composite action)
 
-**Why this exists:** `HHT-OPS-confidential-keywords-scrubbing/C,D` — the PR-CI
+**Why this exists:** `HHT-OPS-confidential-keywords-scrubbing/B,C,F,G,I` — the PR-CI
 enforcement point of the confidential-terms guard. The same engine backs the
 `confidential-terms-scan` pre-push hook (`hooks/confidential-terms-scan/`),
 whose README carries the full runbook and triage doctrine.

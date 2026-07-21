@@ -307,7 +307,7 @@ jobs:
           echo "build-urs readiness OK: urs.pdf + urs.docx produced with expected content."
 
   confidential-terms-scan:
-    # Implements: HHT-OPS-confidential-keywords-scrubbing/C,D
+    # Implements: HHT-OPS-confidential-keywords-scrubbing/F,G,I
     #   End-to-end readiness of the scanner action. Uses test_terms
     #   (synthetic, cannot collide with real terms) because this public
     #   repo has no scan-* Doppler identity; the Doppler fetch path is

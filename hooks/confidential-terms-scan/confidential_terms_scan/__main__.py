@@ -1,6 +1,6 @@
 """confidential-terms-scan CLI.
 
-Implements: HHT-OPS-confidential-keywords-scrubbing/C,D
+Implements: HHT-OPS-confidential-keywords-scrubbing/F,G,H
 
 Fetches CONFIDENTIAL_PROHIBIT_LIST (env var, else the consumer's scan-*
 Doppler project via the developer's doppler CLI auth), scans the four
