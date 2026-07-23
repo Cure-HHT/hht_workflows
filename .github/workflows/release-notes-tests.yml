@@ -16,6 +16,7 @@ on:
       - 'hooks/no-or-true-guard/**'
       - 'hooks/confidential-terms-scan/**'
       - '.github/actions/release-notes-publish/**'
+      - '.github/actions/sponsor-base-preflight/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
       - '.github/workflows/release-notes-tests.yml'
@@ -58,3 +59,12 @@ jobs:
           set -euo pipefail
           cd .github/actions/release-notes-publish
           PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ -v
+      # CUR-1668. This workflow is the repo's whole Python suite despite its
+      # name; it is a required check, and renaming a required check wedges
+      # every open PR, so new suites are added as steps here rather than as a
+      # new workflow.
+      - name: Run sponsor-base-preflight tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/sponsor-base-preflight
+          PYTHONPATH=. pytest tests/ -v

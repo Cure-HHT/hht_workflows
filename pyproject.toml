@@ -14,7 +14,7 @@ no-or-true-guard = "no_or_true_guard.__main__:main"
 confidential-terms-scan = "confidential_terms_scan.__main__:main"
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "PyYAML>=6,<7"]
 
 # Each hook's source lives under hooks/<hook-name>/. Setuptools is configured to
 # search those directories for top-level packages so the console-script entry

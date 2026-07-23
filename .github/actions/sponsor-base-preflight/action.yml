@@ -1,0 +1,107 @@
+# Sponsor Base Preflight — composite action.
+#
+# Guards the two ways a sponsor final-image build can embed the wrong core
+# base image (CUR-1668):
+#
+#   1. PINS — every base image declared in the sponsor's
+#      deployment/base-config.json is a content digest, never a mutable tag.
+#      A floating `:main-latest` lets two builds of the same sponsor commit
+#      resolve different base content, and lets a build started inside the
+#      core publish window ship the sponsor half of a two-repo change without
+#      the core half. Realizes HSI-OPS-image-promotion/G.
+#
+#   2. CAPABILITIES — the pinned portal-server base declares every permission
+#      the sponsor's role-permissions.yaml grants. A base that predates a
+#      granted Action fails closed at portal boot, surfacing as an opaque
+#      Cloud Run startup timeout (the CUR-1624 incident). Deciding it here
+#      names the offending permissions instead.
+#      Realizes HSI-OPS-image-promotion/H.
+#
+# The caller must have checked out the sponsor repo and authenticated to the
+# registry holding the base image before invoking this action.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file). Consumers invoke via:
+#   uses: Cure-HHT/hht_workflows/.github/actions/sponsor-base-preflight@<sha>
+
+name: 'Sponsor Base Preflight'
+description: 'Verify sponsor base images are digest-pinned and capability-compatible with the sponsor config.'
+
+inputs:
+  base-config:
+    description: 'Path to the sponsor deployment/base-config.json'
+    required: false
+    default: 'deployment/base-config.json'
+  portal-server-image:
+    description: 'Digest-pinned portal-server reference to check capabilities against'
+    required: true
+  role-permissions:
+    description: 'Path to the sponsor role-permissions.yaml'
+    required: false
+    default: 'deployment/sponsor/role-permissions.yaml'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install preflight dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install --quiet --user 'PyYAML>=6,<7'
+
+    - name: Verify base images are digest-pinned
+      shell: bash
+      env:
+        BASE_CONFIG: ${{ inputs.base-config }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python3 "${ACTION_PATH}/preflight.py" pins --base-config "${BASE_CONFIG}"
+
+    - name: Extract the declared-permission manifest from the pinned base
+      id: extract
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.portal-server-image }}
+        MANIFEST: ${{ runner.temp }}/portal-actions.txt
+      run: |
+        set -euo pipefail
+
+        docker pull -q "${IMAGE}"
+        cid="$(docker create "${IMAGE}")"
+
+        # `docker cp` of an absent path fails; that is the ONLY tolerated
+        # failure here, and it is tolerated exactly once — for bases built
+        # before core started baking /app/PORTAL_ACTIONS. Any other failure
+        # (auth, disk, corrupt layer) must surface, so the exit code is
+        # captured and branched on rather than discarded.
+        rc=0
+        cp_out="$(docker cp "${cid}:/app/PORTAL_ACTIONS" "${MANIFEST}" 2>&1)" || rc=$?
+
+        if ! docker rm "${cid}" >/dev/null; then
+          echo "::warning::could not remove temporary container ${cid} (tolerated: runner cleanup reclaims it)"
+        fi
+
+        if [ "$rc" -eq 0 ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          echo "manifest=${MANIFEST}" >> "$GITHUB_OUTPUT"
+          echo "declared permissions: $(grep -c . "${MANIFEST}")"
+        elif printf '%s' "$cp_out" | grep -qiE 'no such file or directory|not found in|could not find'; then
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::${IMAGE} carries no /app/PORTAL_ACTIONS manifest (tolerated: base predates the manifest); the capability check is skipped for this build. Advance base_images.portal_server to a core build that publishes it."
+        else
+          echo "::error::could not read /app/PORTAL_ACTIONS from ${IMAGE}: ${cp_out}"
+          exit "$rc"
+        fi
+
+    - name: Verify the pinned base declares every granted permission
+      if: steps.extract.outputs.present == 'true'
+      shell: bash
+      env:
+        MANIFEST: ${{ steps.extract.outputs.manifest }}
+        GRANTS: ${{ inputs.role-permissions }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python3 "${ACTION_PATH}/preflight.py" capabilities \
+          --declared "${MANIFEST}" \
+          --grants "${GRANTS}"
