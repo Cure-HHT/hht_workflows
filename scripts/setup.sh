@@ -10,6 +10,36 @@ set -e
 # Run from the repo root so `pre-commit install-hooks` finds
 # .pre-commit-config.yaml regardless of where the script was invoked.
 cd "$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(pwd)"
+
+# --check: report, through exit status, whether this clone is already in the
+# state a plain `scripts/setup.sh` produces — without changing anything. The
+# hooks-path test reuses the shared guard's predicate so it agrees with the
+# developer-facing warning (absolute core.hooksPath resolved, not string-matched).
+# Implements: HHT-OPS-repo-bootstrap/B
+if [ "${1:-}" = "--check" ]; then
+  . "$REPO_ROOT/bootstrap/hooks-guard.sh"
+  rc=0
+  if hht_hooks_active "$REPO_ROOT" ".githooks"; then
+    echo "ok: core.hooksPath points at this repo's .githooks"
+  else
+    echo "not set up: core.hooksPath does not point at .githooks — run scripts/setup.sh" >&2
+    rc=1
+  fi
+  if command -v pre-commit >/dev/null 2>&1; then
+    echo "ok: pre-commit on PATH"
+  else
+    echo "not set up: pre-commit not on PATH — run scripts/setup.sh" >&2
+    rc=1
+  fi
+  if command -v no-or-true-guard >/dev/null 2>&1; then
+    echo "ok: repo console scripts on PATH (no-or-true-guard)"
+  else
+    echo "not set up: repo console scripts missing from PATH (no-or-true-guard) — run scripts/setup.sh" >&2
+    rc=1
+  fi
+  exit "$rc"
+fi
 
 if ! command -v pre-commit >/dev/null 2>&1; then
   cat >&2 <<'MSG'

@@ -1,0 +1,211 @@
+# Repo Bootstrap — reusable fresh-clone conformance check.
+#
+# Proves the claim every covered repo's entry document makes: someone who
+# clones the repo and follows the documented steps arrives at an ACTIVE,
+# TESTABLE clone with no out-of-band instruction. A GitHub checkout is exactly
+# the situation under test — a clone with no core.hooksPath and none of the
+# repo's tooling — so the job needs no fixture: it walks the documented
+# setup/verify/test path and gates on it.
+#
+# This is the depth half of HHT-OPS-repo-bootstrap/H (in Cure-HHT/hht_admin):
+# each covered repo calls it on its own PRs, so the change that breaks
+# bootstrap goes red. The coverage half — catching a repo that never added a
+# caller — is the registry-driven bootstrap-drift check in hht_admin.
+#
+# Deliberately cheap: shallow checkout, no application build, no full suite by
+# default. Whether the suites pass is the repo's own test jobs' question; this
+# job's question is only whether the documented path reaches them.
+#
+# Language-agnostic: the four semantic inputs (setup/check/test/entry-doc) say
+# WHAT each command must achieve, never how — a repo keeps its own commands.
+# The `runtime` input provisions the toolchain a developer is assumed to have.
+#
+# Inputs reach the shell through `env:`, never `${{ }}` interpolation into a
+# run block, so a command string can never be spliced into the script body.
+
+name: Repo Bootstrap
+
+on:
+  workflow_call:
+    inputs:
+      setup-cmd:
+        description: 'Command that brings a clone to its enforced state (HHT-OPS-repo-bootstrap/A).'
+        required: true
+        type: string
+      check-cmd:
+        description: 'Command that reports through its exit status whether the clone is set up (B). Exits non-zero before setup, zero after.'
+        required: true
+        type: string
+      test-cmd:
+        description: 'The documented test command, named in the entry document (C, E).'
+        required: true
+        type: string
+      test-list-cmd:
+        description: 'Cheap invocation that resolves test targets without running them. Defaults to running test-cmd when empty.'
+        required: false
+        type: string
+        default: ''
+      guard-cmd:
+        description: 'Optional developer entry point that, run with hooks inert, must name the setup command (F). Skipped when empty.'
+        required: false
+        type: string
+        default: ''
+      entry-doc:
+        description: 'Top-level entry document that must reference setup, verify, and test commands (E).'
+        required: false
+        type: string
+        default: 'README.md'
+      runtime:
+        description: "Toolchain to provision before setup: 'python', 'dart', or 'none'."
+        required: false
+        type: string
+        default: 'python'
+      python-version:
+        description: "Python version when runtime is 'python'."
+        required: false
+        type: string
+        default: '3.11'
+      timeout-minutes:
+        description: 'Job timeout.'
+        required: false
+        type: number
+        default: 15
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: Fresh clone reaches an enforcing, testable state
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout (shallow — this IS the fresh clone under test)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        if: inputs.runtime == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      # The pre-commit framework is the assumed-present tool a developer
+      # installs once; provide it on PATH so setup-cmd can install hooks.
+      - name: Provide pre-commit on PATH
+        if: inputs.runtime == 'python'
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet pre-commit
+          # A repo's setup may install its own console scripts with `pip
+          # install --user`; make that bin dir resolvable for later steps.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Dart
+        if: inputs.runtime == 'dart'
+        uses: dart-lang/setup-dart@v1
+
+      # The premise, asserted rather than assumed: a clone starts with no hooks.
+      # If a future checkout action began setting core.hooksPath, this fails and
+      # tells us the guard rail everywhere else is now redundant.
+      - name: Confirm hooks start inert
+        run: |
+          set -euo pipefail
+          hooks_path="$(git config --get core.hooksPath || echo '')"
+          if [ -n "$hooks_path" ]; then
+            echo "::error::a fresh checkout unexpectedly has core.hooksPath=$hooks_path"
+            exit 1
+          fi
+          echo "core.hooksPath is unset, as expected for a fresh clone"
+
+      # Verifies: HHT-OPS-repo-bootstrap/F
+      - name: Entry point warns while hooks are inert
+        if: inputs.guard-cmd != ''
+        env:
+          GUARD_CMD: ${{ inputs.guard-cmd }}
+          SETUP_CMD: ${{ inputs.setup-cmd }}
+        run: |
+          set -euo pipefail
+          # CI is set on the runner and the guard is deliberately silent there,
+          # so exercise it the way a developer machine would (CI unset).
+          rc=0
+          out="$(env -u CI bash -c "$GUARD_CMD" 2>&1)" || rc=$?
+          echo "$out"
+          # rc is intentionally not gated: we only inspect the guidance printed
+          # while hooks were inert; a non-zero exit from the entry point itself
+          # does not change whether it pointed at the setup command.
+          echo "entry point exited with rc=$rc"
+          # The guard must name the setup command so an inert clone is actionable.
+          needle="$(printf '%s' "$SETUP_CMD" | awk '{print $1}')"
+          if ! printf '%s' "$out" | grep -qF -- "$needle"; then
+            echo "::error::an entry point run with inactive hooks did not point at the setup command ($needle)"
+            exit 1
+          fi
+          echo "entry point points at the setup command while hooks are inert"
+
+      # Verifies: HHT-OPS-repo-bootstrap/B
+      # The verifier must report the not-set-up state through its exit status,
+      # BEFORE setup runs — otherwise "verified" means nothing.
+      - name: Verification command reports a not-set-up clone
+        env:
+          CHECK_CMD: ${{ inputs.check-cmd }}
+        run: |
+          set -euo pipefail
+          rc=0; bash -c "$CHECK_CMD" > /dev/null 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::the verification command reported success on a clone that was never set up"
+            exit 1
+          fi
+          echo "verification command correctly reports a not-set-up clone (exit $rc)"
+
+      # Verifies: HHT-OPS-repo-bootstrap/A
+      - name: Run the documented setup command
+        env:
+          SETUP_CMD: ${{ inputs.setup-cmd }}
+        run: bash -c "$SETUP_CMD"
+
+      # Verifies: HHT-OPS-repo-bootstrap/B
+      - name: Verification command reports a set-up clone
+        env:
+          CHECK_CMD: ${{ inputs.check-cmd }}
+        run: bash -c "$CHECK_CMD"
+
+      # Verifies: HHT-OPS-repo-bootstrap/E
+      #
+      # The defect this contract fixes was reachability, not correctness: the
+      # instructions existed, the entry document did not lead to them. Assert
+      # the three commands are named there, so a future edit cannot quietly
+      # drop the path back to where it was.
+      - name: Entry document references the documented commands
+        env:
+          ENTRY_DOC: ${{ inputs.entry-doc }}
+          SETUP_CMD: ${{ inputs.setup-cmd }}
+          CHECK_CMD: ${{ inputs.check-cmd }}
+          TEST_CMD: ${{ inputs.test-cmd }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for cmd in "$SETUP_CMD" "$CHECK_CMD" "$TEST_CMD"; do
+            if ! grep -qF -- "$cmd" "$ENTRY_DOC"; then
+              echo "::error::$ENTRY_DOC does not reference: $cmd"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] && echo "$ENTRY_DOC references setup, verification and test commands"
+
+      # Verifies: HHT-OPS-repo-bootstrap/C
+      - name: Test entry point resolves its targets
+        env:
+          TEST_CMD: ${{ inputs.test-cmd }}
+          TEST_LIST_CMD: ${{ inputs.test-list-cmd }}
+        run: |
+          set -euo pipefail
+          resolve="$TEST_LIST_CMD"
+          if [ -z "$resolve" ]; then
+            resolve="$TEST_CMD"
+          fi
+          echo "resolving test targets via: $resolve"
+          bash -c "$resolve"
+          echo "test entry point resolved its targets"

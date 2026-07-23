@@ -8,6 +8,73 @@ secrets, customer-identifying configuration) lives in
 [`cure-hht/hht_admin`](https://github.com/Cure-HHT/hht_admin), which
 stays private.
 
+## Start here
+
+New to this repo? After cloning, run once (idempotent):
+
+```sh
+scripts/setup.sh          # activate this clone's git hooks
+scripts/setup.sh --check  # verify the clone is set up (reports via exit status)
+scripts/test.sh           # run the test suite (scripts/test.sh --list to resolve targets)
+```
+
+`scripts/setup.sh` sets `core.hooksPath` and caches the pre-commit
+environments; nothing else is required to start contributing. For how this
+repo fits the wider organization, see
+[The estate at a glance](#the-estate-at-a-glance).
+
+Every Cure-HHT repo owes a fresh clone this same three-command path — the
+contract is `HHT-OPS-repo-bootstrap` in `hht_admin/spec/`, and this repo hosts
+its reusable enforcement (see
+[Fresh-clone conformance](#fresh-clone-conformance-repo-bootstrap)).
+
+## The estate at a glance
+
+The canonical, org-wide map of the Cure-HHT repositories: what each holds, its
+visibility, and how they relate. Every covered repo's README links up here, so
+this is the one place the picture is maintained.
+
+```text
+                         Cure-HHT GitHub organization
+  +-------------------------------------------------------------------------+
+  |                                                                         |
+  |   hht_admin (PRIVATE)                hht_workflows (PUBLIC)              |
+  |   org IaC, WIF/OIDC pool,            reusable composite actions,        |
+  |   ops-bot App, sponsor               org-required checks, the           |
+  |   scaffolding, authoritative spec/   reusable repo-bootstrap workflow   |
+  |        |                                   ^                            |
+  |        | scaffolds                         | consumes (SHA-pinned)      |
+  |        v                                   |                            |
+  |   hht_sponsor_iac (PRIVATE)         hht_diary (PRIVATE today)           |
+  |   sponsor-neutral IaC modules,      core app, shared packages,         |
+  |   CD templates, onboarding scaffold  mobile app, public CI spec         |
+  |        |                                   |                            |
+  |        | copied + re-namespaced            | overlaid by               |
+  |        v                                   v                            |
+  |   hht_diary_<sponsor> (PRIVATE) -- per-sponsor build: config, branding,  |
+  |                                    specs, IaC; deploys to its own GCP    |
+  |                                                                         |
+  |   Public libraries: event_sourcing, dart_opentimestamps                 |
+  |   Publish target:   testlab-dashboard (PRIVATE)                         |
+  +-------------------------------------------------------------------------+
+```
+
+| Repo | Visibility | Holds |
+| --- | --- | --- |
+| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) | private | Org IaC (Terraform, WIF/OIDC pool, the ops-bot GitHub App), sponsor scaffolding, and the **authoritative** `spec/` of `HHT-OPS-*` requirements. |
+| `hht_workflows` (this repo) | public | Reusable composite actions, the org-required CI checks, and the reusable repo-bootstrap workflow. |
+| [`hht_sponsor_iac`](https://github.com/Cure-HHT/hht_sponsor_iac) | private | Sponsor-neutral Terraform modules, continuous-delivery templates, and the new-sponsor onboarding scaffold. |
+| [`hht_diary`](https://github.com/Cure-HHT/hht_diary) | private (today) | Core application, shared packages, the mobile app, and the public CI spec. Slated to split into a generic core + instantiation before going public. |
+| `hht_diary_<sponsor>` | private | A single sponsor's build: config, branding, specs, and IaC; deploys to that sponsor's own GCP project. |
+| [`event_sourcing`](https://github.com/Cure-HHT/event_sourcing) | public | Event-sourcing library (Dart). |
+| [`dart_opentimestamps`](https://github.com/Cure-HHT/dart_opentimestamps) | public | OpenTimestamps library (Dart). |
+| [`testlab-dashboard`](https://github.com/Cure-HHT/testlab-dashboard) | private | Firebase Test Lab dashboard data, written by CI via a scoped App token. |
+
+The public/secret boundary: confidential infrastructure — Terraform, secrets,
+and any customer-identifying configuration — lives only in the private repos.
+The public repos (this one, `event_sourcing`, `dart_opentimestamps`) carry no
+sponsor identity; a sponsor name is data derived at runtime, never key material.
+
 ## What's here
 
 Three composite actions implementing the org-level branch-protection
@@ -121,6 +188,53 @@ The job's `name:` field becomes the check-context name that the
 org-level ruleset matches against. Each consumer's wrappers must use
 these exact names.
 
+## Fresh-clone conformance (repo-bootstrap)
+
+Every covered repo owes a fresh clone a documented path from "just cloned" to
+"enforcement active, tests runnable" — the contract is `HHT-OPS-repo-bootstrap`
+(A–H) in `hht_admin/spec/`. This repo hosts its shared enforcement:
+
+- [`.github/workflows/repo-bootstrap.yml`](.github/workflows/repo-bootstrap.yml)
+  — a reusable `workflow_call` that, on a real fresh checkout, asserts the clone
+  starts with hooks inert, runs the repo's own `setup`/`verify`/`test` commands,
+  and confirms the entry document names all three. It is language-agnostic: the
+  four semantic inputs say *what* each command must achieve, not how.
+- [`bootstrap/hooks-guard.sh`](bootstrap/hooks-guard.sh) — the one guard
+  implementation each repo vendors and invokes from a developer entry point, so
+  an inert clone says so (`/F`). It exposes a CI-silent warning
+  (`hht_hooks_guard`) and a pure predicate (`hht_hooks_active`) for an
+  authoritative verify command; both resolve an absolute `core.hooksPath`
+  before comparing.
+
+A consumer wires the depth check by adding `.github/workflows/repo-bootstrap-check.yml`:
+
+```yaml
+name: Repo Bootstrap
+on:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    name: Repo Bootstrap
+    uses: Cure-HHT/hht_workflows/.github/workflows/repo-bootstrap.yml@<commit-sha>  # SHA-pin; see "Pinning & versioning"
+    with:
+      setup-cmd: scripts/setup.sh
+      check-cmd: scripts/setup.sh --check
+      test-cmd: scripts/test.sh
+      test-list-cmd: scripts/test.sh --list   # cheap "resolve targets" invocation
+      guard-cmd: scripts/test.sh --list       # must name the setup command with hooks inert
+      entry-doc: README.md
+      runtime: python                         # 'python' | 'dart' | 'none'
+```
+
+Do **not** paths-filter this workflow: it becomes a required check, and a
+paths-filtered required check wedges any PR that does not touch a matching file
+at "Expected" forever. The check is cheap (shallow checkout, no full suite).
+
 ## Pinning & versioning
 
 Consumers **SHA-pin** every `uses:` reference to this repo
@@ -201,10 +315,8 @@ git commit --no-verify
 
 ## Related Repos
 
-| Repo | What it holds |
-| --- | --- |
-| `hht_workflows` (this repo, public) | Shared GitHub Actions composite actions; required-check workflows |
-| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) (private) | Org-wide GCP infrastructure (Terraform, IAM, service accounts); customer-identifying configuration |
+See [The estate at a glance](#the-estate-at-a-glance) for the full org-wide map
+of repositories, their visibility, and how they relate.
 
 ### Current consumers
 
