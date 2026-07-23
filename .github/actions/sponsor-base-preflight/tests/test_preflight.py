@@ -8,6 +8,7 @@ The two checks are independent obligations:
            the sponsor's role-permissions overlay grants.
 """
 
+import json
 import textwrap
 
 import pytest
@@ -16,6 +17,7 @@ from preflight import (
     check_capabilities,
     check_pins,
     granted_permission_names,
+    main,
     parse_declared_permissions,
 )
 
@@ -117,6 +119,24 @@ class TestGrantedPermissionNames:
         with pytest.raises(ValueError):
             granted_permission_names({"roles": ["CRA"]})
 
+    def test_a_scalar_grant_raises_instead_of_iterating_characters(self):
+        # `CRA: portal.site.view` (no `-`) is valid YAML and a plausible typo.
+        # Iterating it yields one "permission" per character, so the build
+        # fails with a wall of single letters instead of naming the mistake.
+        with pytest.raises(ValueError) as excinfo:
+            granted_permission_names({"grants": {"CRA": "portal.site.view"}})
+        assert "CRA" in str(excinfo.value)
+
+    def test_a_non_string_grant_entry_raises(self):
+        with pytest.raises(ValueError) as excinfo:
+            granted_permission_names({"grants": {"CRA": ["portal.site.view", 7]}})
+        assert "CRA" in str(excinfo.value)
+
+    def test_an_empty_grant_entry_raises(self):
+        with pytest.raises(ValueError) as excinfo:
+            granted_permission_names({"grants": {"CRA": ["portal.site.view", "  "]}})
+        assert "CRA" in str(excinfo.value)
+
 
 class TestParseDeclaredPermissions:
     def test_reads_one_bare_name_per_line(self):
@@ -187,3 +207,74 @@ class TestCheckCapabilities:
         first = check_capabilities(declared, self.GRANTS)
         second = check_capabilities(set(declared), self.GRANTS)
         assert first == second
+
+
+# ------------------------------------------------------------------ CLI
+
+
+class TestMainReportsFailuresAsAnnotations:
+    """Every expected failure exits 1 with an ::error:: line, never a traceback."""
+
+    def _run(self, capsys, argv):
+        code = main(argv)
+        return code, capsys.readouterr().out
+
+    def test_missing_base_config_file(self, capsys, tmp_path):
+        code, out = self._run(capsys, ["pins", "--base-config", str(tmp_path / "nope.json")])
+        assert code == 1
+        assert "::error::" in out
+
+    def test_malformed_base_config_json(self, capsys, tmp_path):
+        config = tmp_path / "base-config.json"
+        config.write_text("{ not json", encoding="utf-8")
+        code, out = self._run(capsys, ["pins", "--base-config", str(config)])
+        assert code == 1
+        assert "::error::" in out
+        assert str(config) in out
+
+    def test_valid_config_still_reports_normally(self, capsys, tmp_path):
+        config = tmp_path / "base-config.json"
+        config.write_text(
+            json.dumps({"base_images": {"a": f"ghcr.io/x/y@{DIGEST}"}}), encoding="utf-8"
+        )
+        code, out = self._run(capsys, ["pins", "--base-config", str(config)])
+        assert code == 0
+        assert out.startswith("ok - ")
+
+    def test_empty_declared_manifest(self, capsys, tmp_path):
+        declared = tmp_path / "PORTAL_ACTIONS"
+        declared.write_text("\n\n", encoding="utf-8")
+        grants = tmp_path / "role-permissions.yaml"
+        grants.write_text("grants:\n  CRA:\n    - portal.site.view\n", encoding="utf-8")
+        code, out = self._run(
+            capsys,
+            ["capabilities", "--declared", str(declared), "--grants", str(grants)],
+        )
+        assert code == 1
+        assert "::error::" in out
+
+    def test_malformed_grants_yaml(self, capsys, tmp_path):
+        declared = tmp_path / "PORTAL_ACTIONS"
+        declared.write_text("portal.site.view\n", encoding="utf-8")
+        grants = tmp_path / "role-permissions.yaml"
+        grants.write_text("grants:\n  - [unclosed\n", encoding="utf-8")
+        code, out = self._run(
+            capsys,
+            ["capabilities", "--declared", str(declared), "--grants", str(grants)],
+        )
+        assert code == 1
+        assert "::error::" in out
+        assert str(grants) in out
+
+    def test_scalar_grant_names_the_role_in_the_annotation(self, capsys, tmp_path):
+        declared = tmp_path / "PORTAL_ACTIONS"
+        declared.write_text("portal.site.view\n", encoding="utf-8")
+        grants = tmp_path / "role-permissions.yaml"
+        grants.write_text("grants:\n  CRA: portal.site.view\n", encoding="utf-8")
+        code, out = self._run(
+            capsys,
+            ["capabilities", "--declared", str(declared), "--grants", str(grants)],
+        )
+        assert code == 1
+        assert "::error::" in out
+        assert "CRA" in out

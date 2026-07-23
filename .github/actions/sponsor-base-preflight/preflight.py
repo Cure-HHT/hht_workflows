@@ -100,9 +100,29 @@ def granted_permission_names(doc: dict) -> set[str]:
             "treat that as 'nothing is granted'"
         )
     names: set[str] = set()
-    for permissions in grants.values():
-        if permissions:
-            names.update(str(p) for p in permissions)
+    for role, permissions in grants.items():
+        if permissions is None:
+            continue
+        # A scalar is the dangerous case: `CRA: portal.site.view` (a missing
+        # `-`) is valid YAML, and iterating a string yields one "permission"
+        # per character — the build would fail naming single letters instead
+        # of the typo.
+        if isinstance(permissions, str) or not isinstance(permissions, (list, tuple)):
+            raise ValueError(
+                f"grants.{role} must be a list of permission names, got "
+                f"{type(permissions).__name__}. A single permission still "
+                f"needs to be a list item (`- {permissions}`)."
+                if isinstance(permissions, str)
+                else f"grants.{role} must be a list of permission names, got "
+                f"{type(permissions).__name__}."
+            )
+        for entry in permissions:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"grants.{role} contains an entry that is not a permission "
+                    f"name: {entry!r}"
+                )
+            names.add(entry.strip())
     return names
 
 
@@ -111,7 +131,17 @@ def check_capabilities(declared: Iterable[str], grants_yaml: str) -> list[str]:
     """Errors when the sponsor overlay grants a permission the base does not declare."""
     import yaml  # imported here so the pins check needs no third-party dep
 
-    granted = granted_permission_names(yaml.safe_load(grants_yaml) or {})
+    try:
+        document = yaml.safe_load(grants_yaml) or {}
+    except yaml.YAMLError as exc:
+        # Re-raised as ValueError so the CLI has one expected-failure type to
+        # catch without importing yaml for the pins path.
+        raise ValueError(f"role-permissions document is not valid YAML: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ValueError(
+            "role-permissions document must be a mapping with a 'grants' key"
+        )
+    granted = granted_permission_names(document)
     missing = sorted(granted - set(declared))
     if not missing:
         return []
@@ -122,6 +152,30 @@ def check_capabilities(declared: Iterable[str], grants_yaml: str) -> list[str]:
         "advance base_images.portal_server to a core build that declares them. "
         "Shipping this image would fail closed at portal boot."
     ]
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as exc:
+        raise OSError(f"could not read {path}: {exc.strerror or exc}") from exc
+
+
+def _with_path(path: str, fn, *args):
+    """Run a parse step, naming the file it was reading if it rejects the input."""
+    try:
+        return fn(*args)
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+
+
+def _load_json(path: str) -> dict:
+    text = _read_text(path)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
 
 
 def _report(errors: list[str], ok_message: str) -> int:
@@ -150,22 +204,30 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if args.command == "pins":
-        with open(args.base_config, encoding="utf-8") as handle:
-            config = json.load(handle)
-        return _report(
-            check_pins(config),
-            f"every base image in {args.base_config} is pinned to a content digest",
-        )
+    # Every failure this tool can anticipate — an unreadable or malformed
+    # input, an empty manifest, a grants file that is not shaped like one —
+    # is a build failure that a human has to act on. Report each as the same
+    # single ::error:: annotation the checks themselves emit; a raw traceback
+    # buries the actionable line in a stack.
+    try:
+        if args.command == "pins":
+            config = _load_json(args.base_config)
+            return _report(
+                check_pins(config),
+                f"every base image in {args.base_config} is pinned to a content digest",
+            )
 
-    with open(args.declared, encoding="utf-8") as handle:
-        declared = parse_declared_permissions(handle.read())
-    with open(args.grants, encoding="utf-8") as handle:
-        grants_yaml = handle.read()
-    return _report(
-        check_capabilities(declared, grants_yaml),
-        f"the pinned base declares every permission granted in {args.grants}",
-    )
+        declared = _with_path(args.declared, parse_declared_permissions, _read_text(args.declared))
+        return _report(
+            _with_path(args.grants, check_capabilities, declared, _read_text(args.grants)),
+            f"the pinned base declares every permission granted in {args.grants}",
+        )
+    except (OSError, ValueError) as exc:
+        # Workflow-command annotations are single-line: a raw multi-line
+        # parser error (PyYAML's are) would be truncated at the first newline,
+        # hiding the part that says what is wrong.
+        print(f"::error::{' '.join(str(exc).split())}")
+        return 1
 
 
 if __name__ == "__main__":
