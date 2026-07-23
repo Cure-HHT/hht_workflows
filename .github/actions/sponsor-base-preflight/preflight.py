@@ -61,6 +61,7 @@ def _pin_error(key: str, value: object) -> str | None:
     return None
 
 
+# Implements: HSI-OPS-image-promotion/G
 def check_pins(config: dict) -> list[str]:
     """Errors for every non-digest base image reference in a base-config document."""
     base_images = config.get("base_images")
@@ -105,6 +106,7 @@ def granted_permission_names(doc: dict) -> set[str]:
     return names
 
 
+# Implements: HSI-OPS-image-promotion/H
 def check_capabilities(declared: Iterable[str], grants_yaml: str) -> list[str]:
     """Errors when the sponsor overlay grants a permission the base does not declare."""
     import yaml  # imported here so the pins check needs no third-party dep

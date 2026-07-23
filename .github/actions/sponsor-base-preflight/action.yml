@@ -48,6 +48,7 @@ runs:
         set -euo pipefail
         python3 -m pip install --quiet --user 'PyYAML>=6,<7'
 
+    # Implements: HSI-OPS-image-promotion/G
     - name: Verify base images are digest-pinned
       shell: bash
       env:
@@ -66,7 +67,14 @@ runs:
       run: |
         set -euo pipefail
 
-        docker pull -q "${IMAGE}"
+        # Pull only what is not already local. An image built in an earlier
+        # step of the same job has no registry to pull from, and a redundant
+        # pull of a digest-pinned reference buys nothing.
+        if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+          echo "using locally-present ${IMAGE}"
+        else
+          docker pull -q "${IMAGE}"
+        fi
         cid="$(docker create "${IMAGE}")"
 
         # `docker cp` of an absent path fails; that is the ONLY tolerated
@@ -93,6 +101,7 @@ runs:
           exit "$rc"
         fi
 
+    # Implements: HSI-OPS-image-promotion/H
     - name: Verify the pinned base declares every granted permission
       if: steps.extract.outputs.present == 'true'
       shell: bash
