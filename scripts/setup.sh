@@ -78,20 +78,22 @@ MSG
 # Claude Code tooling: the governance gate (/admin-review), the PR-workflow
 # commands, and the hooks guarding PR merges and worktree deletion.
 # Installed at user scope, so it applies to every Claude Code session
-# on this machine -- see hht_admin/plugins/hht-devkit/README.md.
+# on this machine -- see plugins/hht-devkit/README.md in Cure-HHT/hht_admin
+# (https://github.com/Cure-HHT/hht_admin).
 #
 # This repo is PUBLIC and the plugin lives in the private Cure-HHT/hht_admin
 # (the governance gate greps for sponsor codenames by name, which bars it from
 # a public host). An outside clone therefore cannot fetch it, and does not need
 # to: the checks that matter here are enforced in CI. The install is optional,
 # so failure is a warning rather than a setup failure.
-if ! command -v claude >/dev/null; then
+if ! command -v claude >/dev/null 2>&1; then
   echo
   echo "Note: claude CLI not found; skipped the optional hht-devkit plugin."
 elif claude plugin marketplace add Cure-HHT/hht_admin \
        --scope user --sparse .claude-plugin plugins >/dev/null 2>&1 ||
-     claude plugin marketplace update hht-admin >/dev/null 2>&1; then
-  if claude plugin install hht-devkit@hht-admin --scope user >/dev/null; then
+     claude plugin marketplace update hht-admin >/dev/null; then
+  if claude plugin install hht-devkit@hht-admin --scope user >/dev/null &&
+     claude plugin update hht-devkit@hht-admin >/dev/null; then
     echo
     echo "Installed the hht-devkit Claude Code plugin (user scope): the"
     echo "governance gate, the PR-workflow commands, and hooks guarding PR"
@@ -99,11 +101,13 @@ elif claude plugin marketplace add Cure-HHT/hht_admin \
     echo "Claude Code sessions on this machine."
     echo "  Opt out with: claude plugin disable hht-devkit"
   else
-    echo "Warning: hht-devkit plugin install failed; run it by hand:" >&2
+    echo "Warning: hht-devkit plugin install/update failed; run by hand:" >&2
     echo "  claude plugin install hht-devkit@hht-admin --scope user" >&2
+    echo "  claude plugin update hht-devkit@hht-admin" >&2
   fi
 else
   echo
-  echo "Note: skipped the hht-devkit Claude Code plugin (optional here;"
-  echo "  it lives in the private Cure-HHT/hht_admin and needs access)."
+  echo "Note: skipped the hht-devkit Claude Code plugin -- could not add or"
+  echo "  refresh the hht-admin marketplace. Optional here; it lives in the"
+  echo "  private Cure-HHT/hht_admin and needs access."
 fi
