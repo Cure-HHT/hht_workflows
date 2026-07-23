@@ -76,8 +76,8 @@ pre-commit run --all-files
 MSG
 
 # Claude Code tooling: the governance gate (/admin-review), the PR-workflow
-# commands, and the hooks guarding PR merges, worktree deletion and leaked
-# secrets. Installed at user scope, so it applies to every Claude Code session
+# commands, and the hooks guarding PR merges and worktree deletion.
+# Installed at user scope, so it applies to every Claude Code session
 # on this machine -- see hht_admin/plugins/hht-devkit/README.md.
 #
 # This repo is PUBLIC and the plugin lives in the private Cure-HHT/hht_admin
@@ -95,7 +95,7 @@ elif claude plugin marketplace add Cure-HHT/hht_admin \
     echo
     echo "Installed the hht-devkit Claude Code plugin (user scope): the"
     echo "governance gate, the PR-workflow commands, and hooks guarding PR"
-    echo "merges, worktree deletion and leaked secrets. These apply to ALL"
+    echo "merges and worktree deletion. These apply to ALL"
     echo "Claude Code sessions on this machine."
     echo "  Opt out with: claude plugin disable hht-devkit"
   else
