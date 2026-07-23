@@ -424,6 +424,93 @@ jobs:
           base_ref: ${{ github.event.pull_request.base.sha || github.event.before }}
           head_ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+  sponsor-base-preflight:
+    # End-to-end smoke for the sponsor-base-preflight composite action, run
+    # hermetically: a local base image carrying a seeded /app/PORTAL_ACTIONS
+    # stands in for the core portal-server, so the check exercises the real
+    # docker extraction path without depending on a published core build.
+    # Implements: HSI-OPS-image-promotion/G+H
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed a stand-in base image and a sponsor config
+        id: seed
+        run: |
+          set -euo pipefail
+          mkdir -p deployment/sponsor
+
+          cat > Dockerfile.readiness <<'EOF'
+          FROM busybox:1.36
+          RUN mkdir -p /app
+          COPY PORTAL_ACTIONS.readiness /app/PORTAL_ACTIONS
+          EOF
+          cat > PORTAL_ACTIONS.readiness <<'EOF'
+          portal.site.view
+          portal.site.view_list
+          EOF
+          docker build -q -t readiness-portal-server:local -f Dockerfile.readiness .
+          echo "image=readiness-portal-server:local" >> "$GITHUB_OUTPUT"
+          echo "seeded base image $(docker image inspect readiness-portal-server:local --format '{{ .Id }}')"
+
+          # A syntactically valid digest pin; the capability half of the check
+          # runs against the locally-seeded stand-in image passed as an input,
+          # so this value only has to satisfy the pin format.
+          cat > deployment/base-config.json <<EOF
+          {
+            "base_images": {
+              "portal_server": "ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          }
+          EOF
+
+          cat > deployment/sponsor/role-permissions.yaml <<'EOF'
+          roles:
+            - CRA
+          grants:
+            CRA:
+              - portal.site.view
+              - portal.site.view_list
+          EOF
+
+      - name: Preflight passes on a compatible, digest-pinned config
+        uses: ./.github/actions/sponsor-base-preflight
+        with:
+          portal-server-image: ${{ steps.seed.outputs.image }}
+
+      - name: Preflight rejects a mutable tag and an undeclared grant
+        env:
+          IMAGE: ${{ steps.seed.outputs.image }}
+        run: |
+          set -euo pipefail
+          pip install --quiet 'PyYAML>=6,<7'
+          preflight=.github/actions/sponsor-base-preflight/preflight.py
+
+          # A mutable tag must be rejected (HSI-OPS-image-promotion/G).
+          printf '{"base_images":{"portal_server":"ghcr.io/cure-hht/portal-server:main-latest"}}\n' > /tmp/floating.json
+          rc=0; python3 "$preflight" pins --base-config /tmp/floating.json > /tmp/pins.out 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a mutable base tag"; cat /tmp/pins.out; exit 1; fi
+          grep -q 'main-latest' /tmp/pins.out || { echo "::error::pin failure did not name the offending reference"; exit 1; }
+
+          # A grant the base does not declare must be rejected by name
+          # (HSI-OPS-image-promotion/H).
+          docker create --name readiness-extract "$IMAGE" >/dev/null
+          docker cp readiness-extract:/app/PORTAL_ACTIONS /tmp/declared.txt
+          docker rm readiness-extract >/dev/null
+          cat > /tmp/overreaching.yaml <<'EOF'
+          grants:
+            CRA:
+              - portal.site.view
+              - portal.user.create
+          EOF
+          rc=0; python3 "$preflight" capabilities --declared /tmp/declared.txt --grants /tmp/overreaching.yaml > /tmp/caps.out 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a grant the base does not declare"; cat /tmp/caps.out; exit 1; fi
+          grep -q 'portal.user.create' /tmp/caps.out || { echo "::error::capability failure did not name the missing permission"; exit 1; }
+
+          echo "sponsor-base-preflight readiness OK"
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.
