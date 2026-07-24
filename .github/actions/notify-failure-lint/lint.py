@@ -3,10 +3,13 @@
 
 Two rules, both syntactic:
 
-A — A workflow is COVERED iff its triggers include `push` or `schedule`
-    (regardless of what else they include). A covered workflow must carry
-    the standard notify-failure job, or declare a semantic-notifier
-    exemption.
+A — A workflow is COVERED iff its triggers include `push`, `schedule`, OR
+    `workflow_dispatch` — i.e. anything that is not exclusively
+    `pull_request` and/or `workflow_call` (regardless of what else they
+    include). A covered workflow must carry the standard notify-failure job,
+    or declare a semantic-notifier exemption. A `pull_request`-only or
+    `workflow_call`-only workflow stays exempt: PR failures already show as
+    PR status checks, and a reusable workflow announces from its caller.
 
 C — No workflow may announce failure off a hand-maintained enumeration of
     workflows. The requirement's Rationale fixes the criterion in two limbs:
@@ -30,7 +33,7 @@ import os
 import yaml
 
 NOTIFY_JOB = "notify-failure"
-COVERED_TRIGGERS = ("push", "schedule")
+COVERED_TRIGGERS = ("push", "schedule", "workflow_dispatch")
 MARKER = "# notify-failure: semantic-exempt"
 
 # The exemption marker must be a REAL comment line, not any occurrence of the
@@ -62,7 +65,7 @@ _CLASSIFICATION = re.compile(r"^[-:—][ \t]*(?=[^\n]*[A-Za-z]{3})(\S.*)$")
 
 CANONICAL_IF = (
     "${{ !cancelled() && contains(needs.*.result, 'failure') "
-    "&& (github.event_name == 'push' || github.event_name == 'schedule') }}"
+    "&& github.event_name != 'pull_request' }}"
 )
 
 _WS = re.compile(r"\s+")
@@ -224,7 +227,11 @@ def check(filename, source):
 
     triggers = _triggers(wf)
     if not any(t in COVERED_TRIGGERS for t in triggers):
-        return violations  # exempt from rule A: no push/schedule trigger
+        # Exempt from rule A: triggered exclusively by pull_request and/or
+        # workflow_call, neither of which can self-report a failure a human
+        # isn't already looking at (PR status checks; the reusable workflow's
+        # caller announces).
+        return violations
 
     if not isinstance(jobs, dict):
         return violations + [f"{filename}: `jobs:` is not a mapping"]
@@ -251,8 +258,8 @@ def check(filename, source):
 
     notify = jobs.get(NOTIFY_JOB)
     if not isinstance(notify, dict):
-        return violations + [f"{filename}: is covered (push/schedule) but has "
-                             f"no notify-failure job"]
+        return violations + [f"{filename}: is covered (push/schedule/"
+                             f"workflow_dispatch) but has no notify-failure job"]
 
     expected_needs = sorted(k for k in jobs if k != NOTIFY_JOB)
     declared = notify.get("needs") or []
@@ -325,8 +332,9 @@ def main():
         for violation in all_violations:
             print(f"::error::{violation}")
         print(f"\n{len(all_violations)} notify-failure violation(s).")
-        print("Every workflow triggered by push or schedule must carry the "
-              "standard notify-failure job (HHT-OPS-failure-notification-routing/A), "
+        print("Every workflow triggered by push, schedule, or workflow_dispatch "
+              "must carry the standard notify-failure job "
+              "(HHT-OPS-failure-notification-routing/A), "
               "and no workflow may announce failure off a hand-maintained "
               "enumeration of workflows (HHT-OPS-failure-notification-routing/C).")
         return 1

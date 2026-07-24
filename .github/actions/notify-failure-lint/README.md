@@ -25,14 +25,22 @@ externally-managed interpreter.
 
 ## Rules
 
-**A — Presence.** A workflow is *covered* if its triggers include `push` or
-`schedule` (whatever else they include). Every covered workflow must carry
-the standard `notify-failure` job: `needs:` naming every other job, the
-canonical `if:` guard verbatim, explicit `contents: read` + `actions: read`
+**A — Presence.** A workflow is *covered* if its triggers include `push`,
+`schedule`, or `workflow_dispatch` (whatever else they include) — i.e.
+anything not triggered *exclusively* by `pull_request` and/or
+`workflow_call`. Every covered workflow must carry the standard
+`notify-failure` job: `needs:` naming every other job, the canonical `if:`
+guard verbatim, explicit `contents: read` + `actions: read`
 (`permissions: read-all` is rejected — the grant must be legible in the
 diff), an `actions/checkout` step, and a `notify-failure` reference pinned to
-a 40-character commit SHA. Workflows triggered only by `pull_request` /
-`workflow_dispatch` / `workflow_call` are out of scope.
+a 40-character commit SHA. Workflows triggered only by `pull_request`
+(failures already show as PR status checks) and/or `workflow_call` (the
+reusable workflow's caller announces) are out of scope.
+
+The canonical `if:` guard is
+`${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}`
+— it fires on push, schedule, and `workflow_dispatch` failures, excluding
+only `pull_request`.
 
 **C — No workflow enumeration.** Two limbs. The `on:` block must not carry a
 `workflow_run.workflows` list, *and* a job containing a `slack-notify` step

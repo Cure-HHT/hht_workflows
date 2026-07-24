@@ -76,14 +76,19 @@ runs:
     - name: Post failure notification
       id: post
       continue-on-error: true
-      uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@03d7fd8ebcdf8b5b67e53d78a5564f878480b5bb  # v1.7.0
+      uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@a0bced3413584417f0490bcbdaa318ea88759579  # v1.9.0 (dm-only)
       with:
+        # dm-only when derive_context resolved the dispatcher to an email; the
+        # slack-notify call then skips channels and DMs the triggerer only.
+        # In channel mode `event`/`env` route as before and `dm-email` is the
+        # committer (push) or empty (schedule / unresolved dispatch).
+        dm-only: ${{ steps.ctx.outputs.mode == 'dm-only' }}
         event: ${{ inputs.event }}
         env: ${{ inputs.env }}
         text: ${{ steps.ctx.outputs.text }}
         slack-token: ${{ inputs.slack-token }}
         routing-file: ${{ inputs.routing-file }}
-        dm-user-email: ${{ steps.ctx.outputs.committer-email }}
+        dm-user-email: ${{ steps.ctx.outputs.dm-email }}
 
     # Implements: HHT-OPS-failure-notification-routing/D
     #   The announcement path's own failure is reported over GitHub's
@@ -102,12 +107,29 @@ runs:
       env:
         POST_OUTCOME: ${{ steps.post.outcome }}
         CHANNEL_IDS: ${{ steps.post.outputs.channel-ids }}
+        MODE: ${{ steps.ctx.outputs.mode }}
+        DM_STATUS: ${{ steps.post.outputs.dm-status }}
       run: |
         set -euo pipefail
-        if [ "$POST_OUTCOME" = "success" ] && [ -n "${CHANNEL_IDS:-}" ]; then
-          echo "post-status=ok" >> "$GITHUB_OUTPUT"
-          echo "Failure announcement delivered to: $CHANNEL_IDS"
+        # dm-only success is the DM being SENT — there is no channel to point
+        # at. Channel mode success is at least one channel ID present. MODE
+        # defaults to `channel` when unset so the extracted-body readiness
+        # check (which sets only the two channel-mode vars) still reports `ok`.
+        MODE="${MODE:-channel}"
+        if [ "$MODE" = "dm-only" ]; then
+          if [ "$POST_OUTCOME" = "success" ] && [ "${DM_STATUS:-}" = "sent" ]; then
+            echo "post-status=ok" >> "$GITHUB_OUTPUT"
+            echo "Failure announcement delivered as a DM to the run's triggerer."
+          else
+            echo "post-status=soft-failed" >> "$GITHUB_OUTPUT"
+            echo "::error::notify-failure: the failure announcement did NOT reach Slack (dm-only mode; post outcome: ${POST_OUTCOME:-unknown}, dm-status: ${DM_STATUS:-unknown}). This run failed AND its notification failed — investigate the Slack token, the triggerer's email, and workspace membership."
+          fi
         else
-          echo "post-status=soft-failed" >> "$GITHUB_OUTPUT"
-          echo "::error::notify-failure: the failure announcement did NOT reach Slack (post outcome: ${POST_OUTCOME:-unknown}). This run failed AND its notification failed — investigate the Slack token, routing key, and channel membership."
+          if [ "$POST_OUTCOME" = "success" ] && [ -n "${CHANNEL_IDS:-}" ]; then
+            echo "post-status=ok" >> "$GITHUB_OUTPUT"
+            echo "Failure announcement delivered to: $CHANNEL_IDS"
+          else
+            echo "post-status=soft-failed" >> "$GITHUB_OUTPUT"
+            echo "::error::notify-failure: the failure announcement did NOT reach Slack (post outcome: ${POST_OUTCOME:-unknown}). This run failed AND its notification failed — investigate the Slack token, routing key, and channel membership."
+          fi
         fi
