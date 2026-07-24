@@ -17,6 +17,7 @@ on:
       - 'hooks/confidential-terms-scan/**'
       - '.github/actions/release-notes-publish/**'
       - '.github/actions/sponsor-base-preflight/**'
+      - '.github/actions/elspais-federate/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
       - '.github/workflows/release-notes-tests.yml'
