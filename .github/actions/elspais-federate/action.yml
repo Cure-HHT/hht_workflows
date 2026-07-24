@@ -51,8 +51,11 @@ runs:
         mkdir -p "$PARENT"
         while IFS= read -r entry; do
           [ -n "$entry" ] || continue
-          name="${entry##*/}"
-          dest="$PARENT/$name"
+          # Derive dest from the full owner/repo, not just the repo basename:
+          # two associates with the same repo name under different owners
+          # would otherwise collide on the same dest and the second would
+          # silently link against the first associate's requirements.
+          dest="$PARENT/$(printf '%s' "$entry" | tr '/' '_')"
 
           if [ -d "$dest/.git" ]; then
             echo "associate $entry already present at $dest"

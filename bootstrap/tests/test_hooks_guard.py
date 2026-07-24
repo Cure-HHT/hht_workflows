@@ -80,7 +80,7 @@ def test_guard_off_is_silent(tmp_path):
 
 
 def test_linked_fails_when_only_citation_is_base_tier(tmp_path):
-    repo = make_repo(tmp_path, cites="CAL-BASE-something")
+    repo = make_repo(tmp_path, cites="OTHER-BASE-something")
     assert run_fn("hht_associates_linked", repo).returncode == 1
 
 
@@ -92,6 +92,17 @@ def test_linked_fails_when_only_citation_is_gui_tier(tmp_path):
 def test_linked_ok_when_only_citation_is_own_namespace_base_tier(tmp_path):
     repo = make_repo(tmp_path, cites="DIARY-BASE-something")
     assert run_fn("hht_associates_linked", repo).returncode == 0
+
+
+def test_linked_fails_when_only_citation_is_a_satisfies_edge(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "spec").mkdir(parents=True)
+    (repo / ".elspais.toml").write_text('[project]\nnamespace = "DIARY"\n')
+    (repo / "spec" / "ops-thing.md").write_text(
+        "## DIARY-OPS-thing: Thing\n**Satisfies**: HHT-OPS-repo-bootstrap\n"
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    assert run_fn("hht_associates_linked", repo).returncode == 1
 
 
 def make_sibling(tmp_path: Path, name: str = "sibling") -> Path:

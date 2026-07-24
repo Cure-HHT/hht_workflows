@@ -22,7 +22,7 @@ def parse_associates(raw: str) -> list[str]:
 
     Each segment (owner and repo) must contain at least one alphanumeric character.
     Raises ValueError naming the offending entry when one is not `owner/repo` or
-    contains a dot-only or dash-only segment.
+    contains a segment with no alphanumeric characters.
     """
     seen: set[str] = set()
     out: list[str] = []

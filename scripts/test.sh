@@ -24,7 +24,9 @@ TARGETS='hooks/release-notes-update/tests
 hooks/no-or-true-guard/tests
 hooks/confidential-terms-scan/tests
 .github/actions/release-notes-publish/tests
-.github/actions/sponsor-base-preflight/tests'
+.github/actions/sponsor-base-preflight/tests
+.github/actions/elspais-federate/tests
+bootstrap/tests'
 
 if [ "${1:-}" = "--list" ]; then
   echo "$TARGETS"
@@ -46,3 +48,8 @@ pytest hooks/release-notes-update/tests/ \
 
 ( cd .github/actions/sponsor-base-preflight && \
   PYTHONPATH=. pytest tests/ )
+
+( cd .github/actions/elspais-federate && \
+  PYTHONPATH=. pytest tests/ )
+
+pytest bootstrap/tests/
