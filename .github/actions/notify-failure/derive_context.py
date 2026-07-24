@@ -166,7 +166,7 @@ def _gh_api_json(path):
     try:
         out = subprocess.run(
             ["gh", "api", path],
-            capture_output=True, text=True, check=True).stdout
+            capture_output=True, text=True, check=True, timeout=30).stdout
         return json.loads(out)
     except (subprocess.SubprocessError, OSError, ValueError):
         # SubprocessError covers CalledProcessError (nonzero exit) and
@@ -189,7 +189,7 @@ def _fetch_jobs(repo, run_id):
     out = subprocess.run(
         ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100",
          "--paginate", "--jq", ".jobs[]"],
-        capture_output=True, text=True, check=True).stdout
+        capture_output=True, text=True, check=True, timeout=30).stdout
     return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 

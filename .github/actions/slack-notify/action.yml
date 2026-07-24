@@ -46,8 +46,13 @@ inputs:
     description: >
       Top-level routing key (e.g. deploy-success, deploy-failure,
       android-build-success, maintenance-overdue). Looked up in the
-      routing-file's `routing` map.
-    required: true
+      routing-file's `routing` map. Required in channel mode; the script
+      hard-fails with a clear ::error:: if it is empty and dm-only is not
+      "true". In dm-only mode `event`/`env` are ignored and may be omitted
+      (no routing lookup happens), so this input is declared optional to let
+      dm-only callers leave it out.
+    required: false
+    default: ""
   env:
     description: >
       Optional sub-key for per-environment routing (e.g. dev, qa, uat,
@@ -193,6 +198,16 @@ runs:
           echo "message-tss=" >> "$GITHUB_OUTPUT"
           echo "bookmark-status=" >> "$GITHUB_OUTPUT"
           exit 0
+        fi
+
+        # Channel mode requires a routing key. `event` is declared optional on
+        # the action so dm-only callers can omit it, but a channel post with no
+        # event has nothing to look up — fail loudly rather than resolve an
+        # empty key. dm-only mode already returned above, so reaching here means
+        # channel mode.
+        if [ -z "$EVENT" ]; then
+          echo "::error::slack-notify: 'event' is required unless dm-only=true. Channel routing has no key to look up without it."
+          exit 1
         fi
 
         if [ ! -f "$ROUTING_FILE" ]; then
