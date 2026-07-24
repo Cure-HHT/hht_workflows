@@ -1,0 +1,36 @@
+# notify-failure-lint — composite action.
+#
+# Fails CI if any workflow triggered by push or schedule lacks the standard
+# notify-failure job, or if any workflow announces failure off a
+# hand-maintained enumeration of other workflows
+# (`on.workflow_run.workflows`). This is the enforcement that keeps failure
+# announcement from silently re-accreting into bespoke per-workflow
+# notifiers (CUR-1778).
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file).
+# Caller must actions/checkout first — the lint reads the workflow tree.
+#
+# Implements: HHT-OPS-failure-notification-routing/E
+# Implements: HHT-OPS-composite-action-library/A
+
+name: 'notify-failure-lint'
+description: 'Fail CI when a push/schedule workflow lacks the standard notify-failure job'
+
+inputs:
+  workflows-dir:
+    description: Directory of workflow YAML to check, relative to the workspace.
+    required: false
+    default: .github/workflows
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install PyYAML
+      shell: bash
+      run: python3 -m pip install --user pyyaml
+
+    - name: Check notify-failure presence
+      shell: bash
+      env:
+        INPUT_WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
+      run: python3 "$GITHUB_ACTION_PATH/lint.py"

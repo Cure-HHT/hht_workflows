@@ -37,6 +37,7 @@ each action's README for usage):
 | [`testlab-dashboard-publish`](.github/actions/testlab-dashboard-publish/) | Recover Test Lab run IDs from evidence, fetch Tool Results, and commit `dashboard_data.json` to the dashboard repo via a per-job App token |
 | [`sponsor-base-preflight`](.github/actions/sponsor-base-preflight/) | Reject a sponsor build whose core base images are not digest-pinned, or whose pinned `portal-server` does not declare every permission the sponsor's `role-permissions.yaml` grants |
 | [`notify-failure`](.github/actions/notify-failure/) | The single way a workflow announces its own failure: derives the failed job/step from the run's own jobs API (no per-workflow config, no workflow-name list) and delegates the post to `slack-notify` |
+| [`notify-failure-lint`](.github/actions/notify-failure-lint/) | Fails CI when a workflow triggered by push/schedule lacks the standard `notify-failure` job, or announces failure off a hand-maintained `on.workflow_run.workflows` list |
 
 ## Pre-commit hooks shared from this repo
 
@@ -153,11 +154,17 @@ Inputs:
 Output: `post-status` — `ok` when the announcement reached at least
 one channel, `soft-failed` otherwise.
 
+This is the standard job. `notify-failure-lint` (below) checks for it
+verbatim, so copy the `if:` guard exactly — it is not `failure()`:
+`failure()` would also fire on a cancelled run, and the event test keeps
+the announcement off pull-request runs, where the author is already
+looking at the result.
+
 ```yaml
   notify-failure:
     name: Notify failure
-    if: failure()
-    needs: [build, test]   # list every job this run should be gated on
+    needs: [build, test]   # list every OTHER job in the workflow
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && (github.event_name == 'push' || github.event_name == 'schedule') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -167,6 +174,60 @@ one channel, `soft-failed` otherwise.
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@<commit-sha>  # SHA-pin; see "Pinning & versioning"
         with:
           slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
+```
+
+### `notify-failure-lint`
+
+The enforcement half of `notify-failure`: a static check that fails CI so
+bespoke per-workflow notifiers cannot silently re-accrete. It reads the
+consumer's workflow tree and applies two rules:
+
+- **Presence.** A workflow is *covered* if its triggers include `push` or
+  `schedule` (whatever else they include). Every covered workflow must
+  carry the standard `notify-failure` job above — `needs:` naming every
+  other job, the canonical `if:` guard, `contents: read` + `actions: read`,
+  an `actions/checkout` step, and a SHA-pinned `notify-failure` reference.
+  Workflows triggered only by `pull_request` / `workflow_dispatch` /
+  `workflow_call` are out of scope.
+- **No workflow enumeration.** No workflow may key failure announcement off
+  `on.workflow_run.workflows`. That list holds workflow *display names*,
+  matched exactly, with no wildcard support and no signal when an entry
+  stops matching anything — which is exactly how the mechanism this action
+  replaced rotted undetectably.
+
+There is no allowlist of workflow filenames in the checker: covered-ness
+comes from each workflow's own triggers, so there is nothing to keep in
+sync.
+
+**Semantic exemption.** A workflow that announces failure with genuinely
+custom semantics (say a maintenance report that posts its own summary) can
+opt out of the presence rule with a comment line anywhere in the file:
+
+```yaml
+# notify-failure: semantic-exempt
+```
+
+The marker alone is not enough: the workflow must also contain a
+`slack-notify` step guarded by `failure()` or `always()`, so the marker
+cannot be pasted onto a workflow that in fact announces nothing. The
+enumeration rule has no exemption.
+
+The caller **must** run `actions/checkout` first — the lint reads the
+workflow tree from the workspace.
+
+| Input | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `workflows-dir` | no | `.github/workflows` | Directory of workflow YAML to check, relative to the workspace. |
+
+```yaml
+  notify-failure-lint:
+    name: notify-failure lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure-lint@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
 ## Pinning & versioning

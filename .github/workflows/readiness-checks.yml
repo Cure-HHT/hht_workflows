@@ -548,6 +548,35 @@ jobs:
             echo "::error::jobs API returned no jobs; notify-failure cannot derive context"
             exit 1
           fi
+      - name: Assert the readiness routing fixture still resolves
+        # `soft-failed` is ALSO what a broken fixture produces: a missing
+        # routing key, a routing value naming no channel, or a missing file
+        # each `exit 1` inside slack-notify. Without this check the job would
+        # stay green while silently no longer exercising the invalid-token
+        # path it claims to. Assert the fixture resolves BEFORE invoking.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pyyaml
+          python3 - <<'PY'
+          import sys
+          import yaml
+          path = ".github/actions/notify-failure/readiness-slack-channels.yml"
+          with open(path, encoding="utf-8") as handle:
+              doc = yaml.safe_load(handle) or {}
+          routing = doc.get("routing") or {}
+          channels = doc.get("channels") or {}
+          key = routing.get("workflow-failure")
+          if key is None:
+              print(f"::error::{path}: routing['workflow-failure'] is missing; "
+                    "the soft-fail assertion below would pass for the wrong reason")
+              sys.exit(1)
+          if key not in channels:
+              print(f"::error::{path}: routing['workflow-failure'] -> {key!r} "
+                    f"is not a key of `channels` ({sorted(channels)})")
+              sys.exit(1)
+          print(f"readiness routing fixture resolves: workflow-failure -> "
+                f"{key} -> {channels[key]}")
+          PY
       - name: Invoke the action end-to-end (soft-fail path, nothing posted)
         id: notify
         uses: ./.github/actions/notify-failure
@@ -567,6 +596,71 @@ jobs:
             exit 1
           fi
           echo "notify-failure readiness OK: composite ran end-to-end and soft-failed as designed."
+      - name: Exercise the `ok` branch of the status step
+        # The invocation above can only ever produce `soft-failed`, so the
+        # `ok` branch is otherwise never run: a mis-referenced
+        # `steps.post.outcome` / `steps.post.outputs.channel-ids` would make
+        # every SUCCESSFUL notification report `soft-failed` and emit a
+        # spurious ::error:: on a message that was in fact delivered — and
+        # readiness would stay green. Rather than restate the logic (which
+        # would drift), extract the real step's script from action.yml and
+        # run it with a success-shaped environment.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/status-step.sh
+          import yaml
+          with open(".github/actions/notify-failure/action.yml", encoding="utf-8") as handle:
+              action = yaml.safe_load(handle)
+          steps = action["runs"]["steps"]
+          script = next(s["run"] for s in steps if s.get("id") == "status")
+          print(script)
+          PY
+          : > /tmp/status-output
+          GITHUB_OUTPUT=/tmp/status-output POST_OUTCOME=success CHANNEL_IDS=C123 \
+            bash /tmp/status-step.sh
+          if ! grep -qx 'post-status=ok' /tmp/status-output; then
+            echo "::error::status step did not report 'ok' for a delivered announcement; got: $(cat /tmp/status-output)"
+            exit 1
+          fi
+          echo "notify-failure status step reports 'ok' on the delivered path."
+
+  notify-failure-lint:
+    # Readiness for the enforcement half: unit-test the checker, then run the
+    # composite itself against a conforming fixture (must pass) and a
+    # non-conforming one (must fail). The second is what proves the action
+    # actually fails CI rather than merely printing.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit-test the linter
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pyyaml pytest
+          cd .github/actions/notify-failure-lint
+          python3 -m pytest -q
+      - name: Passes on a conforming fixture
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/good
+      - name: Fails on a non-conforming fixture
+        id: bad
+        continue-on-error: true
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/bad
+      - name: Assert the non-conforming fixture was rejected
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.bad.outcome }}" != "failure" ]; then
+            echo "::error::lint passed a workflow missing its notify-failure job"
+            exit 1
+          fi
+          echo "Linter correctly rejected the non-conforming fixture."
 
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
