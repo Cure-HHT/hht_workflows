@@ -24,6 +24,13 @@ description: >
   lookup or DM failures are soft (::warning::, `dm-status: soft-failed`)
   because the routed channels have already received the message.
 
+  When `dm-only` is "true", the action skips channel resolution and channel
+  posting entirely (no conversations.list, no channel chat.postMessage) and
+  sends ONLY the DM. `dm-user-email` is then required — dm-only with nobody
+  to DM is a misconfiguration and hard-fails. `event`/`env` are ignored in
+  dm-only mode. The DM's soft-fail semantics are unchanged, but because no
+  channel received the message the warning says so explicitly.
+
   Required Slack bot scopes on the supplied token:
     - chat:write
     - channels:read    (conversations.list)
@@ -107,6 +114,18 @@ inputs:
       disables the DM entirely.
     required: false
     default: ""
+  dm-only:
+    description: >
+      When "true", skip channel resolution and channel posting entirely and
+      send ONLY the direct message to `dm-user-email` (which then becomes
+      required — an empty value is a hard error, since dm-only with nobody to
+      DM would notify no one). `event`/`env` are ignored in this mode. The
+      DM's soft-fail semantics are unchanged (::warning::, `dm-status:
+      soft-failed`), but the warning states that no channel received the
+      message, because in dm-only mode none did. Default "false" preserves the
+      normal channel-post (then optional DM) behavior byte-for-byte.
+    required: false
+    default: "false"
   thread-reply-text:
     description: >
       Optional mrkdwn body posted as a thread reply on the main message,
@@ -161,8 +180,20 @@ runs:
         BOOKMARK_TITLE: ${{ inputs.bookmark-title }}
         SLACK_TOKEN: ${{ inputs.slack-token }}
         ROUTING_FILE: ${{ inputs.routing-file }}
+        DM_ONLY: ${{ inputs.dm-only }}
       run: |
         set -euo pipefail
+
+        # dm-only mode: no channel work at all. Emit empty channel outputs so
+        # downstream consumers (thread-reply, the caller's status step) see
+        # "no channel posted", and let the DM step below do the delivery.
+        if [ "$DM_ONLY" = "true" ]; then
+          echo "dm-only mode: skipping channel resolution and posting; DM only."
+          echo "channel-ids=" >> "$GITHUB_OUTPUT"
+          echo "message-tss=" >> "$GITHUB_OUTPUT"
+          echo "bookmark-status=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         if [ ! -f "$ROUTING_FILE" ]; then
           echo "::error::routing-file '$ROUTING_FILE' not found in caller workspace. Did the caller run actions/checkout?"
@@ -548,20 +579,34 @@ runs:
         DM_EMAIL: ${{ inputs.dm-user-email }}
         TEXT: ${{ inputs.text }}
         BLOCKS: ${{ inputs.blocks }}
+        DM_ONLY: ${{ inputs.dm-only }}
       run: |
         set -euo pipefail
 
         if [ -z "$DM_EMAIL" ]; then
+          if [ "$DM_ONLY" = "true" ]; then
+            # dm-only with no recipient is a misconfiguration: there is no
+            # channel fallback, so this would notify nobody. Hard-fail.
+            echo "::error::slack-notify: dm-only mode requires a non-empty dm-user-email, but it was empty. There is no channel post in dm-only mode, so nobody would be notified."
+            exit 1
+          fi
           echo "dm-status=skipped" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        # All DM failures are soft: the routed channels already received
-        # the message (the post step above would have failed the action
-        # otherwise), so a lookup/DM-side hiccup must not paint the run
-        # red. The outcome is reported via `dm-status`.
+        # In channel mode the routed channels already received the message
+        # (the post step would have failed the action otherwise), so a DM-side
+        # hiccup is soft. In dm-only mode NO channel got it, so a soft-fail
+        # here means nobody was notified — the caller's status step turns that
+        # `dm-status: soft-failed` into an ::error::. The soft-fail stays a
+        # ::warning:: here either way; only the wording changes.
+        if [ "$DM_ONLY" = "true" ]; then
+          DM_CONTEXT="dm-only mode: NO channel received this message, so nobody was notified"
+        else
+          DM_CONTEXT="channels already notified"
+        fi
         soft_fail() {
-          echo "::warning::$1"
+          echo "::warning::$1 ($DM_CONTEXT)."
           echo "dm-status=soft-failed" >> "$GITHUB_OUTPUT"
           exit 0
         }
@@ -574,11 +619,11 @@ runs:
           'https://slack.com/api/users.lookupByEmail') || lookup_resp=""
 
         if ! printf '%s' "$lookup_resp" | jq -e . >/dev/null 2>&1; then
-          soft_fail "Slack users.lookupByEmail returned non-JSON response. DM not sent (channels already notified)."
+          soft_fail "Slack users.lookupByEmail returned non-JSON response. DM not sent"
         fi
         if [ "$(echo "$lookup_resp" | jq -r '.ok')" != "true" ]; then
           lookup_err=$(echo "$lookup_resp" | jq -r '.error // "unknown"')
-          soft_fail "Slack users.lookupByEmail failed: $lookup_err. Bot may need 'users:read.email' scope, or no workspace user has this email. DM not sent (channels already notified)."
+          soft_fail "Slack users.lookupByEmail failed: $lookup_err. Bot may need 'users:read.email' scope, or no workspace user has this email. DM not sent"
         fi
         user_id=$(echo "$lookup_resp" | jq -r '.user.id')
 
@@ -603,11 +648,11 @@ runs:
           'https://slack.com/api/chat.postMessage') || dm_resp=""
 
         if ! printf '%s' "$dm_resp" | jq -e . >/dev/null 2>&1; then
-          soft_fail "Slack chat.postMessage (DM to $user_id) returned non-JSON response. DM not sent (channels already notified)."
+          soft_fail "Slack chat.postMessage (DM to $user_id) returned non-JSON response. DM not sent"
         fi
         if [ "$(echo "$dm_resp" | jq -r '.ok')" != "true" ]; then
           dm_err=$(echo "$dm_resp" | jq -r '.error // "unknown"')
-          soft_fail "Slack chat.postMessage (DM to $user_id) failed: $dm_err. Bot may need 'im:write' scope. Channels already notified."
+          soft_fail "Slack chat.postMessage (DM to $user_id) failed: $dm_err. Bot may need 'im:write' scope"
         fi
 
         echo "DM sent to user $user_id (ts=$(echo "$dm_resp" | jq -r '.ts'))"
