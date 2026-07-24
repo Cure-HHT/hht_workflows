@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 
 # Job conclusions that mean "this run did not succeed and should be announced".
 FAILED_CONCLUSIONS = ("failure", "timed_out", "cancelled")
@@ -76,15 +77,20 @@ def committer_email(event_name, event):
 
 
 def _fetch_jobs(repo, run_id):
+    """Every job of the run, across all pages.
+
+    `gh api --paginate` concatenates each page's body with NO separator and
+    no trailing newline, so the raw output of a 2+ page response is not
+    line-delimited JSON and cannot be parsed page-by-page. `--jq '.jobs[]'`
+    makes gh do the framing for us: one compact JSON object per line,
+    uniformly across every page. `per_page=100` also keeps the common case
+    (well under 100 jobs) to a single request.
+    """
     out = subprocess.run(
-        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs", "--paginate"],
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+         "--paginate", "--jq", ".jobs[]"],
         capture_output=True, text=True, check=True).stdout
-    jobs = []
-    for chunk in out.strip().splitlines():
-        if not chunk.strip():
-            continue
-        jobs.extend(json.loads(chunk).get("jobs", []))
-    return jobs
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 
 def main():
@@ -102,24 +108,40 @@ def main():
         jobs = _fetch_jobs(repo, run_id)
     except (subprocess.CalledProcessError, ValueError) as exc:
         # Degraded but still announced: a context-lookup failure must not
-        # swallow the failure notification itself.
-        print(f"::warning::notify-failure: could not read run jobs ({exc}); "
+        # swallow the failure notification itself. CalledProcessError.__str__
+        # reports only the return code, so include stderr — otherwise a 403
+        # from a missing `actions: read` grant is indistinguishable from a
+        # parse failure.
+        detail = getattr(exc, "stderr", "") or ""
+        print(f"::warning::notify-failure: could not read run jobs ({exc}"
+              f"{': ' + detail.strip() if detail.strip() else ''}); "
               "posting a degraded message.")
         jobs = []
 
     units = failed_units(jobs)
     text = compose(workflow, branch, actor, run_url, units, hints)
 
+    # The committer email is advisory (it only adds a DM). An unreadable or
+    # malformed event payload must never be able to abort this script and
+    # thereby suppress the announcement it exists to send.
     event = {}
     event_path = os.environ.get("GITHUB_EVENT_PATH")
-    if event_path and os.path.exists(event_path):
-        with open(event_path, encoding="utf-8") as handle:
-            event = json.load(handle)
+    if event_path:
+        try:
+            with open(event_path, encoding="utf-8") as handle:
+                event = json.load(handle)
+        except (OSError, ValueError) as exc:
+            print(f"::warning::notify-failure: could not read the event payload "
+                  f"({exc}); continuing without a committer email.")
 
+    # Per-invocation delimiter: the wrapped value contains the branch name,
+    # step names, and caller-supplied hint text, any of which could legally
+    # contain a fixed literal and so truncate the output / inject outputs.
+    delim = f"__NF_EOF_{uuid.uuid4().hex}__"
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-        out.write("text<<__NF_EOF__\n")
+        out.write(f"text<<{delim}\n")
         out.write(text + "\n")
-        out.write("__NF_EOF__\n")
+        out.write(f"{delim}\n")
         out.write(f"committer-email={committer_email(event_name, event)}\n")
 
 

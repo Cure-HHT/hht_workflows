@@ -512,7 +512,13 @@ jobs:
           echo "sponsor-base-preflight readiness OK"
 
   notify-failure:
-    name: notify-failure readiness
+    # End-to-end readiness for the notify-failure composite: unit tests, the
+    # jobs-API grant, and a real invocation of the action itself against a
+    # fixture routing file with a deliberately invalid Slack token. The last
+    # of those is what proves — in CI — that the composite resolves, that its
+    # pinned nested slack-notify reference resolves, and that the
+    # continue-on-error / $GITHUB_OUTPUT / ::error:: annotation plumbing works.
+    # Nothing is ever posted to Slack.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -542,6 +548,25 @@ jobs:
             echo "::error::jobs API returned no jobs; notify-failure cannot derive context"
             exit 1
           fi
+      - name: Invoke the action end-to-end (soft-fail path, nothing posted)
+        id: notify
+        uses: ./.github/actions/notify-failure
+        with:
+          # Deliberately invalid: Slack answers `invalid_auth`, the post step
+          # fails, continue-on-error absorbs it, and the status step must
+          # report `soft-failed` and emit the assertion-D annotation.
+          slack-token: xoxb-readiness-fixture-invalid-token
+          routing-file: .github/actions/notify-failure/readiness-slack-channels.yml
+      - name: Assert the soft-fail path reported itself
+        env:
+          POST_STATUS: ${{ steps.notify.outputs.post-status }}
+        run: |
+          set -euo pipefail
+          if [ "${POST_STATUS:-}" != "soft-failed" ]; then
+            echo "::error::notify-failure post-status was '${POST_STATUS:-<empty>}', expected 'soft-failed'"
+            exit 1
+          fi
+          echo "notify-failure readiness OK: composite ran end-to-end and soft-failed as designed."
 
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce

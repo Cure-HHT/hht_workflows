@@ -28,6 +28,7 @@ From `readiness-checks.yml` — one entry per job:
 - `build-urs` — URS compile readiness (synthetic fixture to PDF + DOCX)
 - `confidential-terms-scan` — scanner-action readiness: `test_terms` happy path plus the all-four-surfaces negative fixture (fixture-only; no Doppler identity)
 - `confidential-terms-gate` — the real confidential-terms gate for this repo: scans the PR range against the live `scan-hht-workflows` Doppler prohibit list (assertion I)
+- `notify-failure` — notify-failure composite action, end-to-end: unit tests, the jobs-API grant, and a real invocation whose Slack post soft-fails by design (fixture routing file, invalid token, nothing posted)
 - `no-op` — placeholder; retired as real jobs replace it
 
 From `release-notes-tests.yml`:

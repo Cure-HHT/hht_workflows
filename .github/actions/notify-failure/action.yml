@@ -67,7 +67,9 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         INPUT_HINTS: ${{ inputs.hints }}
-      run: python3 "$GITHUB_ACTION_PATH/derive_context.py"
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_ACTION_PATH/derive_context.py"
 
     # Soft-failed by design: a Slack outage must not repaint an otherwise
     # green run. The status step below makes that soft failure visible.
@@ -86,8 +88,16 @@ runs:
     # Implements: HHT-OPS-failure-notification-routing/D
     #   The announcement path's own failure is reported over GitHub's
     #   annotation channel, which does not depend on Slack.
+    #
+    # `if: always()` is load-bearing. Composite steps default to
+    # `if: success()`, so if the context derivation hard-fails the post step
+    # is skipped AND this step would be skipped too — no Slack post and no
+    # ::error:: annotation, i.e. assertion D breaks exactly when it matters
+    # most. Running unconditionally means the `POST_OUTCOME != success`
+    # branch below reports the skipped/empty case, which is the truth.
     - name: Report delivery status
       id: status
+      if: always()
       shell: bash
       env:
         POST_OUTCOME: ${{ steps.post.outcome }}

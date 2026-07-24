@@ -1,0 +1,17 @@
+# Fixture routing file for the `notify-failure` readiness job ONLY.
+#
+# It exists so the readiness job can invoke the composite end-to-end without
+# depending on a real routing file or a real Slack workspace. The job passes a
+# deliberately invalid slack-token, so routing resolves, the nested
+# slack-notify composite runs, Slack rejects the call, and the soft-fail /
+# annotation path is exercised — with nothing ever posted.
+#
+# Not a template for consumers: real callers keep their routing in
+# `.github/slack-channels.yml` at their repo root.
+
+routing:
+  # Flat (single-channel) key — the default `event` of notify-failure.
+  workflow-failure: ops
+
+channels:
+  ops: '#readiness-fixture-never-posted-to'
