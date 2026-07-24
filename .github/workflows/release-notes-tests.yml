@@ -18,6 +18,7 @@ on:
       - '.github/actions/release-notes-publish/**'
       - '.github/actions/sponsor-base-preflight/**'
       - '.github/actions/elspais-federate/**'
+      - 'bootstrap/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
       - '.github/workflows/release-notes-tests.yml'
@@ -74,3 +75,7 @@ jobs:
           set -euo pipefail
           cd .github/actions/elspais-federate
           PYTHONPATH=. pytest tests/ -v
+      - name: Run bootstrap guard tests
+        run: |
+          set -euo pipefail
+          pytest bootstrap/tests/ -v

@@ -116,3 +116,71 @@ hht_hooks_guard() {
     fi
     return 0
 }
+
+# =====================================================
+# elspais associate guard
+# =====================================================
+#
+# Cross-repo requirement citations (Refines:/Integrates: naming another repo's
+# REQ) resolve only when that repo is linked as an elspais associate. The link
+# lives in .elspais.local.toml, which names filesystem paths and is git-ignored
+# -- so, exactly like core.hooksPath, it cannot survive a clone.
+#
+#   hht_associates_linked <repo_root>
+#       Pure predicate. 0 = nothing to link, or something is linked.
+#       1 = this repo cites another repo and nothing is linked. No output.
+#
+#   hht_associates_guard <repo_root>
+#       CI-silent developer warning naming `elspais associate --all`.
+
+# Returns 0 when spec/ contains a structured citation whose namespace differs
+# from this repo's own; 1 otherwise.
+hht_cites_foreign_repo() {
+    local repo_root="${1:-.}"
+    local ns
+    [ -f "$repo_root/.elspais.toml" ] || return 1
+    [ -d "$repo_root/spec" ] || return 1
+    ns="$(sed -n 's/^ *namespace *= *"\([A-Za-z0-9]*\)".*/\1/p' \
+          "$repo_root/.elspais.toml" | head -1)"
+    [ -n "$ns" ] || return 1
+    # One pass: collect every namespace cited by a structured edge, then ask
+    # whether any of them is not ours.
+    grep -rhE '^\*\*(Refines|Implements|Integrates)\*\*:' "$repo_root/spec" 2>/dev/null \
+        | grep -oE '[A-Za-z0-9]+-(PRD|OPS|DEV|GUI)-' \
+        | grep -qvE "^${ns}-"
+}
+
+# Implements: HHT-OPS-repo-bootstrap/I
+hht_associates_linked() {
+    local repo_root="${1:-.}"
+    hht_cites_foreign_repo "$repo_root" || return 0
+    [ -s "$repo_root/.elspais.local.toml" ] &&
+        grep -q '\[associates\.' "$repo_root/.elspais.local.toml"
+}
+
+# Implements: HHT-OPS-repo-bootstrap/I
+hht_associates_guard() {
+    local repo_root="${1:-.}"
+    local mode="${HHT_HOOKS_GUARD:-warn}"
+
+    [ "$mode" = "off" ] && return 0
+    [ -n "${CI:-}" ] && return 0
+
+    hht_associates_linked "$repo_root" && return 0
+
+    echo ""
+    echo "  !!  This repo cites requirements owned by another Cure-HHT repo,"
+    echo "      but no elspais associate is linked, so those citations will"
+    echo "      not resolve and \`elspais checks\` will report broken references."
+    echo "      Link the sibling repos you have cloned with:"
+    echo ""
+    echo "          elspais associate --all"
+    echo ""
+
+    if [ "$mode" = "strict" ]; then
+        echo "  !!  HHT_HOOKS_GUARD=strict — refusing to continue."
+        echo ""
+        return 1
+    fi
+    return 0
+}
