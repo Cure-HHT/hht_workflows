@@ -198,8 +198,13 @@ consumer's workflow tree and applies two rules:
   entry stops matching anything — which is exactly how the mechanism this
   action replaced rotted undetectably. Moving the list out of `on:` and into
   `watched-workflows.txt` changes nothing about that, so the second limb
-  rejects it too. Merely *mentioning* `workflow_run.name` in message text is
-  fine.
+  rejects it too. The second limb reads `run:` bodies and `if:` expressions
+  alike, so `contains(fromJSON(vars.WATCHED), github.event.workflow_run.name)`
+  on a `slack-notify` step is rejected as well. It is a narrow proxy that
+  under-fires by design: the name must be an argument of a real *matching*
+  command, so merely *mentioning* `workflow_run.name` in message text (or
+  passing an unrelated `${{ inputs.channel }}` beside it) is fine, and a
+  lookup split across two jobs by `needs:` is not detected.
 
 There is no allowlist of workflow filenames in the checker: covered-ness
 comes from each workflow's own triggers, so there is nothing to keep in
@@ -216,9 +221,11 @@ stating the outcome classification it publishes:
 
 Three things are required, none sufficient alone:
 
-- The marker must be an actual **comment line** (`#` as the first non-blank
-  character). The same text inside a `run:` string is not an exemption.
-- It must state a **classification** after a `-`, `:` or em-dash separator.
+- The marker must be an actual top-level **comment line**, with `#` in
+  **column 0**. The same text inside a `run:` string is not an exemption —
+  neither quoted, nor as a shell comment inside a `run: |` block scalar.
+- It must state a **classification** after a `-`, `:` or em-dash separator,
+  with at least three consecutive letters in it (`- .` does not pass).
   A bare marker is rejected: the check enumerates accepted exemptions as
   `file -> classification` on its own log, which is the artifact a reviewer
   judges the carve-out by.

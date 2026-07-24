@@ -39,9 +39,21 @@ a 40-character commit SHA. Workflows triggered only by `pull_request` /
 must not match `github.event.workflow_run.name` against a list read from a
 file or an input. Such a list holds workflow *display names*, matched
 exactly, with no wildcard and no signal when an entry stops matching — moving
-it out of `on:` and into a text file changes none of that. Merely mentioning
-`workflow_run.name` in message text is fine. This rule has no exemption and
-is evaluated for every workflow, covered or not.
+it out of `on:` and into a text file changes none of that. Limb 2 reads
+`run:` bodies and `if:` expressions (step- and job-level), so
+`contains(fromJSON(vars.WATCHED_WORKFLOWS), github.event.workflow_run.name)`
+on a `slack-notify` step is rejected too. This rule has no exemption and is
+evaluated for every workflow, covered or not.
+
+Limb 2 is a deliberately narrow proxy, so it under-fires by design rather
+than blocking legitimate workflows. The name must be an argument of a real
+*matching* command (`grep`/`rg`/`comm`/`look`, or `contains()` over an
+`inputs.`/`vars.` value) — merely mentioning `workflow_run.name` in message
+text, passing an unrelated `${{ inputs.channel }}`, or `cat`ing an unrelated
+config file alongside it is fine. It also looks only within a single job: a
+lookup performed in one job and announced from a `needs:`-dependent job is
+not detected. Following `needs:` chains would be disproportionate here —
+limb 1 plus review covers the construct that actually caused the defect.
 
 There is no allowlist of workflow filenames in the checker: covered-ness
 comes from each workflow's own triggers, so there is nothing to keep in sync.
@@ -55,9 +67,11 @@ publishes:
     # notify-failure: semantic-exempt - posts a monthly maintenance summary, failures included
 
 Three things are required, none sufficient alone: the marker must be an
-actual comment line (`#` as the first non-blank character — the same text
-inside a `run:` string is not an exemption); it must state a classification
-after a `-`, `:` or em-dash separator; and the workflow must contain a
+actual top-level comment line, with `#` in **column 0** (the same text inside
+a `run:` string — quoted or inside a `run: |` block scalar, where it is just
+a shell comment — is not an exemption); it must state a classification after
+a `-`, `:` or em-dash separator, carrying at least three consecutive letters
+so `- .` does not pass; and the workflow must contain a
 `slack-notify` step guarded by `failure()` or `always()`. Accepted exemptions
 are printed on the check's own log as `file -> classification`, which is the
 artifact a reviewer judges the carve-out by.

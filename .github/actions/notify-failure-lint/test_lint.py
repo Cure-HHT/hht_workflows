@@ -256,6 +256,102 @@ jobs:
     assert lint.check("pager.yml", src) == []
 
 
+def test_unrelated_input_next_to_the_workflow_name_is_not_an_enumeration():
+    # Limb 2 must require the identity to be an ARGUMENT OF A MATCHING
+    # COMMAND. A bare `${{ inputs.X }}` in the same message text is an
+    # ordinary parameterised announcement, and rejecting it would block
+    # legitimate adoption with a message that is untrue for it.
+    src = """
+name: Pager
+on:
+  workflow_run:
+    types: [completed]
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Run of ${{ github.event.workflow_run.name }} to ${{ inputs.channel }}"
+      - if: failure()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
+"""
+    assert lint.check("pager.yml", src) == []
+
+
+def test_reading_an_unrelated_file_next_to_the_workflow_name_is_not_an_enumeration():
+    # `cat`/`sed`/`jq` are not matching verbs: reading a channel-routing file
+    # in the same `run:` body that echoes the workflow name is not a lookup
+    # of the workflow against an enumeration.
+    src = """
+name: Pager
+on:
+  workflow_run:
+    types: [completed]
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cat .github/slack-channels.yml
+          echo "Run of ${{ github.event.workflow_run.name }} finished"
+      - if: failure()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
+"""
+    assert lint.check("pager.yml", src) == []
+
+
+def test_enumeration_in_an_if_expression_is_rejected():
+    # The same hand-maintained list, expressed as a GitHub expression rather
+    # than as shell. A `run:`-only scan accepts it, which is why limb 2 reads
+    # step-level and job-level `if:` too.
+    src = """
+name: Pager
+on:
+  workflow_run:
+    types: [completed]
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(fromJSON(vars.WATCHED_WORKFLOWS), github.event.workflow_run.name)
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@1111111111111111111111111111111111111111
+"""
+    violations = lint.check("pager.yml", src)
+    assert any("enumeration" in v for v in violations), violations
+
+
+def test_enumeration_in_a_job_level_if_expression_is_rejected():
+    src = """
+name: Pager
+on:
+  workflow_run:
+    types: [completed]
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    if: contains(vars.WATCHED_WORKFLOWS, github.event.workflow_run.name)
+    steps:
+      - if: failure()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
+"""
+    assert any("enumeration" in v for v in lint.check("pager.yml", src))
+
+
+def test_unrelated_input_in_an_if_expression_is_not_an_enumeration():
+    src = """
+name: Pager
+on:
+  workflow_run:
+    types: [completed]
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - if: inputs.enabled && contains(github.event.workflow_run.name, 'nightly')
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
+"""
+    assert lint.check("pager.yml", src) == []
+
+
 def test_enumeration_lookup_needs_a_slack_step_in_the_same_job():
     # Narrowness check: a build job that greps a data file and happens to
     # mention workflow_run is not an announcement path.
@@ -317,6 +413,55 @@ jobs:
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
 """
     assert any("no notify-failure job" in v for v in lint.check("x.yml", src))
+
+
+def test_spoofed_marker_inside_a_block_scalar_is_not_an_exemption():
+    # The block-scalar form of the same fail-open: a SHELL comment inside a
+    # `run: |` body is textually identical to an indented YAML comment, so
+    # the marker is only recognised at column 0.
+    src = """
+name: Sneaky
+on:
+  push:
+    branches: [main]
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          # notify-failure: semantic-exempt - just a shell comment, not an exemption
+          echo hi
+      - if: always()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
+"""
+    assert lint.exemption(src) == (False, None)
+    assert any("no notify-failure job" in v for v in lint.check("x.yml", src))
+
+
+def test_marker_with_only_punctuation_as_its_classification_is_rejected():
+    # `-> .` is not something a reviewer can act on; require some substance.
+    src = """# notify-failure: semantic-exempt - .
+name: Maint
+on:
+  schedule:
+    - cron: '0 9 1 * *'
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify
+        if: failure()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@abc
+"""
+    assert any("states no outcome classification" in v
+               for v in lint.check("m.yml", src))
+
+
+def test_permissions_read_all_is_rejected():
+    # Both READMEs promise the canonical explicit form only.
+    src = GOOD.replace("    permissions:\n      contents: read\n      actions: read\n",
+                       "    permissions: read-all\n")
+    assert any("actions: read" in v for v in lint.check("x.yml", src))
 
 
 def test_marker_without_a_classification_is_rejected():

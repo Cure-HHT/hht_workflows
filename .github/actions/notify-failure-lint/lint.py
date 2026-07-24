@@ -36,16 +36,29 @@ MARKER = "# notify-failure: semantic-exempt"
 # The exemption marker must be a REAL comment line, not any occurrence of the
 # string anywhere in the file: a raw substring scan matches inside a `run:`
 # body, so `- run: 'echo "# notify-failure: semantic-exempt"'` would buy
-# silence. Anchored at line start, `#` first non-blank character.
+# silence.
+#
+# The marker is required at COLUMN 0 — no leading whitespace. Allowing indent
+# reopens the same fail-open in block-scalar form: a shell comment inside a
+# `run: |` body is textually identical to an indented YAML comment, so
+#
+#     - run: |
+#         # notify-failure: semantic-exempt - just a shell comment
+#
+# would buy silence too. A block-scalar body is always indented past its
+# parent key, so column 0 is a complete discriminator, and it is the form the
+# README documents.
 #
 # Assertion A requires the exemption to state "the outcome classification it
-# publishes, in a form the Assertion-E check enumerates" — so a non-empty
-# trailing description after a `-`, `:` or em-dash separator is REQUIRED, and
-# main() prints every accepted exemption so a reviewer has an artifact.
+# publishes, in a form the Assertion-E check enumerates" — so a trailing
+# description after a `-`, `:` or em-dash separator is REQUIRED, and it must
+# carry some substance (at least three consecutive letters): `- .` enumerates
+# as `-> .`, which no reviewer can act on. main() prints every accepted
+# exemption so a reviewer has an artifact.
 _MARKER_LINE = re.compile(
-    r"^[ \t]*#[ \t]*notify-failure:[ \t]*semantic-exempt[ \t]*(.*?)[ \t]*$",
+    r"^#[ \t]*notify-failure:[ \t]*semantic-exempt[ \t]*(.*?)[ \t]*$",
     re.M)
-_CLASSIFICATION = re.compile(r"^[-:—][ \t]*(\S.*)$")
+_CLASSIFICATION = re.compile(r"^[-:—][ \t]*(?=[^\n]*[A-Za-z]{3})(\S.*)$")
 
 CANONICAL_IF = (
     "${{ !cancelled() && contains(needs.*.result, 'failure') "
@@ -109,19 +122,33 @@ def exemption(source):
 #
 # Implemented as a deliberately NARROW proxy so it cannot fire on ordinary
 # message text: only inside a job that already carries a Slack-announcement
-# step, and only for a `run:` that BOTH names the workflow-run identity AND
-# looks it up against a file or a workflow input. `echo "Workflow ${{
-# github.event.workflow_run.name }} failed"` is untouched; `grep -qx "${{
-# github.event.workflow_run.name }}" .github/watched-workflows.txt` is not.
+# step, and only for a `run:` body or an `if:` expression that BOTH names the
+# workflow-run identity AND matches it against a file or a workflow input.
+#
+# The reference must be an ARGUMENT OF A MATCHING COMMAND, and the verb list
+# holds only true matching verbs. A bare `${{ inputs.X }}` anywhere in a
+# `run:` body is not evidence of an enumeration, and neither is `cat`/`sed`/
+# `jq` of a file: both fire on legitimate workflows — `echo "Run of ${{
+# github.event.workflow_run.name }} to ${{ inputs.channel }}"` and a `cat` of
+# a channel-routing file — with a message that is untrue for them. So:
+# `echo "Workflow ${{ github.event.workflow_run.name }} failed"` is untouched;
+# `grep -qx "${{ github.event.workflow_run.name }}" .github/watched.txt` and
+# `grep -q "${{ github.event.workflow_run.name }}" <<<"${{ vars.WATCHED }}"`
+# are not.
 _WORKFLOW_IDENTITY = re.compile(r"workflow_run\.(?:name|workflows)\b")
 _ENUMERATION_LOOKUP = re.compile(
-    # a lookup command reading a data file...
-    r"\b(?:grep|egrep|fgrep|rg|awk|sed|jq|yq|comm|look|cat|xargs)\b[^\n]*"
-    r"\S+\.(?:txt|list|lst|json|ya?ml|csv|cfg|conf|ini)\b"
-    # ...or a shell redirect reading one...
-    r"|<[ \t]*\S+\.(?:txt|list|lst|json|ya?ml|csv|cfg|conf|ini)\b"
-    # ...or a match against an input/vars-supplied list.
-    r"|\$\{\{[ \t]*(?:inputs|vars)\.[A-Za-z0-9_-]+")
+    # a matching command reading a data file or an input/vars-supplied list
+    r"\b(?:grep|egrep|fgrep|rg|comm|look)\b[^\n]*"
+    r"(?:\S+\.(?:txt|list|lst|json|ya?ml|csv)\b"
+    r"|\$\{\{[ \t]*(?:inputs|vars)\.)")
+# The same enumeration expressed as a GitHub expression in an `if:` rather
+# than as shell. `contains(fromJSON(vars.WATCHED_WORKFLOWS), <identity>)` is
+# the identical hand-maintained list, gating the identical announcement; the
+# `run:`-only scan would have accepted it. The inputs/vars value must be the
+# haystack argument of `contains()`, so an unrelated `inputs.enabled` in the
+# same guard does not fire.
+_ENUMERATION_IF = re.compile(
+    r"contains\([ \t]*(?:fromJSON\([ \t]*)?(?:inputs|vars)\.[A-Za-z0-9_-]+")
 
 
 def _check_no_enumeration_lookup(filename, jobs):
@@ -136,11 +163,16 @@ def _check_no_enumeration_lookup(filename, jobs):
         steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
         if not any("slack-notify" in str(s.get("uses", "")) for s in steps):
             continue
+        # (text, pattern) pairs: shell bodies and GitHub `if:` expressions
+        # are different languages, so each gets its own lookup pattern.
+        candidates = [(str(job.get("if", "")), _ENUMERATION_IF)]
         for step in steps:
-            body = str(step.get("run", ""))
+            candidates.append((str(step.get("run", "")), _ENUMERATION_LOOKUP))
+            candidates.append((str(step.get("if", "")), _ENUMERATION_IF))
+        for body, pattern in candidates:
             if not body:
                 continue
-            if _WORKFLOW_IDENTITY.search(body) and _ENUMERATION_LOOKUP.search(body):
+            if _WORKFLOW_IDENTITY.search(body) and pattern.search(body):
                 violations.append(
                     f"{filename}: job '{job_id}' announces failure to Slack and "
                     f"matches the triggering workflow against an enumeration read "
