@@ -68,3 +68,8 @@ jobs:
           set -euo pipefail
           cd .github/actions/sponsor-base-preflight
           PYTHONPATH=. pytest tests/ -v
+      - name: Run elspais-federate tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/elspais-federate
+          PYTHONPATH=. pytest tests/ -v

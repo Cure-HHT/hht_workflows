@@ -1,0 +1,82 @@
+name: 'elspais federate'
+description: 'Link cited Cure-HHT repositories as elspais associates so cross-repo requirement citations resolve.'
+
+# Implements: HHT-OPS-repo-bootstrap/I
+inputs:
+  associates:
+    description: 'Newline-separated owner/repo list of repositories this repo cites. Blank lines and # comments allowed.'
+    required: true
+  token:
+    description: 'Per-job App token with contents:read scoped to exactly the named repositories.'
+    required: true
+  ref:
+    description: "Git ref to check each associate out at. Empty means each repository's default branch."
+    required: false
+    default: ''
+  workspace-parent:
+    description: 'Directory the associates are cloned into, as siblings of this checkout.'
+    required: false
+    default: '..'
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve associate list
+      id: parse
+      shell: bash
+      env:
+        ASSOCIATES: ${{ inputs.associates }}
+      run: |
+        set -euo pipefail
+        entries="$(python3 "${{ github.action_path }}/parse_associates.py")"
+        if [ -z "$entries" ]; then
+          echo "::error::no associates resolved from the provided list"
+          exit 1
+        fi
+        echo "entries<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$entries" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+        echo "resolved associates:"
+        echo "$entries"
+
+    - name: Clone and link each associate
+      shell: bash
+      env:
+        ENTRIES: ${{ steps.parse.outputs.entries }}
+        TOKEN: ${{ inputs.token }}
+        REF: ${{ inputs.ref }}
+        PARENT: ${{ inputs.workspace-parent }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$PARENT"
+        while IFS= read -r entry; do
+          [ -n "$entry" ] || continue
+          name="${entry##*/}"
+          dest="$PARENT/$name"
+
+          if [ -d "$dest/.git" ]; then
+            echo "associate $entry already present at $dest"
+          else
+            # Sparse + shallow: only the requirements graph is needed.
+            git clone --depth 1 --filter=blob:none --sparse \
+              ${REF:+--branch "$REF"} \
+              "https://x-access-token:${TOKEN}@github.com/${entry}.git" "$dest"
+            # Drop the credential from the clone's stored remote so the token
+            # does not persist in .git/config for the rest of the job.
+            git -C "$dest" remote set-url origin "https://github.com/${entry}.git"
+            git -C "$dest" sparse-checkout set spec .elspais.toml
+          fi
+
+          if [ ! -f "$dest/.elspais.toml" ]; then
+            echo "::error::associate $entry has no .elspais.toml; it cannot be linked"
+            exit 1
+          fi
+
+          elspais associate "$dest"
+        done <<< "$ENTRIES"
+
+    - name: Show linked associates
+      shell: bash
+      run: |
+        set -euo pipefail
+        elspais associate --list
