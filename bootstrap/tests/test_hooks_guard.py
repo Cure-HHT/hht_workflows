@@ -77,3 +77,18 @@ def test_guard_off_is_silent(tmp_path):
     )
     assert res.stdout.strip() == ""
     assert res.returncode == 0
+
+
+def test_linked_fails_when_only_citation_is_base_tier(tmp_path):
+    repo = make_repo(tmp_path, cites="CAL-BASE-something")
+    assert run_fn("hht_associates_linked", repo).returncode == 1
+
+
+def test_linked_fails_when_only_citation_is_gui_tier(tmp_path):
+    repo = make_repo(tmp_path, cites="HHT-GUI-something")
+    assert run_fn("hht_associates_linked", repo).returncode == 1
+
+
+def test_linked_ok_when_only_citation_is_own_namespace_base_tier(tmp_path):
+    repo = make_repo(tmp_path, cites="DIARY-BASE-something")
+    assert run_fn("hht_associates_linked", repo).returncode == 0
