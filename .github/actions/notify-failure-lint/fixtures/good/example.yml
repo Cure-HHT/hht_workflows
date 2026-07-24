@@ -1,0 +1,21 @@
+name: Fixture (conforming)
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build
+  notify-failure:
+    needs: [build]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@1111111111111111111111111111111111111111
+        with:
+          slack-token: fixture

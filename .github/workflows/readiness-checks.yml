@@ -511,6 +511,218 @@ jobs:
 
           echo "sponsor-base-preflight readiness OK"
 
+  notify-failure:
+    # End-to-end readiness for the notify-failure composite: unit tests, the
+    # jobs-API grant, and a real invocation of the action itself against a
+    # fixture routing file with a deliberately invalid Slack token. The last
+    # of those is what proves — in CI — that the composite resolves, that its
+    # pinned nested slack-notify reference resolves, and that the
+    # continue-on-error / $GITHUB_OUTPUT / ::error:: annotation plumbing works.
+    # Nothing is ever posted to Slack.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit-test the context derivation
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pytest
+          cd .github/actions/notify-failure
+          python3 -m pytest -q
+      - name: Verify the action reads its own run's jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Proves the jobs lookup works with `actions: read` — the exact
+          # call derive_context.py makes at runtime.
+          count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+                    --jq '.jobs | length')
+          echo "jobs visible: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::jobs API returned no jobs; notify-failure cannot derive context"
+            exit 1
+          fi
+      - name: Assert the readiness routing fixture still resolves
+        # `soft-failed` is ALSO what a broken fixture produces: a missing
+        # routing key, a routing value naming no channel, or a missing file
+        # each `exit 1` inside slack-notify. Without this check the job would
+        # stay green while silently no longer exercising the invalid-token
+        # path it claims to. Assert the fixture resolves BEFORE invoking.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pyyaml
+          python3 - <<'PY'
+          import sys
+          import yaml
+          path = ".github/actions/notify-failure/readiness-slack-channels.yml"
+          with open(path, encoding="utf-8") as handle:
+              doc = yaml.safe_load(handle) or {}
+          routing = doc.get("routing") or {}
+          channels = doc.get("channels") or {}
+          key = routing.get("workflow-failure")
+          if key is None:
+              print(f"::error::{path}: routing['workflow-failure'] is missing; "
+                    "the soft-fail assertion below would pass for the wrong reason")
+              sys.exit(1)
+          if key not in channels:
+              print(f"::error::{path}: routing['workflow-failure'] -> {key!r} "
+                    f"is not a key of `channels` ({sorted(channels)})")
+              sys.exit(1)
+          print(f"readiness routing fixture resolves: workflow-failure -> "
+                f"{key} -> {channels[key]}")
+          PY
+      - name: Invoke the action end-to-end (soft-fail path, nothing posted)
+        id: notify
+        uses: ./.github/actions/notify-failure
+        with:
+          # Deliberately invalid: Slack answers `invalid_auth`, the post step
+          # fails, continue-on-error absorbs it, and the status step must
+          # report `soft-failed` and emit the assertion-D annotation.
+          slack-token: xoxb-readiness-fixture-invalid-token
+          routing-file: .github/actions/notify-failure/readiness-slack-channels.yml
+      - name: Assert the soft-fail path reported itself
+        env:
+          POST_STATUS: ${{ steps.notify.outputs.post-status }}
+        run: |
+          set -euo pipefail
+          if [ "${POST_STATUS:-}" != "soft-failed" ]; then
+            echo "::error::notify-failure post-status was '${POST_STATUS:-<empty>}', expected 'soft-failed'"
+            exit 1
+          fi
+          echo "notify-failure readiness OK: composite ran end-to-end and soft-failed as designed."
+      - name: Exercise the `ok` branch of the status step
+        # The invocation above can only ever produce `soft-failed`, so the
+        # `ok` branch is otherwise never run: a status step that never
+        # reports `ok` would make every SUCCESSFUL notification claim
+        # `soft-failed` and emit a spurious ::error:: on a message that was
+        # in fact delivered — and readiness would stay green.
+        #
+        # Two halves, because the `run:` body alone is not the contract:
+        #   1. Assert the step's `env:` block still binds a variable to
+        #      `steps.post.outcome` and one to `steps.post.outputs.channel-ids`.
+        #      Those expressions are evaluated by the Actions runner, never by
+        #      the extracted script, so a mis-reference there is invisible to
+        #      any execution of the `run:` body.
+        #   2. Run the real `run:` body — extracted from action.yml rather
+        #      than restated here, so it cannot drift — under exactly the
+        #      variable names that `env:` declares, with success-shaped values.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+          import yaml
+          with open(".github/actions/notify-failure/action.yml", encoding="utf-8") as handle:
+              action = yaml.safe_load(handle)
+          step = next(s for s in action["runs"]["steps"] if s.get("id") == "status")
+          env = step.get("env") or {}
+          wanted = {
+              "steps.post.outcome": None,
+              "steps.post.outputs.channel-ids": None,
+          }
+          for name, expr in env.items():
+              for expression in wanted:
+                  if expression in str(expr):
+                      wanted[expression] = name
+          missing = [e for e, name in wanted.items() if name is None]
+          if missing:
+              print(f"::error::notify-failure status step `env:` does not reference "
+                    f"{missing}; a successful post would be reported as soft-failed. "
+                    f"env is {env}")
+              sys.exit(1)
+          with open("/tmp/status-step.sh", "w", encoding="utf-8") as handle:
+              handle.write(step["run"])
+          with open("/tmp/status-env.sh", "w", encoding="utf-8") as handle:
+              handle.write(f"{wanted['steps.post.outcome']}=success\n")
+              handle.write(f"{wanted['steps.post.outputs.channel-ids']}=C123\n")
+          print(f"status step env binds: {wanted}")
+          PY
+          : > /tmp/status-output
+          set -a
+          # shellcheck disable=SC1091
+          . /tmp/status-env.sh
+          set +a
+          GITHUB_OUTPUT=/tmp/status-output bash /tmp/status-step.sh
+          if ! grep -qx 'post-status=ok' /tmp/status-output; then
+            echo "::error::status step did not report 'ok' for a delivered announcement; got: $(cat /tmp/status-output)"
+            exit 1
+          fi
+          echo "notify-failure status step reports 'ok' on the delivered path."
+
+  notify-failure-lint:
+    # Readiness for the enforcement half: unit-test the checker, then run the
+    # composite itself against a conforming fixture (must pass) and a
+    # non-conforming one (must fail). The second is what proves the action
+    # actually fails CI rather than merely printing.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit-test the linter
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pyyaml pytest
+          cd .github/actions/notify-failure-lint
+          python3 -m pytest -q
+      - name: Passes on a conforming fixture
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/good
+      # One fixture DIRECTORY per rule, one assertion each. A single `bad/`
+      # dir holding every violating fixture would stay red on whichever rule
+      # still worked, so a silently regressed rule would leave this job
+      # green. Each dir below contains exactly one file violating exactly
+      # one rule.
+      - name: Fails on a workflow missing its notify-failure job (rule A)
+        id: bad
+        continue-on-error: true
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/bad
+      - name: Fails on an `on.workflow_run.workflows` list (rule C, limb 1)
+        id: bad-enumeration
+        continue-on-error: true
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/bad-enumeration
+      - name: Fails on a workflow enumeration read from a file (rule C, limb 2)
+        id: bad-enumeration-lookup
+        continue-on-error: true
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/bad-enumeration-lookup
+      - name: Assert every non-conforming fixture was rejected
+        env:
+          RULE_A: ${{ steps.bad.outcome }}
+          RULE_C1: ${{ steps.bad-enumeration.outcome }}
+          RULE_C2: ${{ steps.bad-enumeration-lookup.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+          if [ "$RULE_A" != "failure" ]; then
+            echo "::error::lint passed a workflow missing its notify-failure job (rule A)"
+            failed=1
+          fi
+          if [ "$RULE_C1" != "failure" ]; then
+            echo "::error::lint passed a workflow keying announcement off \`on.workflow_run.workflows\` (rule C, limb 1)"
+            failed=1
+          fi
+          if [ "$RULE_C2" != "failure" ]; then
+            echo "::error::lint passed an announcement job matching the triggering workflow against a file-held enumeration (rule C, limb 2)"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then exit 1; fi
+          echo "Linter correctly rejected all three non-conforming fixtures."
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.

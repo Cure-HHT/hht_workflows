@@ -1,0 +1,113 @@
+# notify-failure — composite action.
+#
+# The single way a workflow announces its own failure. Derives failure
+# context from the run's OWN jobs (no per-workflow configuration, no
+# workflow-name list anywhere), composes the message, and delegates the
+# post to the canonical slack-notify composite.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file).
+# Callers add a standard job — see README.md "notify-failure".
+#
+# The caller MUST:
+#   - run actions/checkout first (slack-notify reads the routing file from
+#     the caller's workspace), and
+#   - grant `actions: read` (the jobs lookup 403s without it).
+#
+# Implements: HHT-OPS-failure-notification-routing/A+B+D
+# Implements: HHT-OPS-composite-action-library/A
+
+name: 'notify-failure'
+description: 'Announce the current workflow run failure to the operations channel'
+
+inputs:
+  slack-token:
+    description: Slack bot OAuth token (xoxb-...).
+    required: true
+  event:
+    description: >
+      Routing key looked up in the caller's slack-channels.yml. The default
+      `workflow-failure` is a FLAT key (single channel) so callers with no
+      build flavor need no `env`.
+    required: false
+    default: workflow-failure
+  env:
+    description: >
+      Routing sub-key. Pass ONLY when `event` names an env-keyed route;
+      slack-notify errors by design on a flat/env-keyed mismatch.
+    required: false
+    default: ""
+  hints:
+    description: >
+      Optional JSON object string mapping a failed step's `name` — exactly
+      as the jobs API reports it, not the step `id` — to hint text, e.g.
+      '{"Upload to Google Play": "Play rejected the upload; check the track."}'.
+      Unmatched or absent produces no hint line. Malformed JSON is warned
+      about and ignored, never fatal.
+    required: false
+    default: ""
+  routing-file:
+    description: Path to routing YAML, relative to the caller's workspace.
+    required: false
+    default: .github/slack-channels.yml
+
+outputs:
+  post-status:
+    description: >
+      `ok` when the announcement reached at least one channel, `soft-failed`
+      when it did not (an ::error:: annotation is also emitted so the failure
+      is visible on the run without depending on Slack).
+    value: ${{ steps.status.outputs.post-status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Derive failure context
+      id: ctx
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INPUT_HINTS: ${{ inputs.hints }}
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_ACTION_PATH/derive_context.py"
+
+    # Soft-failed by design: a Slack outage must not repaint an otherwise
+    # green run. The status step below makes that soft failure visible.
+    - name: Post failure notification
+      id: post
+      continue-on-error: true
+      uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@03d7fd8ebcdf8b5b67e53d78a5564f878480b5bb  # v1.7.0
+      with:
+        event: ${{ inputs.event }}
+        env: ${{ inputs.env }}
+        text: ${{ steps.ctx.outputs.text }}
+        slack-token: ${{ inputs.slack-token }}
+        routing-file: ${{ inputs.routing-file }}
+        dm-user-email: ${{ steps.ctx.outputs.committer-email }}
+
+    # Implements: HHT-OPS-failure-notification-routing/D
+    #   The announcement path's own failure is reported over GitHub's
+    #   annotation channel, which does not depend on Slack.
+    #
+    # `if: always()` is load-bearing. Composite steps default to
+    # `if: success()`, so if the context derivation hard-fails the post step
+    # is skipped AND this step would be skipped too — no Slack post and no
+    # ::error:: annotation, i.e. assertion D breaks exactly when it matters
+    # most. Running unconditionally means the `POST_OUTCOME != success`
+    # branch below reports the skipped/empty case, which is the truth.
+    - name: Report delivery status
+      id: status
+      if: always()
+      shell: bash
+      env:
+        POST_OUTCOME: ${{ steps.post.outcome }}
+        CHANNEL_IDS: ${{ steps.post.outputs.channel-ids }}
+      run: |
+        set -euo pipefail
+        if [ "$POST_OUTCOME" = "success" ] && [ -n "${CHANNEL_IDS:-}" ]; then
+          echo "post-status=ok" >> "$GITHUB_OUTPUT"
+          echo "Failure announcement delivered to: $CHANNEL_IDS"
+        else
+          echo "post-status=soft-failed" >> "$GITHUB_OUTPUT"
+          echo "::error::notify-failure: the failure announcement did NOT reach Slack (post outcome: ${POST_OUTCOME:-unknown}). This run failed AND its notification failed — investigate the Slack token, routing key, and channel membership."
+        fi
