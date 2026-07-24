@@ -83,7 +83,17 @@ def committer_email(event_name, event):
 # A GitHub privacy no-reply address (e.g. `12345+user@users.noreply.github.com`
 # or `user@users.noreply.github.com`). Real from the git/GitHub side, but no
 # Slack user has it, so it is useless for a users.lookupByEmail DM.
-_NOREPLY_SUFFIX = "noreply.github.com"
+#
+# GitHub's ONLY no-reply host is `users.noreply.github.com` — matched by
+# exact equality on the part after the last "@", not by suffix. A suffix
+# check (`endswith("noreply.github.com")`) would also reject a lookalike
+# host like `evilnoreply.github.com` or `x.attacker.com.noreply.github.com`
+# under attacker control; exact-host match cannot be spoofed that way.
+_GITHUB_NOREPLY_HOST = "users.noreply.github.com"
+
+
+def _is_github_noreply(email):
+    return email.rpartition("@")[2].lower() == _GITHUB_NOREPLY_HOST
 
 
 def resolve_actor_email(login, repo, fetch):
@@ -118,7 +128,7 @@ def resolve_actor_email(login, repo, fetch):
     if isinstance(commits, list) and commits and isinstance(commits[0], dict):
         author = ((commits[0].get("commit") or {}).get("author") or {})
         email = (author.get("email") or "").strip()
-        if email and not email.lower().endswith(_NOREPLY_SUFFIX):
+        if email and not _is_github_noreply(email):
             return email
 
     return ""
@@ -158,7 +168,11 @@ def _gh_api_json(path):
             ["gh", "api", path],
             capture_output=True, text=True, check=True).stdout
         return json.loads(out)
-    except (subprocess.CalledProcessError, ValueError):
+    except (subprocess.SubprocessError, OSError, ValueError):
+        # SubprocessError covers CalledProcessError (nonzero exit) and
+        # TimeoutExpired; OSError covers a missing `gh` binary
+        # (FileNotFoundError) on a misconfigured self-hosted runner. None of
+        # these may propagate — this fetch backs an advisory cascade only.
         return None
 
 
@@ -192,9 +206,12 @@ def main():
 
     try:
         jobs = _fetch_jobs(repo, run_id)
-    except (subprocess.CalledProcessError, ValueError) as exc:
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
         # Degraded but still announced: a context-lookup failure must not
-        # swallow the failure notification itself. CalledProcessError.__str__
+        # swallow the failure notification itself — including a missing `gh`
+        # binary (FileNotFoundError/OSError) or a hung `gh api` call
+        # (subprocess.TimeoutExpired, a SubprocessError subclass) on a
+        # misconfigured self-hosted runner. CalledProcessError.__str__
         # reports only the return code, so include stderr — otherwise a 403
         # from a missing `actions: read` grant is indistinguishable from a
         # parse failure.
