@@ -25,9 +25,20 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install PyYAML
+    - name: Ensure PyYAML is importable
       shell: bash
-      run: python3 -m pip install --user pyyaml
+      # Prefer whatever the runner already has. A bare `pip install --user`
+      # is rejected outright on a PEP 668 externally-managed interpreter,
+      # which would break every caller that has not added
+      # actions/setup-python. Only install when the import actually fails.
+      run: |
+        set -euo pipefail
+        if python3 -c 'import yaml' 2>/dev/null; then
+          echo "PyYAML already importable; no install needed."
+        else
+          echo "PyYAML not importable; installing."
+          python3 -m pip install --user pyyaml
+        fi
 
     - name: Check notify-failure presence
       shell: bash

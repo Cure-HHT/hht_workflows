@@ -189,11 +189,17 @@ consumer's workflow tree and applies two rules:
   an `actions/checkout` step, and a SHA-pinned `notify-failure` reference.
   Workflows triggered only by `pull_request` / `workflow_dispatch` /
   `workflow_call` are out of scope.
-- **No workflow enumeration.** No workflow may key failure announcement off
-  `on.workflow_run.workflows`. That list holds workflow *display names*,
-  matched exactly, with no wildcard support and no signal when an entry
-  stops matching anything — which is exactly how the mechanism this action
-  replaced rotted undetectably.
+- **No workflow enumeration.** No workflow may key failure announcement off a
+  hand-maintained list of other workflows. Two limbs: the `on:` block must not
+  carry a `workflow_run.workflows` list, *and* a job containing a
+  `slack-notify` step must not match `github.event.workflow_run.name` against
+  a list read from a file or an input. Such a list holds workflow *display
+  names*, matched exactly, with no wildcard support and no signal when an
+  entry stops matching anything — which is exactly how the mechanism this
+  action replaced rotted undetectably. Moving the list out of `on:` and into
+  `watched-workflows.txt` changes nothing about that, so the second limb
+  rejects it too. Merely *mentioning* `workflow_run.name` in message text is
+  fine.
 
 There is no allowlist of workflow filenames in the checker: covered-ness
 comes from each workflow's own triggers, so there is nothing to keep in
@@ -201,16 +207,33 @@ sync.
 
 **Semantic exemption.** A workflow that announces failure with genuinely
 custom semantics (say a maintenance report that posts its own summary) can
-opt out of the presence rule with a comment line anywhere in the file:
+opt out of the presence rule with a real comment line anywhere in the file,
+stating the outcome classification it publishes:
 
 ```yaml
-# notify-failure: semantic-exempt
+# notify-failure: semantic-exempt - posts a monthly maintenance summary, failures included
 ```
 
-The marker alone is not enough: the workflow must also contain a
-`slack-notify` step guarded by `failure()` or `always()`, so the marker
-cannot be pasted onto a workflow that in fact announces nothing. The
-enumeration rule has no exemption.
+Three things are required, none sufficient alone:
+
+- The marker must be an actual **comment line** (`#` as the first non-blank
+  character). The same text inside a `run:` string is not an exemption.
+- It must state a **classification** after a `-`, `:` or em-dash separator.
+  A bare marker is rejected: the check enumerates accepted exemptions as
+  `file -> classification` on its own log, which is the artifact a reviewer
+  judges the carve-out by.
+- The workflow must also contain a `slack-notify` step guarded by
+  `failure()` or `always()`, so the marker cannot be pasted onto a workflow
+  that in fact announces nothing.
+
+The enumeration rule has no exemption.
+
+Note that `permissions: read-all` on the notify job is **rejected**: the
+check requires the canonical explicit form (`contents: read` plus
+`actions: read`) so the grant is legible in the diff and cannot silently
+widen. The lint also fails if `workflows-dir` names a directory containing
+no `.yml`/`.yaml` files — a typo that checks nothing must not report
+success.
 
 The caller **must** run `actions/checkout` first — the lint reads the
 workflow tree from the workspace.
@@ -227,8 +250,17 @@ workflow tree from the workspace.
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5      # optional; see below
+        with:
+          python-version: '3.12'
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure-lint@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
+
+`actions/setup-python` is optional. The action needs PyYAML and prefers
+whatever the runner already provides, installing it only when `import yaml`
+fails — so it works on a bare runner and does not trip over a PEP 668
+externally-managed interpreter. Adding `setup-python` pins the interpreter
+and skips the install path entirely.
 
 ## Pinning & versioning
 

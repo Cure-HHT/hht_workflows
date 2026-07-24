@@ -9,10 +9,12 @@ A — A workflow is COVERED iff its triggers include `push` or `schedule`
     exemption.
 
 C — No workflow may announce failure off a hand-maintained enumeration of
-    workflows. Decided syntactically on `on.workflow_run.workflows`: a list
-    of workflow DISPLAY names, matched exactly, with no wildcard support and
-    no signal when an entry stops matching anything. That is the construct
-    the original defect was built on.
+    workflows. The requirement's Rationale fixes the criterion in two limbs:
+    a workflow fails if its `on:` block contains a `workflow_run.workflows`
+    list, OR if an announcement step reads a workflow enumeration from a
+    file or an input. The first limb is the construct the original defect
+    was built on; the second closes the obvious workaround of moving the
+    same list of names out of `on:` and into a text file or an input.
 
 There is no filename allowlist anywhere in this checker: the covered
 decision comes from the workflow's own triggers and the exemption from a
@@ -30,6 +32,20 @@ import yaml
 NOTIFY_JOB = "notify-failure"
 COVERED_TRIGGERS = ("push", "schedule")
 MARKER = "# notify-failure: semantic-exempt"
+
+# The exemption marker must be a REAL comment line, not any occurrence of the
+# string anywhere in the file: a raw substring scan matches inside a `run:`
+# body, so `- run: 'echo "# notify-failure: semantic-exempt"'` would buy
+# silence. Anchored at line start, `#` first non-blank character.
+#
+# Assertion A requires the exemption to state "the outcome classification it
+# publishes, in a form the Assertion-E check enumerates" — so a non-empty
+# trailing description after a `-`, `:` or em-dash separator is REQUIRED, and
+# main() prints every accepted exemption so a reviewer has an artifact.
+_MARKER_LINE = re.compile(
+    r"^[ \t]*#[ \t]*notify-failure:[ \t]*semantic-exempt[ \t]*(.*?)[ \t]*$",
+    re.M)
+_CLASSIFICATION = re.compile(r"^[-:—][ \t]*(\S.*)$")
 
 CANONICAL_IF = (
     "${{ !cancelled() && contains(needs.*.result, 'failure') "
@@ -74,6 +90,69 @@ def _has_guarded_slack_post(jobs):
     return False
 
 
+def exemption(source):
+    """Return (marker_present, classification_or_None) for `source`.
+
+    Only a real comment line counts. `classification` is the non-empty text
+    after the separator; None means the marker states no classification,
+    which Assertion A does not permit.
+    """
+    match = _MARKER_LINE.search(source)
+    if not match:
+        return False, None
+    tail = _CLASSIFICATION.match(match.group(1).strip())
+    return True, tail.group(1).strip() if tail else None
+
+
+# Assertion C, limb 2. The requirement's Rationale: "...or if an announcement
+# step reads a workflow enumeration from a file or input."
+#
+# Implemented as a deliberately NARROW proxy so it cannot fire on ordinary
+# message text: only inside a job that already carries a Slack-announcement
+# step, and only for a `run:` that BOTH names the workflow-run identity AND
+# looks it up against a file or a workflow input. `echo "Workflow ${{
+# github.event.workflow_run.name }} failed"` is untouched; `grep -qx "${{
+# github.event.workflow_run.name }}" .github/watched-workflows.txt` is not.
+_WORKFLOW_IDENTITY = re.compile(r"workflow_run\.(?:name|workflows)\b")
+_ENUMERATION_LOOKUP = re.compile(
+    # a lookup command reading a data file...
+    r"\b(?:grep|egrep|fgrep|rg|awk|sed|jq|yq|comm|look|cat|xargs)\b[^\n]*"
+    r"\S+\.(?:txt|list|lst|json|ya?ml|csv|cfg|conf|ini)\b"
+    # ...or a shell redirect reading one...
+    r"|<[ \t]*\S+\.(?:txt|list|lst|json|ya?ml|csv|cfg|conf|ini)\b"
+    # ...or a match against an input/vars-supplied list.
+    r"|\$\{\{[ \t]*(?:inputs|vars)\.[A-Za-z0-9_-]+")
+
+
+def _check_no_enumeration_lookup(filename, jobs):
+    """Assertion C limb 2. See the proxy note above.
+
+    Implements: HHT-OPS-failure-notification-routing/E
+    """
+    violations = []
+    for job_id, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
+        if not any("slack-notify" in str(s.get("uses", "")) for s in steps):
+            continue
+        for step in steps:
+            body = str(step.get("run", ""))
+            if not body:
+                continue
+            if _WORKFLOW_IDENTITY.search(body) and _ENUMERATION_LOOKUP.search(body):
+                violations.append(
+                    f"{filename}: job '{job_id}' announces failure to Slack and "
+                    f"matches the triggering workflow against an enumeration read "
+                    f"from a file or input. Moving the workflow-name list out of "
+                    f"`on.workflow_run.workflows` does not fix it — the list is "
+                    f"still hand-maintained, still matched exactly, and still "
+                    f"silent when an entry stops matching. Announce failure from "
+                    f"inside each workflow with the standard notify-failure job")
+                break
+    return violations
+
+
 def _check_no_workflow_enumeration(filename, wf):
     """Assertion C, decided syntactically on `on.workflow_run.workflows`.
 
@@ -107,18 +186,31 @@ def check(filename, source):
 
     violations = _check_no_workflow_enumeration(filename, wf)
 
+    jobs = wf.get("jobs") or {}
+    if isinstance(jobs, dict):
+        violations += _check_no_enumeration_lookup(filename, jobs)
+
     triggers = _triggers(wf)
     if not any(t in COVERED_TRIGGERS for t in triggers):
         return violations  # exempt from rule A: no push/schedule trigger
 
-    jobs = wf.get("jobs") or {}
     if not isinstance(jobs, dict):
         return violations + [f"{filename}: `jobs:` is not a mapping"]
 
-    # Semantic-notifier carve-out: the marker is the enforced signal, and a
-    # guarded slack-notify post must corroborate it so the marker cannot be
-    # pasted onto a workflow that in fact announces nothing.
-    if MARKER in source:
+    # Semantic-notifier carve-out. Three things are required, none of them
+    # sufficient alone: the marker must be a real comment line (not a string
+    # inside a `run:`), it must state the outcome classification the workflow
+    # publishes (Assertion A), and a guarded slack-notify post must
+    # corroborate it so the marker cannot be pasted onto a workflow that in
+    # fact announces nothing.
+    marked, classification = exemption(source)
+    if marked:
+        if classification is None:
+            return violations + [
+                f"{filename}: carries the '{MARKER}' marker but states no "
+                f"outcome classification. Write "
+                f"'{MARKER} - <what this workflow publishes on failure>' so "
+                f"the exemption can be reviewed"]
         if _has_guarded_slack_post(jobs):
             return violations
         return violations + [
@@ -175,12 +267,27 @@ def check(filename, source):
 def main():
     workflows_dir = os.environ.get("INPUT_WORKFLOWS_DIR", ".github/workflows")
     all_violations = []
+    exemptions = []
+    scanned = 0
     for entry in sorted(os.listdir(workflows_dir)):
         if not entry.endswith((".yml", ".yaml")):
             continue
         path = os.path.join(workflows_dir, entry)
+        scanned += 1
         with open(path, encoding="utf-8") as handle:
-            all_violations.extend(check(path, handle.read()))
+            source = handle.read()
+        all_violations.extend(check(path, source))
+        marked, classification = exemption(source)
+        if marked and classification:
+            exemptions.append((path, classification))
+
+    # A `workflows-dir` typo that happens to name an existing directory would
+    # otherwise report success while checking nothing at all.
+    if scanned == 0:
+        print(f"::error::{workflows_dir}: no .yml/.yaml workflow files found. "
+              "Check the `workflows-dir` input and that actions/checkout ran "
+              "before this step.")
+        return 1
 
     if all_violations:
         for violation in all_violations:
@@ -191,8 +298,16 @@ def main():
               "and no workflow may announce failure off a hand-maintained "
               "enumeration of workflows (HHT-OPS-failure-notification-routing/C).")
         return 1
-    print("All covered workflows carry the standard notify-failure job, "
-          "and no workflow enumerates other workflows.")
+    print(f"Scanned {scanned} workflow file(s). All covered workflows carry the "
+          "standard notify-failure job, and no workflow enumerates other "
+          "workflows.")
+    # Assertion A: the exemption must state the outcome classification it
+    # publishes "in a form the Assertion-E check enumerates" — this listing
+    # is that form, so every exemption is visible on the check's own log.
+    if exemptions:
+        print(f"\nSemantic-notifier exemptions ({len(exemptions)}):")
+        for path, classification in exemptions:
+            print(f"  {path} -> {classification}")
     return 0
 
 

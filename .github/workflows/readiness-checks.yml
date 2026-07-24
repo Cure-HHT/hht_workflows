@@ -598,26 +598,56 @@ jobs:
           echo "notify-failure readiness OK: composite ran end-to-end and soft-failed as designed."
       - name: Exercise the `ok` branch of the status step
         # The invocation above can only ever produce `soft-failed`, so the
-        # `ok` branch is otherwise never run: a mis-referenced
-        # `steps.post.outcome` / `steps.post.outputs.channel-ids` would make
-        # every SUCCESSFUL notification report `soft-failed` and emit a
-        # spurious ::error:: on a message that was in fact delivered — and
-        # readiness would stay green. Rather than restate the logic (which
-        # would drift), extract the real step's script from action.yml and
-        # run it with a success-shaped environment.
+        # `ok` branch is otherwise never run: a status step that never
+        # reports `ok` would make every SUCCESSFUL notification claim
+        # `soft-failed` and emit a spurious ::error:: on a message that was
+        # in fact delivered — and readiness would stay green.
+        #
+        # Two halves, because the `run:` body alone is not the contract:
+        #   1. Assert the step's `env:` block still binds a variable to
+        #      `steps.post.outcome` and one to `steps.post.outputs.channel-ids`.
+        #      Those expressions are evaluated by the Actions runner, never by
+        #      the extracted script, so a mis-reference there is invisible to
+        #      any execution of the `run:` body.
+        #   2. Run the real `run:` body — extracted from action.yml rather
+        #      than restated here, so it cannot drift — under exactly the
+        #      variable names that `env:` declares, with success-shaped values.
         run: |
           set -euo pipefail
-          python3 - <<'PY' > /tmp/status-step.sh
+          python3 - <<'PY'
+          import sys
           import yaml
           with open(".github/actions/notify-failure/action.yml", encoding="utf-8") as handle:
               action = yaml.safe_load(handle)
-          steps = action["runs"]["steps"]
-          script = next(s["run"] for s in steps if s.get("id") == "status")
-          print(script)
+          step = next(s for s in action["runs"]["steps"] if s.get("id") == "status")
+          env = step.get("env") or {}
+          wanted = {
+              "steps.post.outcome": None,
+              "steps.post.outputs.channel-ids": None,
+          }
+          for name, expr in env.items():
+              for expression in wanted:
+                  if expression in str(expr):
+                      wanted[expression] = name
+          missing = [e for e, name in wanted.items() if name is None]
+          if missing:
+              print(f"::error::notify-failure status step `env:` does not reference "
+                    f"{missing}; a successful post would be reported as soft-failed. "
+                    f"env is {env}")
+              sys.exit(1)
+          with open("/tmp/status-step.sh", "w", encoding="utf-8") as handle:
+              handle.write(step["run"])
+          with open("/tmp/status-env.sh", "w", encoding="utf-8") as handle:
+              handle.write(f"{wanted['steps.post.outcome']}=success\n")
+              handle.write(f"{wanted['steps.post.outputs.channel-ids']}=C123\n")
+          print(f"status step env binds: {wanted}")
           PY
           : > /tmp/status-output
-          GITHUB_OUTPUT=/tmp/status-output POST_OUTCOME=success CHANNEL_IDS=C123 \
-            bash /tmp/status-step.sh
+          set -a
+          # shellcheck disable=SC1091
+          . /tmp/status-env.sh
+          set +a
+          GITHUB_OUTPUT=/tmp/status-output bash /tmp/status-step.sh
           if ! grep -qx 'post-status=ok' /tmp/status-output; then
             echo "::error::status step did not report 'ok' for a delivered announcement; got: $(cat /tmp/status-output)"
             exit 1
@@ -647,20 +677,51 @@ jobs:
         uses: ./.github/actions/notify-failure-lint
         with:
           workflows-dir: .github/actions/notify-failure-lint/fixtures/good
-      - name: Fails on a non-conforming fixture
+      # One fixture DIRECTORY per rule, one assertion each. A single `bad/`
+      # dir holding every violating fixture would stay red on whichever rule
+      # still worked, so a silently regressed rule would leave this job
+      # green. Each dir below contains exactly one file violating exactly
+      # one rule.
+      - name: Fails on a workflow missing its notify-failure job (rule A)
         id: bad
         continue-on-error: true
         uses: ./.github/actions/notify-failure-lint
         with:
           workflows-dir: .github/actions/notify-failure-lint/fixtures/bad
-      - name: Assert the non-conforming fixture was rejected
+      - name: Fails on an `on.workflow_run.workflows` list (rule C, limb 1)
+        id: bad-enumeration
+        continue-on-error: true
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/bad-enumeration
+      - name: Fails on a workflow enumeration read from a file (rule C, limb 2)
+        id: bad-enumeration-lookup
+        continue-on-error: true
+        uses: ./.github/actions/notify-failure-lint
+        with:
+          workflows-dir: .github/actions/notify-failure-lint/fixtures/bad-enumeration-lookup
+      - name: Assert every non-conforming fixture was rejected
+        env:
+          RULE_A: ${{ steps.bad.outcome }}
+          RULE_C1: ${{ steps.bad-enumeration.outcome }}
+          RULE_C2: ${{ steps.bad-enumeration-lookup.outcome }}
         run: |
           set -euo pipefail
-          if [ "${{ steps.bad.outcome }}" != "failure" ]; then
-            echo "::error::lint passed a workflow missing its notify-failure job"
-            exit 1
+          failed=0
+          if [ "$RULE_A" != "failure" ]; then
+            echo "::error::lint passed a workflow missing its notify-failure job (rule A)"
+            failed=1
           fi
-          echo "Linter correctly rejected the non-conforming fixture."
+          if [ "$RULE_C1" != "failure" ]; then
+            echo "::error::lint passed a workflow keying announcement off \`on.workflow_run.workflows\` (rule C, limb 1)"
+            failed=1
+          fi
+          if [ "$RULE_C2" != "failure" ]; then
+            echo "::error::lint passed an announcement job matching the triggering workflow against a file-held enumeration (rule C, limb 2)"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then exit 1; fi
+          echo "Linter correctly rejected all three non-conforming fixtures."
 
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
