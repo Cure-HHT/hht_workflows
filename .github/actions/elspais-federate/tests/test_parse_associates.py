@@ -26,9 +26,23 @@ def test_empty_input_returns_empty_list():
 
 @pytest.mark.parametrize(
     "bad",
-    ["hht_admin", "Cure-HHT/hht_admin/extra", "Cure-HHT/", "/hht_admin", "Cure HHT/x"],
+    [
+        "hht_admin",
+        "Cure-HHT/hht_admin/extra",
+        "Cure-HHT/",
+        "/hht_admin",
+        "Cure HHT/x",
+        "Cure-HHT/..",
+        "Cure-HHT/.",
+        "../x",
+        "./x",
+    ],
 )
 def test_rejects_malformed_entries(bad):
     with pytest.raises(ValueError) as excinfo:
         parse_associates(bad)
     assert bad.strip() in str(excinfo.value)
+
+
+def test_accepts_legitimate_dotted_repo_name():
+    assert parse_associates("Cure-HHT/dart.utils") == ["Cure-HHT/dart.utils"]

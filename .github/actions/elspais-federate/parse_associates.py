@@ -12,13 +12,17 @@ import os
 import re
 import sys
 
-_ENTRY = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_ENTRY = re.compile(
+    r"^(?=[A-Za-z0-9._-]*[A-Za-z0-9])[A-Za-z0-9._-]+/(?=[A-Za-z0-9._-]*[A-Za-z0-9])[A-Za-z0-9._-]+$"
+)
 
 
 def parse_associates(raw: str) -> list[str]:
     """Return normalized, de-duplicated `owner/repo` entries, order preserved.
 
-    Raises ValueError naming the offending entry when one is not `owner/repo`.
+    Each segment (owner and repo) must contain at least one alphanumeric character.
+    Raises ValueError naming the offending entry when one is not `owner/repo` or
+    contains a dot-only or dash-only segment.
     """
     seen: set[str] = set()
     out: list[str] = []
