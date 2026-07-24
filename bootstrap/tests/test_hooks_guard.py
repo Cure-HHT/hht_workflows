@@ -92,3 +92,32 @@ def test_linked_fails_when_only_citation_is_gui_tier(tmp_path):
 def test_linked_ok_when_only_citation_is_own_namespace_base_tier(tmp_path):
     repo = make_repo(tmp_path, cites="DIARY-BASE-something")
     assert run_fn("hht_associates_linked", repo).returncode == 0
+
+
+def make_sibling(tmp_path: Path, name: str = "sibling") -> Path:
+    sib = tmp_path / name
+    sib.mkdir()
+    (sib / ".elspais.toml").write_text('[project]\nnamespace = "OTHER"\n')
+    return sib
+
+
+def test_has_linkable_siblings_true_with_genuine_sibling(tmp_path):
+    repo = make_repo(tmp_path)
+    make_sibling(tmp_path)
+    assert run_fn("hht_has_linkable_siblings", repo).returncode == 0
+
+
+def test_has_linkable_siblings_false_with_no_siblings(tmp_path):
+    repo = make_repo(tmp_path)
+    assert run_fn("hht_has_linkable_siblings", repo).returncode == 1
+
+
+def test_has_linkable_siblings_false_when_only_own_toml_present(tmp_path):
+    # Regression test for the bug this function replaces: a naive
+    # `find "$REPO_ROOT/.." -name .elspais.toml -not -path "$REPO_ROOT/*"`
+    # probe would (once fixed to not exclude everything) still need to make
+    # sure it doesn't count the repo's own .elspais.toml as a "sibling".
+    # Here the repo's parent directory contains nothing but the repo itself,
+    # so there is no linkable sibling.
+    repo = make_repo(tmp_path)
+    assert run_fn("hht_has_linkable_siblings", repo).returncode == 1

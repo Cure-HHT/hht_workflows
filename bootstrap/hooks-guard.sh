@@ -186,3 +186,35 @@ hht_associates_guard() {
     fi
     return 0
 }
+
+# Returns 0 when at least one sibling directory of this repo's *canonical
+# clone root* contains a .elspais.toml (excluding this repo's own), 1
+# otherwise. No output.
+#
+# Must resolve from the canonical clone root, NOT "$repo_root/..": this repo
+# may be checked out as a git worktree (e.g. under a `*-worktrees/` sibling
+# directory containing only other worktrees of the SAME repo), in which case
+# `$repo_root/..` never contains a different repo at all. `git
+# rev-parse --git-common-dir` finds the canonical clone's .git regardless of
+# which worktree we're called from -- exactly what `elspais associate --all`
+# itself does ("resolves relative paths from the canonical repo root for
+# worktree compatibility"). Do not "simplify" this back to `$repo_root/..`.
+hht_has_linkable_siblings() {
+    local repo_root="${1:-.}"
+    local common canonical parent cfg dir
+    common="$(git -C "$repo_root" rev-parse --git-common-dir 2>/dev/null)" || return 1
+    # --git-common-dir may be relative to the repo root; make it absolute.
+    case "$common" in
+        /*) ;;
+        *) common="$repo_root/$common" ;;
+    esac
+    canonical="$(cd "$(dirname "$common")" 2>/dev/null && pwd -P)" || return 1
+    parent="$(dirname "$canonical")"
+    for cfg in "$parent"/*/.elspais.toml; do
+        [ -f "$cfg" ] || continue
+        dir="$(cd "$(dirname "$cfg")" 2>/dev/null && pwd -P)" || continue
+        [ "$dir" = "$canonical" ] && continue
+        return 0
+    done
+    return 1
+}
