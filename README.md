@@ -206,6 +206,14 @@ Every covered repo owes a fresh clone a documented path from "just cloned" to
   authoritative verify command; both resolve an absolute `core.hooksPath`
   before comparing.
 
+The required status-check context is **`Repo Bootstrap / Fresh clone`** — the
+composition of the caller job's `name:` and the reusable job's `name:` (a
+caller job that `uses:` a reusable workflow produces a check context of
+`<caller job name> / <reusable job name>`). Every consumer must therefore name
+its caller **workflow** `Repo Bootstrap` and its caller **job** `Repo
+Bootstrap`, exactly as in the example below, and branch-protection rules must
+require that exact composed string, `Repo Bootstrap / Fresh clone`.
+
 A consumer wires the depth check by adding `.github/workflows/repo-bootstrap-check.yml`:
 
 ```yaml

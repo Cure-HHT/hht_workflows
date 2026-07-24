@@ -76,7 +76,7 @@ permissions:
 
 jobs:
   bootstrap:
-    name: Fresh clone reaches an enforcing, testable state
+    name: Fresh clone
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:

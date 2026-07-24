@@ -17,6 +17,13 @@ inputs:
     description: 'Directory the associates are cloned into, as siblings of this checkout.'
     required: false
     default: '..'
+  link:
+    description: >-
+      When 'false', clone each associate but skip `elspais associate` (host
+      does not have elspais on PATH -- e.g. it runs inside a container that
+      does). The caller is responsible for linking the printed paths itself.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -39,7 +46,8 @@ runs:
         echo "resolved associates:"
         echo "$entries"
 
-    - name: Clone and link each associate
+    - name: Clone each associate
+      id: clone
       shell: bash
       env:
         ENTRIES: ${{ steps.parse.outputs.entries }}
@@ -49,6 +57,7 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p "$PARENT"
+        dests=""
         while IFS= read -r entry; do
           [ -n "$entry" ] || continue
           # Derive dest from the full owner/repo, not just the repo basename:
@@ -75,11 +84,44 @@ runs:
             exit 1
           fi
 
-          elspais associate "$dest"
+          dests="${dests}${dest}$(printf '\n')"
         done <<< "$ENTRIES"
+        echo "dests<<EOF" >> "$GITHUB_OUTPUT"
+        printf '%s' "$dests" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    # `link: false` means elspais is not on the host (a consumer running
+    # `elspais checks` inside a container, where elspais exists only in the
+    # image, must clone here on the host into a path inside the container's
+    # bind mount and then run `elspais associate` itself, inside the
+    # container). Skip host-side linking so this step does not fail with
+    # command-not-found on such a host.
+    - name: Link each associate
+      if: inputs.link != 'false'
+      shell: bash
+      env:
+        DESTS: ${{ steps.clone.outputs.dests }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r dest; do
+          [ -n "$dest" ] || continue
+          elspais associate "$dest"
+        done <<< "$DESTS"
 
     - name: Show linked associates
+      if: inputs.link != 'false'
       shell: bash
       run: |
         set -euo pipefail
         elspais associate --list
+
+    - name: Report cloned associate paths
+      if: inputs.link == 'false'
+      shell: bash
+      env:
+        DESTS: ${{ steps.clone.outputs.dests }}
+      run: |
+        set -euo pipefail
+        echo "link: false — cloned associates but did not run elspais associate."
+        echo "Caller is responsible for linking these paths itself:"
+        printf '%s' "$DESTS"

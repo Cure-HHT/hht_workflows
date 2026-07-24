@@ -124,9 +124,20 @@ MSG
 # Link sibling Cure-HHT repos as elspais associates so cross-repo requirement
 # citations resolve locally. Best-effort by design: a clone with no siblings, or
 # a machine without elspais, is still a correctly set-up clone.
+#
+# `elspais associate --all` exits 0 and prints its own "none found" message
+# even when it links nothing, so success alone cannot tell us whether
+# anything was actually linked -- decide the message from state afterward,
+# via the shared guard's predicate.
 # Implements: HHT-OPS-repo-bootstrap/I
 if command -v elspais >/dev/null 2>&1 && [ -f "$REPO_ROOT/.elspais.toml" ]; then
-  if elspais associate --all >/dev/null 2>&1; then
+  . "$REPO_ROOT/bootstrap/hooks-guard.sh"
+  associate_rc=0
+  elspais associate --all >/dev/null 2>&1 || associate_rc=$?
+  if [ "$associate_rc" -ne 0 ]; then
+    echo "Note: elspais associate --all exited $associate_rc (tolerated: best-effort setup step)." >&2
+  fi
+  if hht_associates_linked "$REPO_ROOT"; then
     echo
     echo "Linked available sibling repos as elspais associates."
     echo "  Review with: elspais associate --list"
