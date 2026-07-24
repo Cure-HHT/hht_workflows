@@ -19,61 +19,34 @@ scripts/test.sh           # run the test suite (scripts/test.sh --list to resolv
 ```
 
 `scripts/setup.sh` sets `core.hooksPath` and caches the pre-commit
-environments; nothing else is required to start contributing. For how this
-repo fits the wider organization, see
-[The estate at a glance](#the-estate-at-a-glance).
+environments; nothing else is required to start contributing.
 
 Every Cure-HHT repo owes a fresh clone this same three-command path — the
 contract is `HHT-OPS-repo-bootstrap` in `hht_admin/spec/`, and this repo hosts
 its reusable enforcement (see
 [Fresh-clone conformance](#fresh-clone-conformance-repo-bootstrap)).
 
-## The estate at a glance
+## Related repositories
 
-The canonical, org-wide map of the Cure-HHT repositories: what each holds, its
-visibility, and how they relate. Every covered repo's README links up here, so
-this is the one place the picture is maintained.
+The other Cure-HHT repositories this one works with, named so you know where to
+look — they live under the same `Cure-HHT` GitHub organization:
 
-```text
-                         Cure-HHT GitHub organization
-  +-------------------------------------------------------------------------+
-  |                                                                         |
-  |   hht_admin (PRIVATE)                hht_workflows (PUBLIC)              |
-  |   org IaC, WIF/OIDC pool,            reusable composite actions,        |
-  |   ops-bot App, sponsor               org-required checks, the           |
-  |   scaffolding, authoritative spec/   reusable repo-bootstrap workflow   |
-  |        |                                   ^                            |
-  |        | scaffolds                         | consumes (SHA-pinned)      |
-  |        v                                   |                            |
-  |   hht_sponsor_iac (PRIVATE)         hht_diary (PRIVATE today)           |
-  |   sponsor-neutral IaC modules,      core app, shared packages,         |
-  |   CD templates, onboarding scaffold  mobile app, public CI spec         |
-  |        |                                   |                            |
-  |        | copied + re-namespaced            | overlaid by               |
-  |        v                                   v                            |
-  |   hht_diary_<sponsor> (PRIVATE) -- per-sponsor build: config, branding,  |
-  |                                    specs, IaC; deploys to its own GCP    |
-  |                                                                         |
-  |   Public libraries: event_sourcing, dart_opentimestamps                 |
-  |   Publish target:   testlab-dashboard (PRIVATE)                         |
-  +-------------------------------------------------------------------------+
-```
+- **`hht_admin`** (private) — org IaC (Terraform, WIF/OIDC pool, the ops-bot
+  GitHub App), sponsor scaffolding, and the authoritative `spec/` of
+  `HHT-OPS-*` requirements.
+- **`hht_sponsor_iac`** (private) — sponsor-neutral Terraform modules, CD
+  templates, and the new-sponsor onboarding scaffold.
+- **`hht_diary`** (private today) — core application, shared packages, the
+  mobile app, and the public CI spec.
+- **`hht_diary_<sponsor>`** (private) — a single sponsor's build: config,
+  branding, specs, and IaC.
+- **`event_sourcing`**, **`dart_opentimestamps`** (public) — shared Dart
+  libraries.
+- **`testlab-dashboard`** (private) — Firebase Test Lab dashboard data.
 
-| Repo | Visibility | Holds |
-| --- | --- | --- |
-| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) | private | Org IaC (Terraform, WIF/OIDC pool, the ops-bot GitHub App), sponsor scaffolding, and the **authoritative** `spec/` of `HHT-OPS-*` requirements. |
-| `hht_workflows` (this repo) | public | Reusable composite actions, the org-required CI checks, and the reusable repo-bootstrap workflow. |
-| [`hht_sponsor_iac`](https://github.com/Cure-HHT/hht_sponsor_iac) | private | Sponsor-neutral Terraform modules, continuous-delivery templates, and the new-sponsor onboarding scaffold. |
-| [`hht_diary`](https://github.com/Cure-HHT/hht_diary) | private (today) | Core application, shared packages, the mobile app, and the public CI spec. Slated to split into a generic core + instantiation before going public. |
-| `hht_diary_<sponsor>` | private | A single sponsor's build: config, branding, specs, and IaC; deploys to that sponsor's own GCP project. |
-| [`event_sourcing`](https://github.com/Cure-HHT/event_sourcing) | public | Event-sourcing library (Dart). |
-| [`dart_opentimestamps`](https://github.com/Cure-HHT/dart_opentimestamps) | public | OpenTimestamps library (Dart). |
-| [`testlab-dashboard`](https://github.com/Cure-HHT/testlab-dashboard) | private | Firebase Test Lab dashboard data, written by CI via a scoped App token. |
-
-The public/secret boundary: confidential infrastructure — Terraform, secrets,
-and any customer-identifying configuration — lives only in the private repos.
-The public repos (this one, `event_sourcing`, `dart_opentimestamps`) carry no
-sponsor identity; a sponsor name is data derived at runtime, never key material.
+Confidential infrastructure — Terraform, secrets, and any customer-identifying
+configuration — lives only in the private repos. The public repos (this one,
+`event_sourcing`, `dart_opentimestamps`) carry no sponsor identity.
 
 ## What's here
 
@@ -336,17 +309,15 @@ pre-commit run gitleaks          # one hook
 git commit --no-verify
 ```
 
-## Related Repos
+## Current consumers
 
-See [The estate at a glance](#the-estate-at-a-glance) for the full org-wide map
-of repositories, their visibility, and how they relate.
-
-### Current consumers
+Repos wired up to consume this repo's actions (see
+[Related repositories](#related-repositories) for the wider set):
 
 | Repo | Visibility | Wired up |
 | --- | --- | --- |
-| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) | private | 2026-05-09 (CUR-1317) |
-| [`event_sourcing`](https://github.com/Cure-HHT/event_sourcing) | public | 2026-05-09 (CUR-1317) |
+| `hht_admin` | private | 2026-05-09 (CUR-1317) |
+| `event_sourcing` | public | 2026-05-09 (CUR-1317) |
 
 ## Reference
 
