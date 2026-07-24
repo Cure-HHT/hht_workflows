@@ -511,6 +511,38 @@ jobs:
 
           echo "sponsor-base-preflight readiness OK"
 
+  notify-failure:
+    name: notify-failure readiness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit-test the context derivation
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pytest
+          cd .github/actions/notify-failure
+          python3 -m pytest -q
+      - name: Verify the action reads its own run's jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Proves the jobs lookup works with `actions: read` — the exact
+          # call derive_context.py makes at runtime.
+          count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+                    --jq '.jobs | length')
+          echo "jobs visible: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::jobs API returned no jobs; notify-failure cannot derive context"
+            exit 1
+          fi
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.

@@ -36,6 +36,7 @@ each action's README for usage):
 | [`firebase-test-lab-ios`](.github/actions/firebase-test-lab-ios/) | Run an iOS XCTest matrix on Firebase Test Lab with catalog-aware device fallback and exit-15 retries; expose the matrix exit code as an output |
 | [`testlab-dashboard-publish`](.github/actions/testlab-dashboard-publish/) | Recover Test Lab run IDs from evidence, fetch Tool Results, and commit `dashboard_data.json` to the dashboard repo via a per-job App token |
 | [`sponsor-base-preflight`](.github/actions/sponsor-base-preflight/) | Reject a sponsor build whose core base images are not digest-pinned, or whose pinned `portal-server` does not declare every permission the sponsor's `role-permissions.yaml` grants |
+| [`notify-failure`](.github/actions/notify-failure/) | The single way a workflow announces its own failure: derives the failed job/step from the run's own jobs API (no per-workflow config, no workflow-name list) and delegates the post to `slack-notify` |
 
 ## Pre-commit hooks shared from this repo
 
@@ -120,6 +121,53 @@ jobs:
 The job's `name:` field becomes the check-context name that the
 org-level ruleset matches against. Each consumer's wrappers must use
 these exact names.
+
+### `notify-failure`
+
+The single way a workflow announces its own failure. It derives which
+job (and, where identifiable, which step) failed from the *current
+run's own* GitHub Actions jobs API — no per-workflow configuration and
+no workflow-name list to keep in sync — composes the Slack message, and
+delegates delivery to `slack-notify`. If the announcement itself fails
+to reach Slack, the step is soft-failed (the run stays green) but a
+`::error::` annotation is emitted so the failure is visible on the run
+without depending on Slack being up.
+
+The caller **must**:
+
+- run `actions/checkout` before the `notify-failure` step (so
+  `slack-notify` can read the routing file from the caller's
+  workspace), and
+- grant `actions: read` (the jobs-API lookup 403s without it).
+
+Inputs:
+
+| Input | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `slack-token` | yes | — | Slack bot OAuth token (`xoxb-...`). |
+| `event` | no | `workflow-failure` | Routing key looked up in the caller's `slack-channels.yml`. The default is a FLAT key (single channel), so a caller with no build flavor passes no `env`. |
+| `env` | no | `""` | Routing sub-key. Pass ONLY when `event` names an env-keyed route — `slack-notify` errors by design on a flat/env-keyed mismatch. |
+| `hints` | no | `""` | Optional JSON object string mapping a failed step's `name` (exactly as the jobs API reports it) to hint text, e.g. `'{"Upload to Google Play": "Play rejected the upload; check the track."}'`. Unmatched or absent produces no hint line; malformed JSON is warned about and ignored, never fatal. |
+| `routing-file` | no | `.github/slack-channels.yml` | Path to the routing YAML, relative to the caller's workspace. |
+
+Output: `post-status` — `ok` when the announcement reached at least
+one channel, `soft-failed` otherwise.
+
+```yaml
+  notify-failure:
+    name: Notify failure
+    if: failure()
+    needs: [build, test]   # list every job this run should be gated on
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@<commit-sha>  # SHA-pin; see "Pinning & versioning"
+        with:
+          slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
+```
 
 ## Pinning & versioning
 
