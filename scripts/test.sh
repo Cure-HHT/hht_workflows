@@ -16,6 +16,9 @@ REPO_ROOT="$(pwd)"
 . "$REPO_ROOT/bootstrap/hooks-guard.sh"
 hht_hooks_guard "$REPO_ROOT" ".githooks" "scripts/setup.sh" "scripts/setup.sh --check"
 
+# Implements: HHT-OPS-repo-bootstrap/I
+hht_associates_guard "$REPO_ROOT"
+
 # The test target directories, listed once.
 TARGETS='hooks/release-notes-update/tests
 hooks/no-or-true-guard/tests

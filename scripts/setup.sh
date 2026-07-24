@@ -38,6 +38,21 @@ if [ "${1:-}" = "--check" ]; then
     echo "not set up: repo console scripts missing from PATH (no-or-true-guard) — run scripts/setup.sh" >&2
     rc=1
   fi
+  # Associates are reported, but only fail the check when sibling repos are
+  # actually available to link. A CI runner has no siblings, and a clone there
+  # is still correctly set up -- CI resolves citations with the federate action
+  # instead. The sibling test is a filesystem probe, so it needs no elspais run.
+  if hht_cites_foreign_repo "$REPO_ROOT"; then
+    if hht_associates_linked "$REPO_ROOT"; then
+      echo "ok: elspais associates linked"
+    elif [ -n "$(find "$REPO_ROOT/.." -maxdepth 2 -name .elspais.toml \
+                 -not -path "$REPO_ROOT/*" -print -quit 2>/dev/null)" ]; then
+      echo "not set up: sibling repos are available but unlinked — run: elspais associate --all" >&2
+      rc=1
+    else
+      echo "info: this repo cites another repo; no sibling clones available to link" >&2
+    fi
+  fi
   exit "$rc"
 fi
 
@@ -104,6 +119,22 @@ and any of its worktrees. To bypass once (NOT recommended): commit
 with --no-verify. To run hooks manually against the whole tree:
 pre-commit run --all-files
 MSG
+
+# Link sibling Cure-HHT repos as elspais associates so cross-repo requirement
+# citations resolve locally. Best-effort by design: a clone with no siblings, or
+# a machine without elspais, is still a correctly set-up clone.
+# Implements: HHT-OPS-repo-bootstrap/I
+if command -v elspais >/dev/null 2>&1 && [ -f "$REPO_ROOT/.elspais.toml" ]; then
+  if elspais associate --all >/dev/null 2>&1; then
+    echo
+    echo "Linked available sibling repos as elspais associates."
+    echo "  Review with: elspais associate --list"
+  else
+    echo
+    echo "Note: no sibling Cure-HHT repos found to link as elspais associates."
+    echo "  Clone them alongside this repo, then: elspais associate --all"
+  fi
+fi
 
 # Claude Code tooling: the governance gate (/admin-review), the PR-workflow
 # commands, and the hooks guarding PR merges and worktree deletion.

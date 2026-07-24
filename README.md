@@ -235,6 +235,21 @@ Do **not** paths-filter this workflow: it becomes a required check, and a
 paths-filtered required check wedges any PR that does not touch a matching file
 at "Expected" forever. The check is cheap (shallow checkout, no full suite).
 
+### Cross-repo requirement citations
+
+When a repo's `spec/` cites another Cure-HHT repo's requirements, those
+citations resolve only if that repo is linked as an elspais **associate**.
+Locally:
+
+```sh
+elspais associate --all     # links the sibling Cure-HHT repos you have cloned
+elspais associate --list    # shows what resolved
+```
+
+`scripts/setup.sh` runs this for you; `scripts/setup.sh --check` reports it. In
+CI the [`elspais-federate`](.github/actions/elspais-federate/) action does the
+equivalent before `elspais checks`.
+
 ## Pinning & versioning
 
 Consumers **SHA-pin** every `uses:` reference to this repo

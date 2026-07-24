@@ -66,6 +66,20 @@ git commit --no-verify
 
 There is no build/test runner — `actionlint` is the static validator for the actual artifacts (`.github/actions/**/action.yml`, `.github/workflows/**.yml`). Runtime verification of an action happens via its readiness-checks job on a PR.
 
+## Cross-repo requirement citations
+
+`spec/` citations that name another Cure-HHT repo's REQ (e.g. `HHT-OPS-*`)
+resolve only when that repo is linked as an elspais associate. If
+`elspais checks` reports broken references, run:
+
+```sh
+elspais associate --all
+```
+
+This is machine-local (`.elspais.local.toml`, git-ignored) and does not survive
+a clone — `scripts/setup.sh` re-runs it. CI does the equivalent via the
+`elspais-federate` action. See `HHT-OPS-repo-bootstrap/I` in hht_admin.
+
 ## Conventions that bite if missed
 
 - **PR titles**: must contain `[CUR-XXX]` (Linear issue ref) or `[Dependabot]`. Squash-merges use the PR title verbatim as the `main` commit subject, so this guards downstream traceability. The `validate-pr-title` action enforces it.
