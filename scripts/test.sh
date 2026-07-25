@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Run this repo's automated test suite, or resolve its test targets with --list.
 #
 # The suites mirror the ones CI runs in

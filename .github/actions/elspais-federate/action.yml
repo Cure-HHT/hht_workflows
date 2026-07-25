@@ -70,8 +70,11 @@ runs:
             echo "associate $entry already present at $dest"
           else
             # Sparse + shallow: only the requirements graph is needed.
-            git clone --depth 1 --filter=blob:none --sparse \
-              ${REF:+--branch "$REF"} \
+            clone_args=(--depth 1 --filter=blob:none --sparse)
+            if [ -n "$REF" ]; then
+              clone_args+=(--branch "$REF")
+            fi
+            git clone "${clone_args[@]}" \
               "https://x-access-token:${TOKEN}@github.com/${entry}.git" "$dest"
             # Drop the credential from the clone's stored remote so the token
             # does not persist in .git/config for the rest of the job.
