@@ -8,6 +8,46 @@ secrets, customer-identifying configuration) lives in
 [`cure-hht/hht_admin`](https://github.com/Cure-HHT/hht_admin), which
 stays private.
 
+## Start here
+
+New to this repo? After cloning, run once (idempotent):
+
+```sh
+tools/setup-repo.sh          # activate this clone's git hooks
+tools/setup-repo.sh --check  # verify the clone is set up (reports via exit status)
+scripts/test.sh              # run the test suite (scripts/test.sh --list to resolve targets)
+```
+
+`tools/setup-repo.sh` sets `core.hooksPath` and caches the pre-commit
+environments; nothing else is required to start contributing.
+
+Every Cure-HHT repo owes a fresh clone this same three-command path — the
+contract is `HHT-OPS-repo-bootstrap` in `hht_admin/spec/`, and this repo hosts
+its reusable enforcement (see
+[Fresh-clone conformance](#fresh-clone-conformance-repo-bootstrap)).
+
+## Related repositories
+
+The other Cure-HHT repositories this one works with, named so you know where to
+look — they live under the same `Cure-HHT` GitHub organization:
+
+- **`hht_admin`** (private) — org IaC (Terraform, WIF/OIDC pool, the ops-bot
+  GitHub App), sponsor scaffolding, and the authoritative `spec/` of
+  `HHT-OPS-*` requirements.
+- **`hht_sponsor_iac`** (private) — sponsor-neutral Terraform modules, CD
+  templates, and the new-sponsor onboarding scaffold.
+- **`hht_diary`** (private today) — core application, shared packages, the
+  mobile app, and the public CI spec.
+- **`hht_diary_<sponsor>`** (private) — a single sponsor's build: config,
+  branding, specs, and IaC.
+- **`event_sourcing`**, **`dart_opentimestamps`** (public) — shared Dart
+  libraries.
+- **`testlab-dashboard`** (private) — Firebase Test Lab dashboard data.
+
+Confidential infrastructure — Terraform, secrets, and any customer-identifying
+configuration — lives only in the private repos. The public repos (this one,
+`event_sourcing`, `dart_opentimestamps`) carry no sponsor identity.
+
 ## What's here
 
 Three composite actions implementing the org-level branch-protection
@@ -271,6 +311,76 @@ fails — so it works on a bare runner and does not trip over a PEP 668
 externally-managed interpreter. Adding `setup-python` pins the interpreter
 and skips the install path entirely.
 
+## Fresh-clone conformance (repo-bootstrap)
+
+Every covered repo owes a fresh clone a documented path from "just cloned" to
+"enforcement active, tests runnable" — the contract is `HHT-OPS-repo-bootstrap`
+(A–H) in `hht_admin/spec/`. This repo hosts its shared enforcement:
+
+- [`.github/workflows/repo-bootstrap.yml`](.github/workflows/repo-bootstrap.yml)
+  — a reusable `workflow_call` that, on a real fresh checkout, asserts the clone
+  starts with hooks inert, runs the repo's own `setup`/`verify`/`test` commands,
+  and confirms the entry document names all three. It is language-agnostic: the
+  four semantic inputs say *what* each command must achieve, not how.
+- [`bootstrap/hooks-guard.sh`](bootstrap/hooks-guard.sh) — the one guard
+  implementation each repo vendors and invokes from a developer entry point, so
+  an inert clone says so (`/F`). It exposes a CI-silent warning
+  (`hht_hooks_guard`) and a pure predicate (`hht_hooks_active`) for an
+  authoritative verify command; both resolve an absolute `core.hooksPath`
+  before comparing.
+
+The required status-check context is **`Repo Bootstrap / Fresh clone`** — the
+composition of the caller job's `name:` and the reusable job's `name:` (a
+caller job that `uses:` a reusable workflow produces a check context of
+`<caller job name> / <reusable job name>`). Every consumer must therefore name
+its caller **workflow** `Repo Bootstrap` and its caller **job** `Repo
+Bootstrap`, exactly as in the example below, and branch-protection rules must
+require that exact composed string, `Repo Bootstrap / Fresh clone`.
+
+A consumer wires the depth check by adding `.github/workflows/repo-bootstrap-check.yml`:
+
+```yaml
+name: Repo Bootstrap
+on:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    name: Repo Bootstrap
+    uses: Cure-HHT/hht_workflows/.github/workflows/repo-bootstrap.yml@<commit-sha>  # SHA-pin; see "Pinning & versioning"
+    with:
+      setup-cmd: tools/setup-repo.sh
+      check-cmd: tools/setup-repo.sh --check
+      test-cmd: scripts/test.sh
+      test-list-cmd: scripts/test.sh --list   # cheap "resolve targets" invocation
+      guard-cmd: scripts/test.sh --list       # must name the setup command with hooks inert
+      entry-doc: README.md
+      runtime: python                         # 'python' | 'dart' | 'none'
+```
+
+Do **not** paths-filter this workflow: it becomes a required check, and a
+paths-filtered required check wedges any PR that does not touch a matching file
+at "Expected" forever. The check is cheap (shallow checkout, no full suite).
+
+### Cross-repo requirement citations
+
+When a repo's `spec/` cites another Cure-HHT repo's requirements, those
+citations resolve only if that repo is linked as an elspais **associate**.
+Locally:
+
+```sh
+elspais associate --all     # links the sibling Cure-HHT repos you have cloned
+elspais associate --list    # shows what resolved
+```
+
+`tools/setup-repo.sh` runs this for you; `tools/setup-repo.sh --check` reports it. In
+CI the [`elspais-federate`](.github/actions/elspais-federate/) action does the
+equivalent before `elspais checks`.
+
 ## Pinning & versioning
 
 Consumers **SHA-pin** every `uses:` reference to this repo
@@ -319,7 +429,7 @@ hooks live in `hooks/` (`release-notes-update`, `no-or-true-guard`,
 After cloning, run once per clone:
 
 ```sh
-scripts/setup.sh
+tools/setup-repo.sh
 ```
 
 This sets `core.hooksPath = .githooks` (shared across all worktrees of
@@ -349,19 +459,15 @@ pre-commit run gitleaks          # one hook
 git commit --no-verify
 ```
 
-## Related Repos
+## Current consumers
 
-| Repo | What it holds |
-| --- | --- |
-| `hht_workflows` (this repo, public) | Shared GitHub Actions composite actions; required-check workflows |
-| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) (private) | Org-wide GCP infrastructure (Terraform, IAM, service accounts); customer-identifying configuration |
-
-### Current consumers
+Repos wired up to consume this repo's actions (see
+[Related repositories](#related-repositories) for the wider set):
 
 | Repo | Visibility | Wired up |
 | --- | --- | --- |
-| [`hht_admin`](https://github.com/Cure-HHT/hht_admin) | private | 2026-05-09 (CUR-1317) |
-| [`event_sourcing`](https://github.com/Cure-HHT/event_sourcing) | public | 2026-05-09 (CUR-1317) |
+| `hht_admin` | private | 2026-05-09 (CUR-1317) |
+| `event_sourcing` | public | 2026-05-09 (CUR-1317) |
 
 ## Reference
 

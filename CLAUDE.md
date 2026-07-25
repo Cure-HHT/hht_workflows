@@ -35,7 +35,7 @@ Workflows trigger on both `pull_request` and (limited) `push: branches: [main]`.
 After cloning (per clone, not per worktree):
 
 ```sh
-scripts/setup.sh                  # sets core.hooksPath=.githooks and warms pre-commit cache
+tools/setup-repo.sh                  # sets core.hooksPath=.githooks and warms pre-commit cache
 ```
 
 Requires `pre-commit` on PATH (`pipx install pre-commit` recommended).
@@ -65,6 +65,20 @@ git commit --no-verify
 ```
 
 There is no build/test runner — `actionlint` is the static validator for the actual artifacts (`.github/actions/**/action.yml`, `.github/workflows/**.yml`). Runtime verification of an action happens via its readiness-checks job on a PR.
+
+## Cross-repo requirement citations
+
+`spec/` citations that name another Cure-HHT repo's REQ (e.g. `HHT-OPS-*`)
+resolve only when that repo is linked as an elspais associate. If
+`elspais checks` reports broken references, run:
+
+```sh
+elspais associate --all
+```
+
+This is machine-local (`.elspais.local.toml`, git-ignored) and does not survive
+a clone — `tools/setup-repo.sh` re-runs it. CI does the equivalent via the
+`elspais-federate` action. See `HHT-OPS-repo-bootstrap/I` in hht_admin.
 
 ## Conventions that bite if missed
 

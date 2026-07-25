@@ -6,14 +6,14 @@
 # a mix of public pre-commit-hooks repos and `hooks/` here.
 #
 # Setup:
-#   scripts/setup.sh      # configures core.hooksPath and warms cache
+#   tools/setup-repo.sh      # configures core.hooksPath and warms cache
 #
 # Manual run:
 #   pre-commit run --all-files
 
 # Install both hook types on `pre-commit install`: pre-commit hooks run at
 # commit time, and the pre-push stage (gitleaks, confidential-terms-scan)
-# runs at push time. scripts/setup.sh drives `core.hooksPath = .githooks`,
+# runs at push time. tools/setup-repo.sh drives `core.hooksPath = .githooks`,
 # whose pre-commit + pre-push wrappers cover both stages regardless.
 default_install_hook_types: [pre-commit, pre-push]
 default_stages: [pre-commit]
@@ -64,7 +64,7 @@ repos:
   # tried here and resolves "." against that placeholder, not this repo,
   # silently installing an empty package with no entry point (reproduced
   # in a clean container; see CUR-1640 PR #36). language: system instead
-  # execs whatever `no-or-true-guard` resolves to on PATH; scripts/setup.sh
+  # execs whatever `no-or-true-guard` resolves to on PATH; tools/setup-repo.sh
   # installs this repo (`pip install --user -e .`) so that resolves
   # correctly on a fresh clone.
   - repo: local
@@ -82,7 +82,7 @@ repos:
       # its OWN cache using a synthetic placeholder package, so
       # `additional_dependencies: ["."]` installs that empty placeholder
       # (no entry point), not this repo. `language: system` execs whatever
-      # `confidential-terms-scan` resolves to on PATH; scripts/setup.sh
+      # `confidential-terms-scan` resolves to on PATH; tools/setup-repo.sh
       # installs this repo (`pip install --user -e .`) so the console script
       # resolves on a fresh clone. The hosted manifest (.pre-commit-hooks.yaml)
       # keeps `language: python` — consumers clone this repo and `pip install`

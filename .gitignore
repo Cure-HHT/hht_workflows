@@ -18,3 +18,4 @@ htmlcov/
 .venv/
 venv/
 .superpowers/
+.elspais.local.toml

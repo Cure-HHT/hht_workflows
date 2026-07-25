@@ -17,6 +17,8 @@ on:
       - 'hooks/confidential-terms-scan/**'
       - '.github/actions/release-notes-publish/**'
       - '.github/actions/sponsor-base-preflight/**'
+      - '.github/actions/elspais-federate/**'
+      - 'bootstrap/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
       - '.github/workflows/release-notes-tests.yml'
@@ -68,6 +70,15 @@ jobs:
           set -euo pipefail
           cd .github/actions/sponsor-base-preflight
           PYTHONPATH=. pytest tests/ -v
+      - name: Run elspais-federate tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/elspais-federate
+          PYTHONPATH=. pytest tests/ -v
+      - name: Run bootstrap guard tests
+        run: |
+          set -euo pipefail
+          pytest bootstrap/tests/ -v
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.

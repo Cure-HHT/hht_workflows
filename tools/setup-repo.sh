@@ -10,6 +10,52 @@ set -e
 # Run from the repo root so `pre-commit install-hooks` finds
 # .pre-commit-config.yaml regardless of where the script was invoked.
 cd "$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(pwd)"
+
+# --check: report, through exit status, whether this clone is already in the
+# state a plain `tools/setup-repo.sh` produces — without changing anything. The
+# hooks-path test reuses the shared guard's predicate so it agrees with the
+# developer-facing warning (absolute core.hooksPath resolved, not string-matched).
+# Implements: HHT-OPS-repo-bootstrap/B
+if [ "${1:-}" = "--check" ]; then
+  . "$REPO_ROOT/bootstrap/hooks-guard.sh"
+  rc=0
+  if hht_hooks_active "$REPO_ROOT" ".githooks"; then
+    echo "ok: core.hooksPath points at this repo's .githooks"
+  else
+    echo "not set up: core.hooksPath does not point at .githooks — run tools/setup-repo.sh" >&2
+    rc=1
+  fi
+  if command -v pre-commit >/dev/null 2>&1; then
+    echo "ok: pre-commit on PATH"
+  else
+    echo "not set up: pre-commit not on PATH — run tools/setup-repo.sh" >&2
+    rc=1
+  fi
+  if command -v no-or-true-guard >/dev/null 2>&1; then
+    echo "ok: repo console scripts on PATH (no-or-true-guard)"
+  else
+    echo "not set up: repo console scripts missing from PATH (no-or-true-guard) — run tools/setup-repo.sh" >&2
+    rc=1
+  fi
+  # Associates are reported, but only fail the check when sibling repos are
+  # actually available to link. A CI runner has no siblings, and a clone there
+  # is still correctly set up -- CI resolves citations with the federate action
+  # instead. The sibling test is a filesystem probe (resolved from the
+  # canonical clone root, so it works from a worktree too), so it needs no
+  # elspais run.
+  if hht_cites_foreign_repo "$REPO_ROOT"; then
+    if hht_associates_linked "$REPO_ROOT"; then
+      echo "ok: elspais associates linked"
+    elif hht_has_linkable_siblings "$REPO_ROOT"; then
+      echo "not set up: sibling repos are available but unlinked — run: elspais associate --all" >&2
+      rc=1
+    else
+      echo "info: this repo cites another repo; no sibling clones available to link" >&2
+    fi
+  fi
+  exit "$rc"
+fi
 
 if ! command -v pre-commit >/dev/null 2>&1; then
   cat >&2 <<'MSG'
@@ -22,7 +68,7 @@ Install via one of:
 
 Docs: https://pre-commit.com/#install
 
-After installation, re-run scripts/setup.sh
+After installation, re-run tools/setup-repo.sh
 MSG
   exit 1
 fi
@@ -41,7 +87,7 @@ no-or-true-guard depends on this being on PATH. Install manually via one of:
   python3 -m pip install --user -e .
   pipx install --editable . --force
 
-Then re-run scripts/setup.sh.
+Then re-run tools/setup-repo.sh.
 MSG
   exit 1
 fi
@@ -55,7 +101,7 @@ Add its install location to PATH, e.g.:
   export PATH="$user_base/bin:\$PATH"
 
 Add that line to your shell profile (~/.bashrc, ~/.zshrc, etc.), then
-re-run scripts/setup.sh.
+re-run tools/setup-repo.sh.
 MSG
   exit 1
 fi
@@ -74,6 +120,33 @@ and any of its worktrees. To bypass once (NOT recommended): commit
 with --no-verify. To run hooks manually against the whole tree:
 pre-commit run --all-files
 MSG
+
+# Link sibling Cure-HHT repos as elspais associates so cross-repo requirement
+# citations resolve locally. Best-effort by design: a clone with no siblings, or
+# a machine without elspais, is still a correctly set-up clone.
+#
+# `elspais associate --all` exits 0 and prints its own "none found" message
+# even when it links nothing, so success alone cannot tell us whether
+# anything was actually linked -- decide the message from state afterward,
+# via the shared guard's predicate.
+# Implements: HHT-OPS-repo-bootstrap/I
+if command -v elspais >/dev/null 2>&1 && [ -f "$REPO_ROOT/.elspais.toml" ]; then
+  . "$REPO_ROOT/bootstrap/hooks-guard.sh"
+  associate_rc=0
+  elspais associate --all >/dev/null 2>&1 || associate_rc=$?
+  if [ "$associate_rc" -ne 0 ]; then
+    echo "Note: elspais associate --all exited $associate_rc (tolerated: best-effort setup step)." >&2
+  fi
+  if hht_associates_linked "$REPO_ROOT"; then
+    echo
+    echo "Linked available sibling repos as elspais associates."
+    echo "  Review with: elspais associate --list"
+  else
+    echo
+    echo "Note: no sibling Cure-HHT repos found to link as elspais associates."
+    echo "  Clone them alongside this repo, then: elspais associate --all"
+  fi
+fi
 
 # Claude Code tooling: the governance gate (/admin-review), the PR-workflow
 # commands, and the hooks guarding PR merges and worktree deletion.

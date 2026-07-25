@@ -1,0 +1,58 @@
+# Repo Bootstrap (this repo dogfoods the reusable workflow).
+#
+# hht_workflows both HOSTS the reusable repo-bootstrap workflow and is itself a
+# covered repo, so it calls its own reusable workflow with its own commands —
+# the same way every other consumer does. This is the depth half of
+# HHT-OPS-repo-bootstrap/H for this repo.
+#
+# No paths filter on pull_request: this becomes a REQUIRED check (the hht_admin
+# ruleset adds it per covered repo), and a paths-filtered required check wedges
+# any PR that does not touch a matching file at "Expected" forever. The check
+# is cheap (shallow checkout, no full suite), so run it on every PR. The weekly
+# schedule catches rot whose cause is external (a pinned tool disappearing) and
+# arrives with no PR at all.
+
+name: Repo Bootstrap
+
+on:
+  pull_request:
+  schedule:
+    # Mondays 06:00 UTC — catches rot in externally-pinned tooling.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: repo-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: Repo Bootstrap
+    uses: ./.github/workflows/repo-bootstrap.yml
+    with:
+      setup-cmd: tools/setup-repo.sh
+      check-cmd: tools/setup-repo.sh --check
+      test-cmd: scripts/test.sh
+      test-list-cmd: scripts/test.sh --list
+      guard-cmd: scripts/test.sh --list
+      entry-doc: README.md
+      runtime: python
+
+  # Implements: HHT-OPS-failure-notification-routing/A
+  #   The standard job, verbatim — notify-failure-lint checks it literally.
+  notify-failure:
+    name: Notify failure
+    needs: [bootstrap]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+        with:
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
