@@ -15,7 +15,7 @@
 # Implements: HHT-OPS-composite-action-library/A
 
 name: 'notify-failure-lint'
-description: 'Fail CI when a push/schedule/dispatch workflow lacks the standard notify-failure job'
+description: 'Fail CI when a push/schedule/workflow_dispatch workflow lacks the standard notify-failure job'
 
 inputs:
   workflows-dir:
