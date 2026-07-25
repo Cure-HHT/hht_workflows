@@ -13,12 +13,12 @@ stays private.
 New to this repo? After cloning, run once (idempotent):
 
 ```sh
-scripts/setup.sh          # activate this clone's git hooks
-scripts/setup.sh --check  # verify the clone is set up (reports via exit status)
-scripts/test.sh           # run the test suite (scripts/test.sh --list to resolve targets)
+tools/setup-repo.sh          # activate this clone's git hooks
+tools/setup-repo.sh --check  # verify the clone is set up (reports via exit status)
+scripts/test.sh              # run the test suite (scripts/test.sh --list to resolve targets)
 ```
 
-`scripts/setup.sh` sets `core.hooksPath` and caches the pre-commit
+`tools/setup-repo.sh` sets `core.hooksPath` and caches the pre-commit
 environments; nothing else is required to start contributing.
 
 Every Cure-HHT repo owes a fresh clone this same three-command path — the
@@ -203,8 +203,8 @@ jobs:
     name: Repo Bootstrap
     uses: Cure-HHT/hht_workflows/.github/workflows/repo-bootstrap.yml@<commit-sha>  # SHA-pin; see "Pinning & versioning"
     with:
-      setup-cmd: scripts/setup.sh
-      check-cmd: scripts/setup.sh --check
+      setup-cmd: tools/setup-repo.sh
+      check-cmd: tools/setup-repo.sh --check
       test-cmd: scripts/test.sh
       test-list-cmd: scripts/test.sh --list   # cheap "resolve targets" invocation
       guard-cmd: scripts/test.sh --list       # must name the setup command with hooks inert
@@ -227,7 +227,7 @@ elspais associate --all     # links the sibling Cure-HHT repos you have cloned
 elspais associate --list    # shows what resolved
 ```
 
-`scripts/setup.sh` runs this for you; `scripts/setup.sh --check` reports it. In
+`tools/setup-repo.sh` runs this for you; `tools/setup-repo.sh --check` reports it. In
 CI the [`elspais-federate`](.github/actions/elspais-federate/) action does the
 equivalent before `elspais checks`.
 
@@ -279,7 +279,7 @@ hooks live in `hooks/` (`release-notes-update`, `no-or-true-guard`,
 After cloning, run once per clone:
 
 ```sh
-scripts/setup.sh
+tools/setup-repo.sh
 ```
 
 This sets `core.hooksPath = .githooks` (shared across all worktrees of

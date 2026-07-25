@@ -35,7 +35,7 @@ Workflows trigger on both `pull_request` and (limited) `push: branches: [main]`.
 After cloning (per clone, not per worktree):
 
 ```sh
-scripts/setup.sh                  # sets core.hooksPath=.githooks and warms pre-commit cache
+tools/setup-repo.sh                  # sets core.hooksPath=.githooks and warms pre-commit cache
 ```
 
 Requires `pre-commit` on PATH (`pipx install pre-commit` recommended).
@@ -77,7 +77,7 @@ elspais associate --all
 ```
 
 This is machine-local (`.elspais.local.toml`, git-ignored) and does not survive
-a clone — `scripts/setup.sh` re-runs it. CI does the equivalent via the
+a clone — `tools/setup-repo.sh` re-runs it. CI does the equivalent via the
 `elspais-federate` action. See `HHT-OPS-repo-bootstrap/I` in hht_admin.
 
 ## Conventions that bite if missed

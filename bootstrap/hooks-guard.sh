@@ -27,8 +27,8 @@
 # Arguments (all optional except repo_root):
 #   repo_root   path to the repository root (default ".")
 #   hooks_dir   hooks directory relative to repo_root (default ".githooks")
-#   setup_cmd   the command that activates hooks   (default "scripts/setup.sh")
-#   verify_cmd  the command that verifies the setup (default "scripts/setup.sh --check")
+#   setup_cmd   the command that activates hooks   (default "tools/setup-repo.sh")
+#   verify_cmd  the command that verifies the setup (default "tools/setup-repo.sh --check")
 #
 # Two entry points, one comparison:
 #
@@ -69,8 +69,8 @@ hht_hooks_active() {
 hht_hooks_guard() {
     local repo_root="${1:-.}"
     local hooks_dir="${2:-.githooks}"
-    local setup_cmd="${3:-scripts/setup.sh}"
-    local verify_cmd="${4:-scripts/setup.sh --check}"
+    local setup_cmd="${3:-tools/setup-repo.sh}"
+    local verify_cmd="${4:-tools/setup-repo.sh --check}"
     local mode="${HHT_HOOKS_GUARD:-warn}"
 
     [ "$mode" = "off" ] && return 0

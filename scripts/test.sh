@@ -14,7 +14,7 @@ REPO_ROOT="$(pwd)"
 # Warn (do not fail) a developer whose clone's hooks are inert. Silent under CI.
 # Implements: HHT-OPS-repo-bootstrap/F
 . "$REPO_ROOT/bootstrap/hooks-guard.sh"
-hht_hooks_guard "$REPO_ROOT" ".githooks" "scripts/setup.sh" "scripts/setup.sh --check"
+hht_hooks_guard "$REPO_ROOT" ".githooks" "tools/setup-repo.sh" "tools/setup-repo.sh --check"
 
 # Implements: HHT-OPS-repo-bootstrap/I
 hht_associates_guard "$REPO_ROOT"
