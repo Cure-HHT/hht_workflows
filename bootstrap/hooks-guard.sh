@@ -144,10 +144,9 @@ hht_cites_foreign_repo() {
           "$repo_root/.elspais.toml" | head -1)"
     [ -n "$ns" ] || return 1
     # One pass: collect every namespace cited by a structured edge, then ask
-    # whether any of them is not ours.
-    # elspais levels are user-defined per repo, so match any
-    # NAMESPACE-LEVEL- shaped citation generically instead of enumerating a
-    # fixed level list here -- the level value itself is never used.
+    # whether any of them is not ours. elspais levels are user-defined per
+    # repo, so match any NAMESPACE-LEVEL- shaped citation; the level value
+    # itself is never used.
     grep -rhE '^\*\*(Refines|Implements|Integrates|Satisfies)\*\*:' "$repo_root/spec" 2>/dev/null \
         | grep -oE '[A-Za-z0-9]+-[A-Z]+-' \
         | grep -qvE "^${ns}-"
