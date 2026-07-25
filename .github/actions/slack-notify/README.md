@@ -33,7 +33,7 @@ secret rotation.
 
 | Name           | Required | Default                          | Purpose                                                                                                                       |
 |----------------|----------|----------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `event`        | yes      | —                                | Top-level routing key in `routing.<event>`.                                                                                   |
+| `event`        | channel mode | `""`                         | Top-level routing key in `routing.<event>`. Required in channel mode (empty is a hard `::error::`); in dm-only mode it is ignored and may be omitted.        |
 | `env`          | no       | `""`                             | Sub-key for per-environment routing (`routing.<event>.<env>`).                                                                |
 | `text`         | yes      | —                                | Slack mrkdwn body. When `blocks` is also supplied, this becomes the notification fallback / accessibility text.               |
 | `blocks`       | no       | `""`                             | Optional Slack Block Kit `blocks` JSON string. When present, controls in-channel rendering; `text` is kept as the fallback.   |
@@ -41,6 +41,7 @@ secret rotation.
 | `slack-token`  | yes      | —                                | Bot OAuth token (`xoxb-...`).                                                                                                 |
 | `routing-file` | no       | `.github/slack-channels.yml`     | Path relative to caller's workspace.                                                                                          |
 | `dm-user-email` | no      | `""`                             | Optional email of a Slack workspace user who also receives the message as a DM after the channel posts. Failures are soft (warning only). See [DM copy](#dm-copy). |
+| `dm-only`      | no       | `"false"`                        | When `"true"`, skip channel resolution/posting entirely and send ONLY the DM. `dm-user-email` becomes required (empty is a hard error); `event`/`env` are ignored. See [DM-only mode](#dm-only-mode). |
 | `thread-reply-text` | no       | `""`                             | Optional mrkdwn body posted as a thread reply to the main message in each routed channel. Failures are soft (warning only). |
 
 ## Outputs
@@ -223,6 +224,39 @@ DM conversation) on the bot token — only when `dm-user-email` is set.
     env:   prod
     text:  ":rotating_light: prod deploy failed — <...|run>"
     dm-user-email: oncall@example.org
+    slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+```
+
+## DM-only mode
+
+When `dm-only` is `"true"`, the action skips channel resolution and channel
+posting completely — no `conversations.list`, no channel `chat.postMessage`,
+no bookmark cycle — and sends **only** the DM to `dm-user-email`. Use this
+when the message is meant for one person and there is no channel to route it
+to (e.g. announcing a `workflow_dispatch` failure to the person who triggered
+the run).
+
+- `dm-user-email` is **required** in this mode. An empty value is a hard
+  error (`::error::`, non-zero exit): dm-only with nobody to DM would notify
+  no one, which is a misconfiguration rather than a soft Slack hiccup.
+- `event` and `env` are **ignored** and may be omitted — no routing lookup
+  happens. (In channel mode `event` is required: omitting it there is a hard
+  `::error::`.)
+- `channel-ids`, `message-tss`, and `bookmark-status` are emitted empty.
+- The DM's soft-fail semantics are unchanged (a lookup/DM failure emits a
+  `::warning::` and sets `dm-status: soft-failed`, and the action stays
+  green), but because no channel received the message the warning says so
+  explicitly — the caller is responsible for turning a dm-only soft-fail into
+  a hard signal (as `notify-failure`'s status step does).
+
+**Example.**
+
+```yaml
+- uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@<sha>
+  with:
+    dm-only: "true"
+    dm-user-email: dispatcher@example.org
+    text:  ":x: Your dispatched run failed — <...|run>"
     slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
 

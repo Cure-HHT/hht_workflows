@@ -6,7 +6,7 @@ import lint
 
 CANONICAL_IF = (
     "${{ !cancelled() && contains(needs.*.result, 'failure') "
-    "&& (github.event_name == 'push' || github.event_name == 'schedule') }}"
+    "&& github.event_name != 'pull_request' }}"
 )
 
 GOOD = """
@@ -44,14 +44,30 @@ def test_pr_only_workflow_is_exempt():
     assert lint.check("pr.yml", src) == []
 
 
-def test_dispatch_only_workflow_is_exempt():
+def test_dispatch_only_workflow_is_now_covered():
+    # Correction (CUR-1778): a workflow_dispatch failure can self-report, so a
+    # dispatch-only workflow is now covered and must carry the notify job.
     src = "name: X\non:\n  workflow_dispatch:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
-    assert lint.check("d.yml", src) == []
+    assert any("no notify-failure job" in v for v in lint.check("d.yml", src))
+
+
+def test_pr_plus_dispatch_is_now_covered():
+    # pull_request is not the ONLY trigger — the workflow_dispatch path can
+    # fail and self-report, so the workflow is covered.
+    src = "name: X\non:\n  pull_request:\n  workflow_dispatch:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
+    assert any("no notify-failure job" in v for v in lint.check("prd.yml", src))
 
 
 def test_workflow_call_only_is_exempt():
     src = "name: X\non:\n  workflow_call:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
     assert lint.check("wc.yml", src) == []
+
+
+def test_pr_plus_workflow_call_only_is_exempt():
+    # Neither pull_request nor workflow_call is a covered trigger, so the
+    # combination stays exempt.
+    src = "name: X\non:\n  pull_request:\n  workflow_call:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
+    assert lint.check("pwc.yml", src) == []
 
 
 def test_push_plus_dispatch_is_still_covered():

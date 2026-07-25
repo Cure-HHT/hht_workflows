@@ -72,6 +72,169 @@ def test_committer_email_only_on_push():
     assert dc.committer_email("schedule", {}) == ""
 
 
+# --- resolve_actor_email cascade -------------------------------------------
+#
+# `fetch` stands in for `gh api <path>` -> parsed JSON. The cascade is:
+#   1. GET /users/{login} .email
+#   2. GET /repos/{repo}/commits?author={login}&per_page=1 [0].commit.author.email
+#      (rejecting *.noreply.github.com)
+#   3. "" (unresolved)
+
+def _fake_fetch(mapping):
+    """A fetch callable backed by a {path: json} dict; missing path -> None."""
+    return lambda path: mapping.get(path)
+
+
+def test_cascade_uses_public_profile_email():
+    fetch = _fake_fetch({"users/octocat": {"email": "pub@example.com"}})
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == "pub@example.com"
+
+
+def test_cascade_falls_back_to_commit_email_when_profile_is_null():
+    fetch = _fake_fetch({
+        "users/octocat": {"email": None},
+        "repos/o/r/commits?author=octocat&per_page=1":
+            [{"commit": {"author": {"email": "dev@real.example"}}}],
+    })
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == "dev@real.example"
+
+
+def test_cascade_rejects_noreply_commit_email_and_is_unresolved():
+    # Profile null, and the only commit's author email is a GitHub privacy
+    # no-reply — real from git's side, but no Slack user has it, so it is
+    # rejected and the cascade reports unresolved.
+    fetch = _fake_fetch({
+        "users/octocat": {"email": ""},
+        "repos/o/r/commits?author=octocat&per_page=1":
+            [{"commit": {"author":
+                         {"email": "12345+octocat@users.noreply.github.com"}}}],
+    })
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == ""
+
+
+def test_cascade_rejects_plain_noreply_commit_email():
+    # `user@users.noreply.github.com` (no numeric prefix) is the same host.
+    fetch = _fake_fetch({
+        "users/octocat": {"email": ""},
+        "repos/o/r/commits?author=octocat&per_page=1":
+            [{"commit": {"author": {"email": "octocat@users.noreply.github.com"}}}],
+    })
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == ""
+
+
+def test_cascade_accepts_normal_domain_email():
+    fetch = _fake_fetch({
+        "users/octocat": {"email": ""},
+        "repos/o/r/commits?author=octocat&per_page=1":
+            [{"commit": {"author": {"email": "user@anspar.org"}}}],
+    })
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == "user@anspar.org"
+
+
+def test_cascade_accepts_noreply_lookalike_host():
+    # A suffix match on "noreply.github.com" would wrongly reject this
+    # attacker-controlled lookalike host; only the EXACT host
+    # `users.noreply.github.com` is GitHub's real no-reply domain, so this
+    # email is accepted (precision, not a security boundary on its own).
+    fetch = _fake_fetch({
+        "users/octocat": {"email": ""},
+        "repos/o/r/commits?author=octocat&per_page=1":
+            [{"commit": {"author":
+                         {"email": "a@evilusers.noreply.github.com.attacker.com"}}}],
+    })
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == (
+        "a@evilusers.noreply.github.com.attacker.com")
+
+
+def test_cascade_fully_unresolved_returns_empty():
+    # No public email and no commits at all -> "".
+    fetch = _fake_fetch({
+        "users/octocat": {"email": None},
+        "repos/o/r/commits?author=octocat&per_page=1": [],
+    })
+    assert dc.resolve_actor_email("octocat", "o/r", fetch) == ""
+
+
+def test_cascade_survives_a_failed_fetch():
+    # `_gh_api_json` returns None on any error; the cascade must treat that as
+    # "no signal", not crash.
+    assert dc.resolve_actor_email("ghost", "o/r", lambda path: None) == ""
+
+
+# --- delivery mode decision ------------------------------------------------
+
+def _boom(path):  # a fetch that must NOT be called on push/schedule
+    raise AssertionError(f"cascade should not run for this event ({path})")
+
+
+def test_delivery_push_is_channel_with_committer():
+    event = {"head_commit": {"author": {"email": "dev@example.com"}}}
+    assert dc.delivery("push", event, "octocat", "o/r", _boom) == (
+        "channel", "dev@example.com")
+
+
+def test_delivery_schedule_is_channel_with_no_dm():
+    assert dc.delivery("schedule", {}, "octocat", "o/r", _boom) == ("channel", "")
+
+
+def test_delivery_dispatch_resolved_is_dm_only():
+    fetch = _fake_fetch({"users/octocat": {"email": "pub@example.com"}})
+    assert dc.delivery("workflow_dispatch", {}, "octocat", "o/r", fetch) == (
+        "dm-only", "pub@example.com")
+
+
+def test_delivery_dispatch_unresolved_is_channel_with_empty_dm():
+    fetch = _fake_fetch({"users/octocat": {"email": None},
+                         "repos/o/r/commits?author=octocat&per_page=1": []})
+    assert dc.delivery("workflow_dispatch", {}, "octocat", "o/r", fetch) == (
+        "channel", "")
+
+
+# --- _gh_api_json / cascade hardening --------------------------------------
+#
+# A missing `gh` binary (FileNotFoundError, a subclass of OSError) or a hung
+# `gh api` call (subprocess.TimeoutExpired, a subclass of SubprocessError)
+# must degrade to "unresolved", never propagate out of `resolve_actor_email`
+# / `delivery` and crash the whole notify step (which would suppress the
+# Slack post entirely).
+
+def test_gh_api_json_survives_missing_gh_binary(monkeypatch):
+    def run(argv, **kwargs):
+        raise FileNotFoundError("gh: command not found")
+
+    monkeypatch.setattr(dc.subprocess, "run", run)
+    assert dc._gh_api_json("users/octocat") is None
+
+
+def test_gh_api_json_survives_timeout(monkeypatch):
+    def run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=10)
+
+    monkeypatch.setattr(dc.subprocess, "run", run)
+    assert dc._gh_api_json("users/octocat") is None
+
+
+def test_cascade_returns_empty_when_gh_binary_missing(monkeypatch):
+    def run(argv, **kwargs):
+        raise FileNotFoundError("gh: command not found")
+
+    monkeypatch.setattr(dc.subprocess, "run", run)
+    # End to end through the real `_gh_api_json` (not a fake): a missing
+    # `gh` binary must degrade the cascade to unresolved, not raise.
+    assert dc.resolve_actor_email("octocat", "o/r", dc._gh_api_json) == ""
+
+
+def test_delivery_survives_gh_api_timeout_and_falls_back_to_channel(monkeypatch):
+    def run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=10)
+
+    monkeypatch.setattr(dc.subprocess, "run", run)
+    # Exercises the real `_gh_api_json` (not a fake), end to end through
+    # `delivery`, for a workflow_dispatch run whose `gh api` calls hang.
+    assert dc.delivery("workflow_dispatch", {}, "octocat", "o/r",
+                       dc._gh_api_json) == ("channel", "")
+
+
 # --- _fetch_jobs -----------------------------------------------------------
 #
 # The fake stands in for the real `gh api` framing rules: WITHOUT `--jq`,
@@ -137,7 +300,7 @@ def test_fetch_jobs_requests_a_full_page_and_paginates(monkeypatch):
 # --- main / $GITHUB_OUTPUT -------------------------------------------------
 
 def _run_main(monkeypatch, tmp_path, jobs, *, event_name="push",
-              event=None, hints=""):
+              event=None, hints="", fetch=None):
     out_file = tmp_path / "github_output"
     out_file.write_text("")
     event_file = tmp_path / "event.json"
@@ -158,6 +321,9 @@ def _run_main(monkeypatch, tmp_path, jobs, *, event_name="push",
         monkeypatch.setenv(key, value)
 
     monkeypatch.setattr(dc, "_fetch_jobs", lambda repo, run_id: jobs)
+    # The actor-email cascade only runs for workflow_dispatch; a fetch that
+    # raises makes an unexpected network hit on push/schedule loud.
+    monkeypatch.setattr(dc, "_gh_api_json", fetch or _boom)
     dc.main()
     return out_file.read_text()
 
@@ -182,18 +348,48 @@ def _parse_output(text):
     return values
 
 
-def test_main_writes_text_block_and_committer_email(monkeypatch, tmp_path):
+def test_main_writes_text_block_and_dm_email_and_mode(monkeypatch, tmp_path):
     jobs = [_job("build", "failure", [("Compile", "failure")])]
     event = {"head_commit": {"author": {"email": "dev@example.com"}}}
     written = _run_main(monkeypatch, tmp_path, jobs, event=event)
     values = _parse_output(written)
 
-    assert values["committer-email"] == "dev@example.com"
+    # push -> channel mode, DM the committer.
+    assert values["dm-email"] == "dev@example.com"
+    assert values["mode"] == "channel"
     assert "*Failed:* build / Compile" in values["text"]
     assert "Android Build" in values["text"]
     assert "https://github.com/Cure-HHT/hht_workflows/actions/runs/42" in values["text"]
     # Multi-line body really is wrapped in a heredoc, not a `key=value` line.
     assert "\n" in values["text"]
+
+
+def test_main_dispatch_resolved_is_dm_only(monkeypatch, tmp_path):
+    jobs = [_job("build", "failure", [("Compile", "failure")])]
+    fetch = _fake_fetch({"users/octocat": {"email": "trigger@example.com"}})
+    written = _run_main(monkeypatch, tmp_path, jobs,
+                        event_name="workflow_dispatch", fetch=fetch)
+    values = _parse_output(written)
+
+    assert values["mode"] == "dm-only"
+    assert values["dm-email"] == "trigger@example.com"
+    assert "@octocat" in values["text"]  # actor still named in the body
+
+
+def test_main_dispatch_unresolved_falls_back_to_channel(monkeypatch, tmp_path):
+    jobs = [_job("build", "failure", [("Compile", "failure")])]
+    fetch = _fake_fetch({"users/octocat": {"email": None},
+                         "repos/Cure-HHT/hht_workflows/commits"
+                         "?author=octocat&per_page=1": []})
+    written = _run_main(monkeypatch, tmp_path, jobs,
+                        event_name="workflow_dispatch", fetch=fetch)
+    values = _parse_output(written)
+
+    # Unresolved dispatcher -> channel post, no DM, but the actor is named so
+    # a human can tell who triggered it.
+    assert values["mode"] == "channel"
+    assert values["dm-email"] == ""
+    assert "*Triggered by:* @octocat" in values["text"]
 
 
 def test_main_delimiter_is_not_forgeable(monkeypatch, tmp_path):
@@ -205,9 +401,60 @@ def test_main_delimiter_is_not_forgeable(monkeypatch, tmp_path):
 
     assert "injected" not in values          # no smuggled output key
     assert "__NF_EOF__" in values["text"]    # kept inside the block, inert
-    assert "committer-email" in values       # nothing after it was swallowed
+    assert "dm-email" in values              # nothing after it was swallowed
+    assert "mode" in values
     assert values["text"].rstrip().endswith(
         "https://github.com/Cure-HHT/hht_workflows/actions/runs/42")
+
+
+def _run_main_with_jobs_fetch_raising(monkeypatch, tmp_path, exc):
+    """Like `_run_main`, but the jobs fetch itself raises `exc` — exercising
+    the `main()` guard around `_fetch_jobs`, not the happy-path stub.
+    """
+    out_file = tmp_path / "github_output"
+    out_file.write_text("")
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps({"head_commit": {"author":
+                                                        {"email": "dev@example.com"}}}))
+
+    for key, value in {
+        "GITHUB_REPOSITORY": "Cure-HHT/hht_workflows", "GITHUB_RUN_ID": "42",
+        "GITHUB_WORKFLOW": "Android Build", "GITHUB_REF_NAME": "main",
+        "GITHUB_ACTOR": "octocat", "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_OUTPUT": str(out_file), "INPUT_HINTS": "",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    def fetch_jobs(repo, run_id):
+        raise exc
+
+    monkeypatch.setattr(dc, "_fetch_jobs", fetch_jobs)
+    monkeypatch.setattr(dc, "_gh_api_json", _boom)
+    dc.main()
+    return _parse_output(out_file.read_text())
+
+
+def test_main_survives_missing_gh_binary_on_jobs_fetch(monkeypatch, tmp_path):
+    """A missing `gh` (FileNotFoundError) on the jobs fetch must degrade to
+    a degraded message, not crash `main` and suppress the whole notification.
+    """
+    values = _run_main_with_jobs_fetch_raising(
+        monkeypatch, tmp_path, FileNotFoundError("gh: command not found"))
+
+    assert values["mode"] == "channel"
+    assert values["dm-email"] == "dev@example.com"
+    assert "*Failed:* (no failed job identified — see the run)" in values["text"]
+
+
+def test_main_survives_jobs_fetch_timeout(monkeypatch, tmp_path):
+    values = _run_main_with_jobs_fetch_raising(
+        monkeypatch, tmp_path,
+        subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=10))
+
+    assert values["mode"] == "channel"
+    assert values["dm-email"] == "dev@example.com"
+    assert "*Failed:* (no failed job identified — see the run)" in values["text"]
 
 
 def test_main_survives_an_unreadable_event_payload(monkeypatch, tmp_path):
@@ -229,5 +476,7 @@ def test_main_survives_an_unreadable_event_payload(monkeypatch, tmp_path):
     dc.main()
 
     values = _parse_output(out_file.read_text())
-    assert values["committer-email"] == ""
+    # push event -> channel mode; the unreadable payload yields no committer.
+    assert values["dm-email"] == ""
+    assert values["mode"] == "channel"
     assert "*Failed:* build / Compile" in values["text"]

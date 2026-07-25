@@ -7,7 +7,7 @@ The single way a workflow announces its own failure to Slack.
     notify-failure:
       name: Notify failure
       needs: [build, test]   # every OTHER job in the workflow
-      if: ${{ !cancelled() && contains(needs.*.result, 'failure') && (github.event_name == 'push' || github.event_name == 'schedule') }}
+      if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
       runs-on: ubuntu-latest
       permissions:
         contents: read
@@ -19,9 +19,11 @@ The single way a workflow announces its own failure to Slack.
             slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
 
 Copy the `if:` guard verbatim — `notify-failure-lint` checks for it exactly.
-It is deliberately not `failure()`: that also fires on a cancelled run, and
-the event test keeps the announcement off pull-request runs where the author
-is already looking at the result.
+It is deliberately not `failure()`: that also fires on a cancelled run. The
+event test fires on everything **except** `pull_request` — push, schedule,
+AND `workflow_dispatch` — because a dispatch failure can self-report just as a
+push failure can. Only `pull_request` is excluded, since the author is already
+looking at the PR's status checks.
 
 ## What it does
 
@@ -30,6 +32,25 @@ Derives which job — and, where identifiable, which step — failed from the
 configuration and no list of workflow names anywhere, so nothing can drift
 out of sync. It composes the message and delegates delivery to the canonical
 `slack-notify` composite (SHA-pinned internally).
+
+**Delivery routing.** How the announcement is delivered depends on what
+triggered the run:
+
+- **`push` / `schedule`** — a channel post via the `event` route (default
+  `workflow-failure` → the ops channel), plus a DM to the committer on a push
+  (a scheduled run has no committer).
+- **`workflow_dispatch`** — DM-first. GitHub Actions never exposes the
+  triggering actor's email, so the action runs a best-effort cascade to
+  resolve `github.actor` to one: the actor's public profile email, then the
+  author email of their most recent commit (rejecting `*.noreply.github.com`
+  privacy addresses). If it resolves, the failure is sent as a **DM to the
+  triggerer only** — no channel post. If it does not resolve, the action
+  falls back to a **channel post** whose body names the actor
+  (`*Triggered by:* @<actor>`) so a human can still tell who dispatched it.
+
+Either way a soft-failed delivery still surfaces an `::error::` annotation on
+the run (see below) — in dm-only mode "success" means the DM was actually
+sent, since there is no channel to fall back on.
 
 If the announcement itself cannot reach Slack the post step is soft-failed —
 a Slack outage must not repaint an otherwise green run — but an `::error::`
