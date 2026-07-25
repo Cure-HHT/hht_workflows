@@ -1,6 +1,7 @@
 # notify-failure-lint — composite action.
 #
-# Fails CI if any workflow triggered by push or schedule lacks the standard
+# Fails CI if any workflow triggered by push, schedule, or workflow_dispatch
+# lacks the standard
 # notify-failure job, or if any workflow announces failure off a
 # hand-maintained enumeration of other workflows
 # (`on.workflow_run.workflows`). This is the enforcement that keeps failure
@@ -14,7 +15,7 @@
 # Implements: HHT-OPS-composite-action-library/A
 
 name: 'notify-failure-lint'
-description: 'Fail CI when a push/schedule workflow lacks the standard notify-failure job'
+description: 'Fail CI when a push/schedule/dispatch workflow lacks the standard notify-failure job'
 
 inputs:
   workflows-dir:

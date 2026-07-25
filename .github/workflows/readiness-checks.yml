@@ -511,7 +511,14 @@ jobs:
 
           echo "sponsor-base-preflight readiness OK"
 
-  notify-failure:
+  notify-failure-readiness:
+    # `name:` pins the reported check context to `notify-failure`, which is
+    # what hht_admin's ruleset requires (terraform/branch-protection.tf). The
+    # job ID had to change because `notify-failure` is now reserved for the
+    # standard announcement job at the bottom of this file, which
+    # notify-failure-lint looks up by ID. Renaming the ID without renaming the
+    # check keeps the ruleset untouched.
+    name: notify-failure
     # End-to-end readiness for the notify-failure composite: unit tests, the
     # jobs-API grant, and a real invocation of the action itself against a
     # fixture routing file with a deliberately invalid Slack token. The last
@@ -654,7 +661,10 @@ jobs:
           fi
           echo "notify-failure status step reports 'ok' on the delivered path."
 
-  notify-failure-lint:
+  notify-failure-lint-readiness:
+    # Renamed alongside notify-failure-readiness above for symmetry; `name:`
+    # likewise pins the required check context to `notify-failure-lint`.
+    name: notify-failure-lint
     # Readiness for the enforcement half: unit-test the checker, then run the
     # composite itself against a conforming fixture (must pass) and a
     # non-conforming one (must fail). The second is what proves the action
@@ -730,3 +740,34 @@ jobs:
     steps:
       - name: Placeholder
         run: echo "Readiness Checks workflow ready; per-action jobs land in subsequent PRs."
+
+  # Implements: HHT-OPS-failure-notification-routing/A
+  #   The standard job, verbatim — notify-failure-lint checks it literally.
+  #   Announces on push-to-main and workflow_dispatch failures; the guard
+  #   keeps it off the pull_request runs, where the author already sees the
+  #   readiness checks go red on their own PR.
+  notify-failure:
+    name: Notify failure
+    needs:
+      - build-urs
+      - confidential-terms-gate
+      - confidential-terms-scan
+      - cosign-verify
+      - doppler-cli-oidc-auth
+      - doppler-oidc-auth
+      - gcp-wif-auth
+      - no-op
+      - notify-failure-lint-readiness
+      - notify-failure-readiness
+      - release-notes-publish
+      - sponsor-base-preflight
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+        with:
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
