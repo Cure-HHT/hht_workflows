@@ -1,0 +1,22 @@
+# Fixture for assertion C, limb 2: the obvious workaround for limb 1 —
+# move the hand-maintained list of workflow display names out of
+# `on.workflow_run.workflows` and into a text file the announcement job
+# greps. The list is still typed by hand, still matched exactly, and still
+# reports nothing when an entry stops matching anything.
+name: Fixture (workflow enumeration read from a file)
+on:
+  workflow_run:
+    types: [completed]
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+      - name: Is this one of the workflows we watch?
+        run: grep -qx "${{ github.event.workflow_run.name }}" .github/watched-workflows.txt
+      - name: Announce
+        if: failure()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@1111111111111111111111111111111111111111
+        with:
+          event: workflow-failure
+          slack-token: fixture

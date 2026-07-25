@@ -1,0 +1,34 @@
+# Enforces that every workflow in THIS repo triggered by push, schedule, or
+# workflow_dispatch carries the standard notify-failure job. Without this
+# check the convention depends on authors remembering, which is the accretion
+# mechanism CUR-1778 removed.
+#
+# This repo is the canonical home of notify-failure-lint, so it runs the
+# LOCAL action rather than a SHA-pinned release: a PR that regresses the
+# checker is then caught by the checker it is regressing, on the same run.
+# The fixture-based readiness for the action itself lives in
+# readiness-checks.yml (`notify-failure-lint-readiness`) — that job proves the
+# checker works; this workflow applies it to our own tree.
+#
+# Implements: HHT-OPS-failure-notification-routing/E
+
+name: notify-failure presence
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  notify-failure-presence:
+    name: notify-failure-presence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/notify-failure-lint

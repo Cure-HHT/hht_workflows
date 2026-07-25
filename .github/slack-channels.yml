@@ -1,0 +1,26 @@
+# Slack channel routing for hht_workflows' own workflow notifications.
+#
+# This repo is the canonical home of the `slack-notify` and `notify-failure`
+# composites; this file is how it consumes them for ITSELF. Consumer repos
+# keep their own copy at the same path (the `routing-file` default).
+#
+# The `slack-notify` composite resolves channel names to IDs at runtime via
+# Slack conversations.list, so a rename or accidental deletion fails loudly
+# with a clear error instead of posting silently to nowhere.
+#
+# Bot prerequisites (api.slack.com/apps):
+#   OAuth scopes: chat:write, channels:read, channels:join, groups:read
+#   For private channels: one-time manual /invite (conversations.join
+#   doesn't apply to private channels).
+
+channels:
+  SLACK_DEVOPS_CH: "#devops"   # DevOps cross-team escalation
+
+routing:
+  # Standard failure route: every workflow triggered by push, schedule, or
+  # workflow_dispatch announces its own failure here via the shared
+  # notify-failure composite. FLAT (single channel) by design — slack-notify
+  # errors if an env-keyed key is used with no `env`, and this repo has no
+  # build flavor.
+  # Implements: HHT-OPS-failure-notification-routing/A
+  workflow-failure: SLACK_DEVOPS_CH

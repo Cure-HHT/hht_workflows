@@ -50,8 +50,10 @@ repos:
 
   # GitHub Actions YAML validation — catches workflow syntax errors,
   # bad expressions, missing inputs, etc. before push.
+  # v1.7.12+ is required: v1.7.7 hard-codes GitHub's superseded 10-input cap
+  # on workflow_dispatch and rejects conforming workflows that exceed it.
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.7
+    rev: v1.7.12
     hooks:
       - id: actionlint
 
