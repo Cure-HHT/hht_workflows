@@ -85,8 +85,11 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Every repo's setup activates hooks through the pre-commit framework
+      # (a Python tool), so provide Python + pre-commit for both python and
+      # dart runtimes. 'none' opts out entirely.
       - name: Set up Python
-        if: inputs.runtime == 'python'
+        if: inputs.runtime != 'none'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
@@ -94,7 +97,7 @@ jobs:
       # The pre-commit framework is the assumed-present tool a developer
       # installs once; provide it on PATH so setup-cmd can install hooks.
       - name: Provide pre-commit on PATH
-        if: inputs.runtime == 'python'
+        if: inputs.runtime != 'none'
         run: |
           set -euo pipefail
           python -m pip install --quiet --upgrade pip
