@@ -68,3 +68,19 @@ jobs:
           set -euo pipefail
           cd .github/actions/sponsor-base-preflight
           PYTHONPATH=. pytest tests/ -v
+
+  # Implements: HHT-OPS-failure-notification-routing/A
+  #   The standard job, verbatim — notify-failure-lint checks it literally.
+  notify-failure:
+    name: Notify failure
+    needs: [test]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+        with:
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}

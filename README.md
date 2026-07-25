@@ -37,7 +37,7 @@ each action's README for usage):
 | [`testlab-dashboard-publish`](.github/actions/testlab-dashboard-publish/) | Recover Test Lab run IDs from evidence, fetch Tool Results, and commit `dashboard_data.json` to the dashboard repo via a per-job App token |
 | [`sponsor-base-preflight`](.github/actions/sponsor-base-preflight/) | Reject a sponsor build whose core base images are not digest-pinned, or whose pinned `portal-server` does not declare every permission the sponsor's `role-permissions.yaml` grants |
 | [`notify-failure`](.github/actions/notify-failure/) | The single way a workflow announces its own failure: derives the failed job/step from the run's own jobs API (no per-workflow config, no workflow-name list) and delegates the post to `slack-notify` |
-| [`notify-failure-lint`](.github/actions/notify-failure-lint/) | Fails CI when a workflow triggered by push/schedule lacks the standard `notify-failure` job, or announces failure off a hand-maintained `on.workflow_run.workflows` list |
+| [`notify-failure-lint`](.github/actions/notify-failure-lint/) | Fails CI when a workflow triggered by push/schedule/workflow_dispatch lacks the standard `notify-failure` job, or announces failure off a hand-maintained `on.workflow_run.workflows` list |
 
 ## Pre-commit hooks shared from this repo
 
@@ -164,7 +164,7 @@ looking at the result.
   notify-failure:
     name: Notify failure
     needs: [build, test]   # list every OTHER job in the workflow
-    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -182,13 +182,15 @@ The enforcement half of `notify-failure`: a static check that fails CI so
 bespoke per-workflow notifiers cannot silently re-accrete. It reads the
 consumer's workflow tree and applies two rules:
 
-- **Presence.** A workflow is *covered* if its triggers include `push` or
-  `schedule` (whatever else they include). Every covered workflow must
-  carry the standard `notify-failure` job above — `needs:` naming every
-  other job, the canonical `if:` guard, `contents: read` + `actions: read`,
-  an `actions/checkout` step, and a SHA-pinned `notify-failure` reference.
-  Workflows triggered only by `pull_request` / `workflow_dispatch` /
-  `workflow_call` are out of scope.
+- **Presence.** A workflow is *covered* if its triggers include `push`,
+  `schedule`, or `workflow_dispatch` (whatever else they include). Every
+  covered workflow must carry the standard `notify-failure` job above —
+  `needs:` naming every other job, the canonical `if:` guard,
+  `contents: read` + `actions: read`, an `actions/checkout` step, and a
+  SHA-pinned `notify-failure` reference. Workflows triggered only by
+  `pull_request` / `workflow_call` are out of scope: PR failures already
+  show as PR status checks, and a reusable workflow announces from its
+  caller.
 - **No workflow enumeration.** No workflow may key failure announcement off a
   hand-maintained list of other workflows. Two limbs: the `on:` block must not
   carry a `workflow_run.workflows` list, *and* a job containing a
