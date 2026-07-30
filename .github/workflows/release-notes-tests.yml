@@ -18,6 +18,7 @@ on:
       - '.github/actions/release-notes-publish/**'
       - '.github/actions/sponsor-base-preflight/**'
       - '.github/actions/elspais-federate/**'
+      - '.github/actions/cosign-verify/**'
       - 'bootstrap/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
@@ -79,6 +80,10 @@ jobs:
         run: |
           set -euo pipefail
           pytest bootstrap/tests/ -v
+      - name: Run cosign-verify logic tests
+        run: |
+          set -euo pipefail
+          pytest .github/actions/cosign-verify/tests/ -v
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.
