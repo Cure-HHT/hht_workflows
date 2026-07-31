@@ -269,6 +269,91 @@ jobs:
           fi
           echo "Negative identity check correctly rejected wrong-repo identity (outcome: ${OUTCOME})"
 
+      # The steps below cover the paths the happy-path and wrong-identity cases
+      # do not: the DEFAULT soft-fail branch, and the digest-pinning, empty-list,
+      # and non-integer-retry config guards. Each asserts on the composite's step
+      # outcome, so a regression in that branch turns this readiness job red.
+
+      - name: Verify with default soft-fail (warns, does not fail)
+        id: softfail-default
+        # Same failing verification as the negative case, but soft-fail left at
+        # its default: the action must warn and exit 0. retries: '1' keeps the
+        # expected failure fast (no backoff loop).
+        uses: ./.github/actions/cosign-verify
+        with:
+          images: ghcr.io/cure-hht/cosign-verify-readiness@${{ steps.build.outputs.digest }}
+          identity-regexp: 'https://github.com/does-not-exist/wrong-repo'
+          retries: '1'
+        continue-on-error: true
+
+      - name: Assert default soft-fail passed
+        env:
+          OUTCOME: ${{ steps.softfail-default.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != "success" ]; then
+            echo "::error::Default soft-fail must warn and pass; outcome was: ${OUTCOME}"
+            exit 1
+          fi
+          echo "Default soft-fail correctly warned and passed (outcome: ${OUTCOME})"
+
+      - name: Verify rejects a non-digest (tag) image
+        id: not-pinned
+        # soft-fail: 'true' proves the digest-pinning guard rejects regardless.
+        uses: ./.github/actions/cosign-verify
+        with:
+          images: ghcr.io/cure-hht/cosign-verify-readiness:latest
+          soft-fail: 'true'
+        continue-on-error: true
+
+      - name: Assert non-digest image rejected
+        env:
+          OUTCOME: ${{ steps.not-pinned.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::A tag-pinned image must be rejected regardless of soft-fail; outcome: ${OUTCOME}"
+            exit 1
+          fi
+          echo "Non-digest image correctly rejected (outcome: ${OUTCOME})"
+
+      - name: Verify rejects an empty image list
+        id: empty-images
+        uses: ./.github/actions/cosign-verify
+        with:
+          images: ''
+        continue-on-error: true
+
+      - name: Assert empty image list rejected
+        env:
+          OUTCOME: ${{ steps.empty-images.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::An empty images input must fail; outcome: ${OUTCOME}"
+            exit 1
+          fi
+          echo "Empty image list correctly rejected (outcome: ${OUTCOME})"
+
+      - name: Verify rejects non-integer retries
+        id: bad-retries
+        uses: ./.github/actions/cosign-verify
+        with:
+          images: ghcr.io/cure-hht/cosign-verify-readiness@${{ steps.build.outputs.digest }}
+          retries: 'abc'
+        continue-on-error: true
+
+      - name: Assert non-integer retries rejected
+        env:
+          OUTCOME: ${{ steps.bad-retries.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::A non-integer retries input must fail; outcome: ${OUTCOME}"
+            exit 1
+          fi
+          echo "Non-integer retries correctly rejected (outcome: ${OUTCOME})"
+
   build-urs:
     # End-to-end readiness check for the build-urs composite action: compiles
     # the self-contained synthetic URS fixture (a primary + an associate repo)
