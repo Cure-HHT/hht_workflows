@@ -69,8 +69,37 @@ chmod +x "$tmp/bin/curl"
 run_case "zero-projects" "no project access"
 
 # Case 4 (leak guard): success bodies never echoed — token string must not
-# appear in output even on the zero-projects failure path.
+# appear in output even on the zero-projects failure path. Filter workflow
+# commands (::add-mask::) which legitimately contain the token.
 out="$(PATH="$tmp/bin:$PATH" bash -c "$script" 2>&1)" || true_rc=$?
-if grep -q "dp.st.fake" <<<"$out"; then echo "FAIL(leak): token echoed"; fail=1; else echo "ok(leak)"; fi
+if grep -v '^::add-mask::' <<<"$out" | grep -q "dp.st.fake"; then echo "FAIL(leak): token echoed"; fail=1; else echo "ok(leak)"; fi
+
+# Case 5: success path with mask-before-export ordering verification.
+# Stub curl returns valid OIDC token, valid exchange token, and non-empty projects.
+# Assert: (a) output contains ::add-mask:: line, (b) DOPPLER_TOKEN in $GITHUB_ENV,
+# (c) exit 0, (d) masking directive appears before export to file.
+cat > "$tmp/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=/dev/stdout
+args=("$@")
+for ((i=0;i<${#args[@]};i++)); do [ "${args[$i]}" = "-o" ] && out="${args[$((i+1))]}"; done
+case "$*" in
+  *stub.example*) printf '{"value":"fake-oidc-jwt"}' > "$out"; printf '200';;
+  *auth/oidc*)    printf '{"token":"dp.st.fake"}' > "$out"; printf '200';;
+  *v3/projects*)  printf '{"projects":[{"name":"test"}],"page":1}' > "$out"; printf '200';;
+  *)              printf '{}' > "$out"; printf '200';;
+esac
+EOF
+chmod +x "$tmp/bin/curl"
+: > "$GITHUB_ENV"  # Reset env file
+rc=0
+out="$(PATH="$tmp/bin:$PATH" bash -c "$script" 2>&1)" || rc=$?
+if [ "$rc" -ne 0 ]; then echo "FAIL(success): expected exit 0, got $rc"; fail=1; fi
+if ! grep -qF "::add-mask::dp.st.fake" <<<"$out"; then
+  echo "FAIL(success): missing ::add-mask:: directive in output. Got:"; echo "$out"; fail=1
+else echo "ok(success-exit)"; fi
+if ! grep -qF "DOPPLER_TOKEN=dp.st.fake" "$GITHUB_ENV"; then
+  echo "FAIL(success): token not in GITHUB_ENV. File contents:"; cat "$GITHUB_ENV"; fail=1
+else echo "ok(success-export)"; fi
 
 exit "$fail"

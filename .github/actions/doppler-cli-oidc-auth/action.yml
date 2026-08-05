@@ -87,9 +87,7 @@ runs:
 
         # CRITICAL: mask FIRST, then export. Without this ordering, the
         # token's first appearance is unmasked.
-        if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-          printf '::add-mask::%s\n' "$DOPPLER_TOKEN"
-        fi
+        printf '::add-mask::%s\n' "$DOPPLER_TOKEN"
         printf 'DOPPLER_TOKEN=%s\n' "$DOPPLER_TOKEN" >> "$GITHUB_ENV"
 
         # Self-check: the token works AND the identity has at least one project's
