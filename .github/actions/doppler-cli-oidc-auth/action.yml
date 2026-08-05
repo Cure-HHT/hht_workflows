@@ -34,54 +34,73 @@ runs:
       run: |
         set -euo pipefail
 
+        # http_call NAME [curl args...]
+        # curl without -f: transport rc and HTTP status are captured and decided
+        # on explicitly, so every failure tier prints a named diagnostic instead
+        # of killing the step with a bare exit code. The response body lands in
+        # "$HTTP_BODY_FILE"; success bodies of the token calls contain credentials
+        # and are never echoed — only failure bodies (error documents) print.
+        HTTP_BODY_FILE="$(mktemp)"
+        http_call() {
+          local name="$1"; shift
+          local rc=0 status
+          status="$(curl -sS -o "$HTTP_BODY_FILE" -w '%{http_code}' "$@")" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::${name} got no HTTP response (curl exit ${rc}: DNS/TLS/timeout/connection). Check runner network and the endpoint's availability."
+            exit 1
+          fi
+          if [ "$status" -ge 400 ]; then
+            echo "::error::${name} failed with HTTP ${status}. Response: $(cat "$HTTP_BODY_FILE")"
+            exit 1
+          fi
+        }
+
         # Fetch a GitHub OIDC token bound to this job. The audience MUST match
         # what the Doppler identity is configured to accept; Doppler's default
         # for GitHub provider is https://github.com/<org>.
-        OIDC_TOKEN="$(curl -fsSL \
+        http_call "GitHub OIDC token fetch" \
           -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Cure-HHT" \
-          | jq -r '.value')"
-
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Cure-HHT"
+        OIDC_TOKEN="$(jq -r '.value' "$HTTP_BODY_FILE")"
         if [ -z "$OIDC_TOKEN" ] || [ "$OIDC_TOKEN" = "null" ]; then
-          echo "::error::Failed to obtain GitHub OIDC token for audience https://github.com/Cure-HHT"
+          echo "::error::GitHub OIDC token fetch returned HTTP 200 but no token value for audience https://github.com/Cure-HHT."
           exit 1
         fi
 
-        # Exchange the OIDC token for a Doppler CLI token. The exchange
-        # endpoint is Doppler's identity-token-exchange API.
-        # Verified against https://docs.doppler.com/reference/auth-oidc
-        # on 2026-05-26: POST /v3/auth/oidc with body {identity, token}.
-        RESPONSE="$(curl -fsSL -X POST \
+        # Exchange the OIDC token for a Doppler CLI token (POST /v3/auth/oidc,
+        # body {identity, token}). A 401 here usually means the identity's OIDC
+        # trust rule does not accept this workflow's job_workflow_ref.
+        http_call "Doppler OIDC token exchange (identity ${DOPPLER_IDENTITY_ID})" \
+          -X POST \
           -H 'accept: application/json' \
           -H 'content-type: application/json' \
           --data "$(jq -nc \
             --arg id "$DOPPLER_IDENTITY_ID" \
             --arg token "$OIDC_TOKEN" \
             '{identity: $id, token: $token}')" \
-          'https://api.doppler.com/v3/auth/oidc')"
-
-        DOPPLER_TOKEN="$(printf '%s' "$RESPONSE" | jq -r '.token')"
-
+          'https://api.doppler.com/v3/auth/oidc'
+        DOPPLER_TOKEN="$(jq -r '.token' "$HTTP_BODY_FILE")"
         if [ -z "$DOPPLER_TOKEN" ] || [ "$DOPPLER_TOKEN" = "null" ]; then
-          echo "::error::Doppler OIDC exchange returned no token. Response: $(printf '%s' "$RESPONSE" | jq -r '.messages // empty')"
+          echo "::error::Doppler OIDC exchange returned HTTP 200 but no token. Messages: $(jq -r '.messages // empty' "$HTTP_BODY_FILE")"
           exit 1
         fi
 
         # CRITICAL: mask FIRST, then export. Without this ordering, the
         # token's first appearance is unmasked.
-        printf '::add-mask::%s\n' "$DOPPLER_TOKEN"
+        if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+          printf '::add-mask::%s\n' "$DOPPLER_TOKEN"
+        fi
         printf 'DOPPLER_TOKEN=%s\n' "$DOPPLER_TOKEN" >> "$GITHUB_ENV"
 
-        # Self-check: validate the token works against Doppler's API AND
-        # the identity actually has at least one project's read access.
-        # Doppler returns HTTP 200 with `{"projects": [], "page": 1}` for
-        # zero-permission identities -- curl's -f flag doesn't catch that,
-        # so we must parse the response body to detect "token is valid but
-        # useless." Both failure modes (HTTP error AND empty projects) are
-        # surfaced as a hard exit so consumers don't get a silently-broken
-        # token. The response body has no token value -- safe to capture.
-        SELF_CHECK="$(curl -fsSL -H "authorization: Bearer $DOPPLER_TOKEN" 'https://api.doppler.com/v3/projects?per_page=1')"
-        if ! printf '%s' "$SELF_CHECK" | jq -e '.projects | length > 0' >/dev/null; then
-          echo "::error::Minted Doppler token has no project access. The identity may be unbound, missing project memberships, or scoped to zero projects in the Doppler dashboard."
+        # Self-check: the token works AND the identity has at least one project's
+        # read access. Doppler returns HTTP 200 with {"projects": []} for a
+        # zero-permission identity, so the body must be parsed to catch "valid
+        # but useless". The body carries no token value — safe to read.
+        http_call "Doppler project-access self-check" \
+          -H "authorization: Bearer $DOPPLER_TOKEN" \
+          'https://api.doppler.com/v3/projects?per_page=1'
+        if ! jq -e '.projects | length > 0' "$HTTP_BODY_FILE" >/dev/null; then
+          echo "::error::Minted Doppler token has no project access (HTTP 200, empty project list). The identity may be unbound, missing project memberships, or scoped to zero projects in the Doppler dashboard."
           exit 1
         fi
+        rm -f "$HTTP_BODY_FILE"
