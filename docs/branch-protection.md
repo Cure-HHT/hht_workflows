@@ -30,12 +30,17 @@ From `readiness-checks.yml` — one entry per job:
 - `confidential-terms-gate` — the real confidential-terms gate for this repo: scans the PR range against the live `scan-hht-workflows` Doppler prohibit list (assertion I)
 - `notify-failure` — notify-failure composite action, end-to-end: unit tests, the jobs-API grant, and a real invocation whose Slack post soft-fails by design (fixture routing file, invalid token, nothing posted). Job id `notify-failure-readiness`; the bare id is reserved for the standard announcement job, so the job carries an explicit `name:` holding this context stable
 - `notify-failure-lint` — notify-failure-lint composite action: unit tests plus the composite run against a conforming fixture (must pass) and one fixture directory per rejection rule (each must fail). Job id `notify-failure-lint-readiness`, `name:`-pinned for the same reason
+- `sponsor-base-preflight` — sponsor-base-preflight composite action, end-to-end against a locally-seeded stand-in base image: the digest-pinned happy path plus two negatives, a mutable base tag and a grant the base does not declare (each must fail)
+
+Two jobs in `readiness-checks.yml` are deliberately **not** required checks:
+
+- the standard `notify-failure` announcement job (`name: Notify failure`) —
+  its guard skips it on `pull_request` runs, so it has nothing to report on
+  the event branch protection gates
 - `no-op` — placeholder; retired as real jobs replace it
 
-`readiness-checks.yml` also carries the standard `notify-failure`
-announcement job (`name: Notify failure`). It is deliberately **not** a
-required check: its guard skips it on `pull_request` runs, so it has nothing
-to report on the event branch protection gates.
+Both are named, with those reasons, in the parity lint described below, so a
+job stops gating only by an edit someone reviewed.
 
 From `release-notes-tests.yml`:
 
@@ -69,3 +74,19 @@ otherwise wedge at "Expected" forever).
 Adding a new required check here is therefore a two-repo change: add the job
 (and its bare name) in this repo, and add that name to this repo's
 `github_repository_ruleset` in `hht_admin/terraform/branch-protection.tf`.
+
+Only the second half of that change is easy to forget, and what it costs is
+narrower than it looks. A readiness job with no required context still blocks
+a merge when it fails, because the org-wide `Validation Summary` check
+aggregates every check run on the head commit. What the named context adds is
+protection against the job going *absent*: the aggregate counts every
+non-failure conclusion, `skipped` included, as passing, so a job that is
+deleted, renamed, skipped by a guard, or cut off by a narrowed trigger leaves
+nothing to notice. A required context sits at "Expected" and blocks.
+
+`hht_admin` reconciles the two sides in its static checks
+(`tools/gate_parity`): a readiness job with no required context fails the
+lint, as does a required context that no job here reports, which would
+otherwise wedge every PR on this repo at "Expected". A job that should not
+gate is named there with its reason, so the list above and the ruleset cannot
+drift apart unnoticed.
