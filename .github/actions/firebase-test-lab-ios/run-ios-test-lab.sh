@@ -40,11 +40,13 @@ if [[ -n "$XCODE_VERSION" ]]; then
   cmd+=(--xcode-version="$XCODE_VERSION")
 fi
 
+# workflow_dispatch string inputs can flatten pasted newlines into spaces.
+# Device specs cannot contain whitespace, so accept newline, whitespace, or
+# semicolon separators and emit one --device flag for every specification.
 while IFS= read -r spec; do
-  spec="${spec%$'\r'}"
-  [[ -z "${spec//[[:space:]]/}" ]] && continue
+  [[ -z "$spec" ]] && continue
   cmd+=(--device="$spec")
-done <<< "$DEVICE_SPECS"
+done < <(printf '%s\n' "$DEVICE_SPECS" | tr ';[:space:]' '\n')
 
 printf '%q ' "${cmd[@]}" > "$EVIDENCE_DIR/command.txt"
 printf '\n' >> "$EVIDENCE_DIR/command.txt"
