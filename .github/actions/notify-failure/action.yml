@@ -76,7 +76,7 @@ runs:
     - name: Post failure notification
       id: post
       continue-on-error: true
-      uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@a0bced3413584417f0490bcbdaa318ea88759579  # v1.9.0 (dm-only)
+      uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@19c240bef771d9180776416d125719e2d72c8725  # v1.11.0
       with:
         # dm-only when derive_context resolved the dispatcher to an email; the
         # slack-notify call then skips channels and DMs the triggerer only.

@@ -28,14 +28,19 @@ From `readiness-checks.yml` — one entry per job:
 - `build-urs` — URS compile readiness (synthetic fixture to PDF + DOCX)
 - `confidential-terms-scan` — scanner-action readiness: `test_terms` happy path plus the all-four-surfaces negative fixture (fixture-only; no Doppler identity)
 - `confidential-terms-gate` — the real confidential-terms gate for this repo: scans the PR range against the live `scan-hht-workflows` Doppler prohibit list (assertion I)
+- `sponsor-base-preflight` — sponsor-base-preflight composite action, end-to-end: a local base image carrying a seeded `/app/PORTAL_ACTIONS` stands in for the core portal-server, so the real docker extraction path runs without depending on a published core build
 - `notify-failure` — notify-failure composite action, end-to-end: unit tests, the jobs-API grant, and a real invocation whose Slack post soft-fails by design (fixture routing file, invalid token, nothing posted). Job id `notify-failure-readiness`; the bare id is reserved for the standard announcement job, so the job carries an explicit `name:` holding this context stable
 - `notify-failure-lint` — notify-failure-lint composite action: unit tests plus the composite run against a conforming fixture (must pass) and one fixture directory per rejection rule (each must fail). Job id `notify-failure-lint-readiness`, `name:`-pinned for the same reason
-- `no-op` — placeholder; retired as real jobs replace it
 
-`readiness-checks.yml` also carries the standard `notify-failure`
-announcement job (`name: Notify failure`). It is deliberately **not** a
-required check: its guard skips it on `pull_request` runs, so it has nothing
-to report on the event branch protection gates.
+Two jobs in `readiness-checks.yml` are deliberately **not** required checks:
+
+- `Notify failure` — the standard announcement job (job id `notify-failure`,
+  `name:`-overridden). Its guard skips it on `pull_request` runs, so it has
+  nothing to report on the event branch protection gates.
+- `no-op` — the placeholder that kept the workflow non-empty before the real
+  readiness jobs landed. Requiring it would gate merges on a job that asserts
+  nothing; it is deleted, not required, once the last action it stood in for
+  has its own job.
 
 From `release-notes-tests.yml`:
 
@@ -69,3 +74,8 @@ otherwise wedge at "Expected" forever).
 Adding a new required check here is therefore a two-repo change: add the job
 (and its bare name) in this repo, and add that name to this repo's
 `github_repository_ruleset` in `hht_admin/terraform/branch-protection.tf`.
+`hht_admin`'s static checks reconcile the two sides in both directions — a
+readiness job that no context requires, and a context that no job reports —
+so a half-done change is caught there rather than by a wedged merge here.
+The list above is a third, hand-maintained copy and is not yet machine-checked
+against either side.
