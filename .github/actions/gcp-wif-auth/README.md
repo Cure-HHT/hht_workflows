@@ -20,7 +20,7 @@ Authenticates a workflow job to GCP via Workload Identity Federation.
 
 ## What it does
 
-Wraps `google-github-actions/auth@v2` pinned to a specific SHA, with the
+Wraps `google-github-actions/auth@v3` pinned to a specific SHA, with the
 Cure-HHT defaults: `create_credentials_file: true`,
 `export_environment_variables: true`. After this action runs, the
 runner has GCP Application Default Credentials (ADC) configured via
