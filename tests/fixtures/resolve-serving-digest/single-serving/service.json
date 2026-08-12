@@ -1,0 +1,11 @@
+{
+  "kind": "Service",
+  "metadata": { "name": "portal-service" },
+  "status": {
+    "latestCreatedRevisionName": "portal-service-00042-abc",
+    "latestReadyRevisionName": "portal-service-00042-abc",
+    "traffic": [
+      { "revisionName": "portal-service-00042-abc", "percent": 100, "latestRevision": true }
+    ]
+  }
+}

@@ -84,6 +84,10 @@ jobs:
         run: |
           set -euo pipefail
           pytest .github/actions/cosign-verify/tests/ -v
+      - name: Run cloud-run-resolve-serving-digest logic tests
+        run: |
+          set -euo pipefail
+          pytest .github/actions/cloud-run-resolve-serving-digest/tests/ -v
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.

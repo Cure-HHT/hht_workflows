@@ -1,0 +1,91 @@
+# hht_workflows/.github/actions/cloud-run-resolve-serving-digest/action.yml
+name: Cloud Run resolve serving digest
+description: >
+  Reads the image digest a Cloud Run (v1) service is currently serving to all
+  traffic, so a promotion advances the artifact the source environment actually
+  proved rather than whatever a mutable tag points at now. Refuses when traffic
+  is split, when no revision is serving, or when the reference read back is not
+  pinned to an immutable content digest. Caller must already be authenticated to
+  gcloud (e.g. via google-github-actions/auth). Pin by SHA.
+
+inputs:
+  service: { description: "Cloud Run service name", required: true }
+  region:  { description: "GCP region", required: true }
+  project: { description: "Project id of the environment to read", required: true }
+
+outputs:
+  image_digest:
+    description: "Digest-pinned image reference the service is serving"
+    value: ${{ steps.resolve.outputs.image_digest }}
+  revision_name:
+    description: "Name of the revision receiving all traffic"
+    value: ${{ steps.resolve.outputs.revision_name }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: DIARY-OPS-promotion-digest-resolution/A+C+D — resolves the promoted
+    #   artifact from the source environment's serving revision (A), refuses rather
+    #   than choosing when traffic is split (C), and shape-checks the reference the
+    #   server returned before it reaches any later command (D).
+    - name: Resolve the digest currently serving all traffic
+      id: resolve
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        REGION: ${{ inputs.region }}
+        PROJECT: ${{ inputs.project }}
+      run: |
+        set -euo pipefail
+
+        SERVICE_JSON=$(gcloud run services describe "$SERVICE" \
+          --region="$REGION" --project="$PROJECT" --format=json)
+
+        # Every revision drawing traffic, not just the newest. This deploy path
+        # publishes each revision at zero traffic and migrates afterwards, so a
+        # deploy that failed in between leaves a NEWER revision that was never
+        # live; reading "latest" would promote something this environment never ran.
+        SERVING=$(printf '%s' "$SERVICE_JSON" \
+          | jq -c '[.status.traffic[]? | select((.percent // 0) > 0)]')
+        COUNT=$(printf '%s' "$SERVING" | jq 'length')
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "::error::No revision of '$SERVICE' in '$PROJECT' is receiving traffic; there is nothing this environment can be said to have proved."
+          exit 1
+        fi
+        if [ "$COUNT" -gt 1 ]; then
+          echo "::error::Traffic for '$SERVICE' in '$PROJECT' is split across $COUNT revisions, so no single artifact is what this environment proved. Migrate all traffic to one revision, then promote."
+          printf '%s' "$SERVING" | jq -r '.[] | "  \(.percent)%  \(.revisionName)"'
+          exit 1
+        fi
+
+        PERCENT=$(printf '%s' "$SERVING" | jq -r '.[0].percent')
+        if [ "$PERCENT" -ne 100 ]; then
+          echo "::error::The only revision drawing traffic holds ${PERCENT}%, not 100%; refusing to treat a partial rollout as proved."
+          exit 1
+        fi
+
+        REVISION_NAME=$(printf '%s' "$SERVING" | jq -r '.[0].revisionName // empty')
+        if [ -z "$REVISION_NAME" ]; then
+          echo "::error::Traffic entry for '$SERVICE' names no revision."
+          exit 1
+        fi
+
+        IMAGE=$(gcloud run revisions describe "$REVISION_NAME" \
+          --region="$REGION" --project="$PROJECT" \
+          --format='value(spec.containers[0].image)')
+
+        # The reference is a server-supplied string that flows into later command
+        # text, so its shape is checked before any use. Anchored on both ends: a
+        # trailing shell fragment must not survive as a "valid enough" prefix.
+        if [[ ! "$IMAGE" =~ ^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::Revision '$REVISION_NAME' reports an image reference that is not pinned to an immutable content digest. Only a digest-pinned reference can be promoted."
+          exit 1
+        fi
+
+        echo "Serving revision: $REVISION_NAME"
+        echo "Serving digest:   $IMAGE"
+        {
+          echo "revision_name=$REVISION_NAME"
+          echo "image_digest=$IMAGE"
+        } >> "$GITHUB_OUTPUT"

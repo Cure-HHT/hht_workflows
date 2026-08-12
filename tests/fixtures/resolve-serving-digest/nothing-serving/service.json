@@ -1,0 +1,10 @@
+{
+  "kind": "Service",
+  "metadata": { "name": "portal-service" },
+  "status": {
+    "latestCreatedRevisionName": "portal-service-00043-def",
+    "traffic": [
+      { "revisionName": "portal-service-00043-def", "percent": 0, "tag": "candidate" }
+    ]
+  }
+}
