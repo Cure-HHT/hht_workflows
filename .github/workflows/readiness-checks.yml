@@ -135,7 +135,7 @@ jobs:
         id: auth
         uses: ./.github/actions/gcp-wif-auth
         with:
-          workload_identity_provider: projects/0/locations/global/workloadIdentityPools/does-not-exist/providers/does-not-exist
+          workload_identity_provider: ${{ vars.READINESS_WIF_PROVIDER }}
           service_account: ${{ vars.READINESS_WIF_SA }}
       - name: Verify the WIF token mint produced an access token
         env:
