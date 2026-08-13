@@ -12,6 +12,14 @@ inputs:
   service: { description: "Cloud Run service name", required: true }
   region:  { description: "GCP region", required: true }
   project: { description: "Project id of the environment to read", required: true }
+  expected_digest:
+    description: >
+      When set, the resolved digest must equal this value or the action fails.
+      Used to re-establish artifact identity after a human approval: the
+      approval was granted against a digest, and the source environment is free
+      to move between the approval and the deploy.
+    required: false
+    default: ""
 
 outputs:
   image_digest:
@@ -35,6 +43,7 @@ runs:
         SERVICE: ${{ inputs.service }}
         REGION: ${{ inputs.region }}
         PROJECT: ${{ inputs.project }}
+        EXPECTED_DIGEST: ${{ inputs.expected_digest }}
       run: |
         set -euo pipefail
 
@@ -80,6 +89,16 @@ runs:
         # trailing shell fragment must not survive as a "valid enough" prefix.
         if [[ ! "$IMAGE" =~ ^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; then
           echo "::error::Revision '$REVISION_NAME' reports an image reference that is not pinned to an immutable content digest. Only a digest-pinned reference can be promoted."
+          exit 1
+        fi
+
+        # Re-establishing identity after approval. An approval is granted
+        # against a digest and the window is measured in hours, so the source
+        # environment can move inside it. Without this compare, an approval for
+        # one artifact could deploy another and every downstream record would
+        # attribute the wrong authorisation to the wrong bytes.
+        if [ -n "${EXPECTED_DIGEST:-}" ] && [ "$IMAGE" != "$EXPECTED_DIGEST" ]; then
+          echo "::error::The source environment is no longer serving the artifact this promotion was approved for. Approved: '$EXPECTED_DIGEST'. Now serving: '$IMAGE'. Re-run the promotion so the approval is granted against what is actually there."
           exit 1
         fi
 

@@ -67,8 +67,9 @@ esac
 """
 
 
-def _run(scenario, tmp_path):
+def _run(scenario, tmp_path, expected_digest=""):
     """Execute the extracted step against a fixture; return (proc, outputs dict)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "gcloud"
@@ -86,6 +87,7 @@ def _run(scenario, tmp_path):
         SERVICE="portal-service",
         REGION="europe-west1",
         PROJECT="example-dev",
+        EXPECTED_DIGEST=expected_digest,
     )
     proc = subprocess.run(
         ["bash", "-c", RESOLVE], env=env, capture_output=True, text=True
@@ -144,6 +146,37 @@ def test_reference_with_a_trailing_shell_fragment_is_rejected(tmp_path):
     assert "not pinned to an immutable content digest" in proc.stdout
     assert out == {}
     assert not Path("/tmp/pwned").exists()
+
+
+def test_matching_expected_digest_passes_the_recheck(tmp_path):
+    """The ordinary post-approval case: the source is still serving what was
+    approved, so the promotion continues. The expectation is taken from a first
+    resolve, exactly as the workflow passes it between jobs."""
+    first, out_first = _run("single-serving", tmp_path / "a", expected_digest="")
+    assert first.returncode == 0
+    approved = out_first["image_digest"]
+
+    second, out_second = _run("single-serving", tmp_path / "b", expected_digest=approved)
+    assert second.returncode == 0, second.stdout
+    assert out_second["image_digest"] == approved
+
+
+def test_source_moving_after_approval_is_refused(tmp_path):
+    """An approval is granted against a digest and the window is measured in
+    hours. If the source environment has moved since, deploying anyway would
+    attribute the approval to bytes nobody approved."""
+    proc, out = _run("single-serving", tmp_path,
+                     expected_digest="example.dev/x@" + DIGEST_B)
+    assert proc.returncode != 0
+    assert "no longer serving the artifact this promotion was approved for" in proc.stdout
+    assert out == {}
+
+
+def test_recheck_is_skipped_when_no_expectation_is_supplied(tmp_path):
+    """The first resolve has nothing to compare against and must not refuse."""
+    proc, out = _run("single-serving", tmp_path, expected_digest="")
+    assert proc.returncode == 0, proc.stderr
+    assert out["image_digest"].endswith("@" + DIGEST_A)
 
 
 def test_partial_rollout_is_not_treated_as_proved(tmp_path):
