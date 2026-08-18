@@ -2,7 +2,7 @@ name: GCP WIF auth (org-standard)
 description: >
   Authenticates the current workflow job to GCP via Workload Identity
   Federation by impersonating the requested service account. Wraps
-  google-github-actions/auth@v2 with the Cure-HHT defaults so callers
+  google-github-actions/auth@v3 with the Cure-HHT defaults so callers
   cannot accidentally use long-lived JSON keys. Pin this action by SHA
   from consumer workflows; never by branch or tag.
 
@@ -37,7 +37,7 @@ outputs:
   access_token:
     description: >
       The minted access token when token_format == 'access_token'.
-      Forwarded from google-github-actions/auth@v2's access_token output.
+      Forwarded from google-github-actions/auth@v3's access_token output.
     value: ${{ steps.gcp.outputs.access_token }}
   id_token:
     description: >
@@ -51,7 +51,7 @@ runs:
     #   Cloud authentication via WIF; no SA JSON keys anywhere.
     - name: Authenticate to Google Cloud
       id: gcp
-      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2.1.13
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
       with:
         workload_identity_provider: ${{ inputs.workload_identity_provider }}
         service_account: ${{ inputs.service_account }}
