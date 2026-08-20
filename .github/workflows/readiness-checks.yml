@@ -375,7 +375,7 @@ jobs:
       - name: Compile the readiness fixture
         uses: ./.github/actions/build-urs
         with:
-          elspais-version: "0.117.81"
+          elspais-version: "0.121.218"
           primary-root: scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
           associate-roots: scripts/urs-compile/test_compile_urs/fixtures/readiness/associate
           manifest: spec/URS-manifest/urs.yaml

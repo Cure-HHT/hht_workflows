@@ -45,7 +45,7 @@ inputs:
     default: "3.12"
   elspais-version:
     description: |
-      Exact elspais release to install from PyPI (e.g. "0.117.81"), so URS
+      Exact elspais release to install from PyPI (e.g. "0.121.218"), so URS
       builds are reproducible and traceable to a known tool version. Pass the
       value from the caller repo's .github/versions.env (ELSPAIS_VERSION).
     required: true
