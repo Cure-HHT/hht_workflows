@@ -17,6 +17,8 @@ The single way a workflow announces its own failure to Slack.
         - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@<sha>
           with:
             slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
+            evidence-url: ${{ needs.evidence.outputs.artifact-url }}
+            evidence-label: Download device compatibility evidence
 
 Copy the `if:` guard verbatim — `notify-failure-lint` checks for it exactly.
 It is deliberately not `failure()`: that also fires on a cancelled run. The
@@ -69,6 +71,8 @@ lookup 403s without it).
 | `event` | Routing key looked up in the caller's routing YAML. The default is a FLAT key (single channel), so a caller with no build flavor passes no `env`. | `workflow-failure` | No |
 | `env` | Routing sub-key. Pass ONLY when `event` names an env-keyed route — `slack-notify` errors by design on a flat/env-keyed mismatch. | `''` | No |
 | `hints` | JSON object mapping a failed step's `name` (exactly as the jobs API reports it, not the step `id`) to hint text. Unmatched or absent produces no hint line; malformed JSON is warned about and ignored, never fatal. | `''` | No |
+| `evidence-url` | Exact run-scoped evidence artifact URL to include in the failure message. Empty preserves the existing message. | `''` | No |
+| `evidence-label` | Slack link label used when `evidence-url` is provided. | `Download workflow evidence` | No |
 | `routing-file` | Path to the routing YAML, relative to the caller's workspace. | `.github/slack-channels.yml` | No |
 
 ## Outputs

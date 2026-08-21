@@ -45,6 +45,17 @@ inputs:
       about and ignored, never fatal.
     required: false
     default: ""
+  evidence-url:
+    description: >
+      Optional exact URL for a run-scoped evidence artifact. When provided,
+      the failure message includes a Slack link to the artifact. Empty keeps
+      the existing message unchanged.
+    required: false
+    default: ""
+  evidence-label:
+    description: Link label used when evidence-url is provided.
+    required: false
+    default: Download workflow evidence
   routing-file:
     description: Path to routing YAML, relative to the caller's workspace.
     required: false
@@ -67,6 +78,8 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         INPUT_HINTS: ${{ inputs.hints }}
+        INPUT_EVIDENCE_URL: ${{ inputs.evidence-url }}
+        INPUT_EVIDENCE_LABEL: ${{ inputs.evidence-label }}
       run: |
         set -euo pipefail
         python3 "$GITHUB_ACTION_PATH/derive_context.py"
