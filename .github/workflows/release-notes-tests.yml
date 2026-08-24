@@ -19,6 +19,11 @@ on:
       - '.github/actions/sponsor-base-preflight/**'
       - '.github/actions/elspais-federate/**'
       - '.github/actions/cosign-verify/**'
+      # cloud-run-resolve-serving-digest was added with a test suite but never
+      # added here, so a post-merge change to the action ran no tests on main.
+      - '.github/actions/cloud-run-resolve-serving-digest/**'
+      - '.github/workflows/promote-template.yml'
+      - 'tests/**'
       - 'bootstrap/**'
       - 'pyproject.toml'
       - '.pre-commit-hooks.yaml'
@@ -84,6 +89,17 @@ jobs:
         run: |
           set -euo pipefail
           pytest .github/actions/cosign-verify/tests/ -v
+      - name: Run cloud-run-resolve-serving-digest logic tests
+        run: |
+          set -euo pipefail
+          pytest .github/actions/cloud-run-resolve-serving-digest/tests/ -v
+      # Verifies: HSI-OPS-promotion-gate-qa/D. The source-health gate refuses on
+      # states a live project will not produce on demand — a healthy service
+      # cannot be asked to report `degraded` just to watch the refusal.
+      - name: Run promote-template source-health tests
+        run: |
+          set -euo pipefail
+          pytest tests/test_promote_template.py -v
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.

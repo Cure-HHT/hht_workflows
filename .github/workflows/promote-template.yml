@@ -1,0 +1,170 @@
+name: Promote template
+
+# Reusable promotion half of the sponsor deploy pipeline (CUR-1209).
+#
+# Establishes WHAT may be promoted out of a source environment, and refuses when
+# no single answer exists. It does not deploy: it resolves the source
+# environment's serving digest and re-exports it, and the caller hands that
+# digest to its deploy workflow. Splitting it this way lets the promotion gate
+# land against the deploy workflow each sponsor already has, rather than waiting
+# on the sponsor-deploy template.
+#
+# `on: workflow_call` only, so the standard notify-failure job does not belong
+# here — the rule binds workflows triggered by push / schedule /
+# workflow_dispatch, which is the CALLER. The caller carries it.
+#
+# There are zero sponsor literals in this body. Every environment-specific value
+# (project ids, region, service account) arrives as an input from the caller.
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Cloud Run service to promote"
+        required: true
+        type: string
+      source-env:
+        description: "Environment the artifact is promoted FROM"
+        required: true
+        type: string
+      target-env:
+        description: "Environment the artifact is promoted TO"
+        required: true
+        type: string
+      source-project:
+        description: "GCP project id backing source-env"
+        required: true
+        type: string
+      region:
+        description: "GCP region of both environments"
+        required: true
+        type: string
+      gcp_project_number:
+        description: "Project number hosting the workload identity pool"
+        required: true
+        type: string
+      gcp_sa_email:
+        description: "Service account to impersonate; needs run.viewer on source-project"
+        required: true
+        type: string
+    outputs:
+      image_digest:
+        description: "Digest-pinned image the source environment is serving"
+        value: ${{ jobs.resolve-source.outputs.image_digest }}
+      revision_name:
+        description: "Revision receiving all traffic in the source environment"
+        value: ${{ jobs.resolve-source.outputs.revision_name }}
+
+jobs:
+  resolve-source:
+    name: Resolve ${{ inputs.source-env }} serving digest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_digest: ${{ steps.source.outputs.image_digest }}
+      revision_name: ${{ steps.source.outputs.revision_name }}
+    steps:
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/${{ inputs.gcp_project_number }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ${{ inputs.gcp_sa_email }}
+
+      # Implements: DIARY-OPS-promotion-digest-resolution/A+B — the promoted
+      #   artifact is read from the source environment's serving revision, and
+      #   no dispatch input can supply it instead.
+      - name: Resolve the digest ${{ inputs.source-env }} is serving
+        id: source
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@50dd12024b3ebbaf2224518ac1da13ab0f6fbac6 # CUR-1209
+        with:
+          service: ${{ inputs.service-name }}
+          region: ${{ inputs.region }}
+          project: ${{ inputs.source-project }}
+
+      # Implements: HSI-OPS-promotion-gate-qa/D — the source deployment is
+      #   confirmed healthy before the promotion proceeds.
+      #
+      # This asks a different question from the post-deploy check in the deploy
+      # workflow. That one probes the TARGET after the artifact lands, and by
+      # then the promotion has already happened. This one probes the SOURCE
+      # before anything moves: an artifact whose own environment is failing is
+      # not an artifact that environment can be said to have proved, and
+      # advancing it would carry a fault forward under the appearance of
+      # evidence.
+      #
+      # The revision resolved above is the one serving all traffic, so the
+      # service URL addresses exactly the bytes being promoted.
+      - name: Confirm ${{ inputs.source-env }} is healthy
+        shell: bash
+        env:
+          SOURCE_ENV: ${{ inputs.source-env }}
+          SERVICE: ${{ inputs.service-name }}
+          REGION: ${{ inputs.region }}
+          PROJECT: ${{ inputs.source-project }}
+          SA_EMAIL: ${{ inputs.gcp_sa_email }}
+        run: |
+          set -euo pipefail
+
+          SERVICE_URL="$(gcloud run services describe "$SERVICE" \
+            --region "$REGION" --project "$PROJECT" \
+            --format='value(status.url)')"
+
+          if [ -z "$SERVICE_URL" ]; then
+            echo "::error::Cannot read a service URL for '$SERVICE' in '$PROJECT', so the health of '$SOURCE_ENV' cannot be established. Refusing to promote."
+            exit 1
+          fi
+
+          # Audience-bound identity token, matching the post-deploy check: the
+          # active credential is federated, so gcloud must mint the token via
+          # the service account rather than sign one directly.
+          ID_TOKEN="$(gcloud auth print-identity-token \
+            --impersonate-service-account="$SA_EMAIL" \
+            --audiences="$SERVICE_URL")"
+
+          HEALTH="$(curl -sf --max-time 15 -H "Authorization: Bearer $ID_TOKEN" \
+            "$SERVICE_URL/health" || echo '{"status":"UNREACHABLE"}')"
+
+          # A health endpoint answering with something other than JSON -- an
+          # HTML error page from a proxy in front of the service, say -- must
+          # refuse under a named reason. Letting jq's parse error surface
+          # instead still fails closed, but hands the operator a diagnostic
+          # about JSON syntax when what actually happened is that the source
+          # environment is not serving its own health endpoint.
+          STATUS="$(echo "$HEALTH" | jq -r '.status // "unknown"' 2>/dev/null || echo "unparseable")"
+
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Refusing to promote out of '$SOURCE_ENV': its health endpoint reports status='$STATUS'. Promoting an artifact from an unhealthy environment carries the fault forward as though it were proven."
+            exit 1
+          fi
+
+          echo "$SOURCE_ENV is healthy (status=ok) at $SERVICE_URL."
+
+      # Implements: HHT-OPS-devops-action/H — names the action, the principal
+      #   that initiated it, and what it acted on, so an announcement or record
+      #   ends an investigation rather than starting one.
+      - name: Record what will be promoted
+        shell: bash
+        env:
+          SOURCE_ENV: ${{ inputs.source-env }}
+          TARGET_ENV: ${{ inputs.target-env }}
+          SERVICE: ${{ inputs.service-name }}
+          INITIATOR: ${{ github.actor }}
+          REVISION: ${{ steps.source.outputs.revision_name }}
+          DIGEST: ${{ steps.source.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Promotion: \`$SOURCE_ENV\` → \`$TARGET_ENV\`"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Action | Promote \`$SERVICE\` |"
+            echo "| Initiated by | \`$INITIATOR\` |"
+            echo "| Target | \`$TARGET_ENV\` |"
+            echo "| Source revision | \`$REVISION\` |"
+            echo "| Promoted digest | \`$DIGEST\` |"
+            echo
+            echo "The digest was read from what \`$SOURCE_ENV\` is serving, not from a mutable tag."
+          } >> "$GITHUB_STEP_SUMMARY"

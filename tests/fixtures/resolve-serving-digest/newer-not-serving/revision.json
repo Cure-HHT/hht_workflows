@@ -1,0 +1,1 @@
+{ "spec": { "containers": [ { "image": "europe-west1-docker.pkg.dev/example-admin/example-final/portal-final@sha256:aaaa111111111111111111111111111111111111111111111111111111111111" } ] } }
