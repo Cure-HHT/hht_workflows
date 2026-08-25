@@ -300,7 +300,8 @@ def test_fetch_jobs_requests_a_full_page_and_paginates(monkeypatch):
 # --- main / $GITHUB_OUTPUT -------------------------------------------------
 
 def _run_main(monkeypatch, tmp_path, jobs, *, event_name="push",
-              event=None, hints="", fetch=None):
+              event=None, hints="", evidence_url="", evidence_label="",
+              fetch=None):
     out_file = tmp_path / "github_output"
     out_file.write_text("")
     event_file = tmp_path / "event.json"
@@ -317,6 +318,8 @@ def _run_main(monkeypatch, tmp_path, jobs, *, event_name="push",
         "GITHUB_EVENT_PATH": str(event_file),
         "GITHUB_OUTPUT": str(out_file),
         "INPUT_HINTS": hints,
+        "INPUT_EVIDENCE_URL": evidence_url,
+        "INPUT_EVIDENCE_LABEL": evidence_label,
     }.items():
         monkeypatch.setenv(key, value)
 
@@ -480,3 +483,39 @@ def test_main_survives_an_unreadable_event_payload(monkeypatch, tmp_path):
     assert values["dm-email"] == ""
     assert values["mode"] == "channel"
     assert "*Failed:* build / Compile" in values["text"]
+
+
+def test_evidence_link_is_included_when_provided():
+    text = dc.compose(
+        workflow="W", branch="main", actor="a",
+        run_url="https://example/run/1",
+        units=[("build", "Compile", "failure")], hints="",
+        evidence_url="https://example/run/1/artifacts/99",
+        evidence_label="Download device compatibility evidence")
+    assert (
+        "*Evidence:* <https://example/run/1/artifacts/99|"
+        "Download device compatibility evidence>" in text)
+    assert text.endswith("https://example/run/1")
+
+
+def test_evidence_link_is_omitted_when_url_is_empty():
+    text = dc.compose(
+        workflow="W", branch="main", actor="a", run_url="u",
+        units=[], hints="", evidence_url="", evidence_label="Unused")
+    assert "*Evidence:*" not in text
+
+
+def test_main_adds_exact_evidence_artifact_url(monkeypatch, tmp_path):
+    jobs = [_job("build", "failure", [("Compile", "failure")])]
+    artifact_url = (
+        "https://github.com/Cure-HHT/hht_diary/"
+        "actions/runs/42/artifacts/99")
+    written = _run_main(
+        monkeypatch, tmp_path, jobs,
+        evidence_url=artifact_url,
+        evidence_label="Download device compatibility evidence")
+    values = _parse_output(written)
+
+    assert (
+        f"*Evidence:* <{artifact_url}|"
+        "Download device compatibility evidence>" in values["text"])

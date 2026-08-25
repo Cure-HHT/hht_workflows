@@ -56,7 +56,8 @@ def _parse_hints(hints):
     return parsed
 
 
-def compose(workflow, branch, actor, run_url, units, hints):
+def compose(workflow, branch, actor, run_url, units, hints,
+            evidence_url="", evidence_label="Download workflow evidence"):
     hint_map = _parse_hints(hints)
     lines = [f":x: *{workflow} failed on {branch}*", ""]
     for job_name, step_name, conclusion in units:
@@ -69,7 +70,11 @@ def compose(workflow, branch, actor, run_url, units, hints):
                 lines.append(f"*Hint:* {hint}")
     if not units:
         lines.append("*Failed:* (no failed job identified — see the run)")
-    lines += ["", f"*Triggered by:* @{actor}", "", run_url]
+    lines += ["", f"*Triggered by:* @{actor}"]
+    if evidence_url:
+        label = evidence_label or "Download workflow evidence"
+        lines += ["", f"*Evidence:* <{evidence_url}|{label}>"]
+    lines += ["", run_url]
     return "\n".join(lines)
 
 
@@ -202,6 +207,9 @@ def main():
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     hints = os.environ.get("INPUT_HINTS", "")
+    evidence_url = os.environ.get("INPUT_EVIDENCE_URL", "")
+    evidence_label = os.environ.get(
+        "INPUT_EVIDENCE_LABEL", "Download workflow evidence")
     run_url = f"{server}/{repo}/actions/runs/{run_id}"
 
     try:
@@ -222,7 +230,9 @@ def main():
         jobs = []
 
     units = failed_units(jobs)
-    text = compose(workflow, branch, actor, run_url, units, hints)
+    text = compose(
+        workflow, branch, actor, run_url, units, hints,
+        evidence_url=evidence_url, evidence_label=evidence_label)
 
     # The delivery decision is advisory (it only chooses WHO gets a DM and
     # whether a channel post happens). An unreadable or malformed event
