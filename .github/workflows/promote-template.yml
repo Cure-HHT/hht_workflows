@@ -81,7 +81,7 @@ jobs:
       #   no dispatch input can supply it instead.
       - name: Resolve the digest ${{ inputs.source-env }} is serving
         id: source
-        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@50dd12024b3ebbaf2224518ac1da13ab0f6fbac6 # CUR-1209
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@3b073fbce062f463bdd2be4fe09b8ec81b465902 # CUR-1209
         with:
           service: ${{ inputs.service-name }}
           region: ${{ inputs.region }}
