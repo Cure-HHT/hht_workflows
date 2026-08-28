@@ -54,6 +54,9 @@ on:
       revision_name:
         description: "Revision receiving all traffic in the source environment"
         value: ${{ jobs.resolve-source.outputs.revision_name }}
+      source_revisions:
+        description: "Space-separated core source revisions the served artifact reports it was built from"
+        value: ${{ jobs.resolve-source.outputs.source_revisions }}
 
 jobs:
   resolve-source:
@@ -65,6 +68,7 @@ jobs:
     outputs:
       image_digest: ${{ steps.source.outputs.image_digest }}
       revision_name: ${{ steps.source.outputs.revision_name }}
+      source_revisions: ${{ steps.revisions.outputs.source_revisions }}
     steps:
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@v3
@@ -77,7 +81,7 @@ jobs:
       #   no dispatch input can supply it instead.
       - name: Resolve the digest ${{ inputs.source-env }} is serving
         id: source
-        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@50dd12024b3ebbaf2224518ac1da13ab0f6fbac6 # CUR-1209
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@3b073fbce062f463bdd2be4fe09b8ec81b465902 # CUR-1209
         with:
           service: ${{ inputs.service-name }}
           region: ${{ inputs.region }}
@@ -126,6 +130,16 @@ jobs:
           HEALTH="$(curl -sf --max-time 15 -H "Authorization: Bearer $ID_TOKEN" \
             "$SERVICE_URL/health" || echo '{"status":"UNREACHABLE"}')"
 
+          # Hand the body to the next step rather than re-fetching it. A second
+          # request could reach a different revision, and the whole point of
+          # reading provenance from the artifact is that it describes the bytes
+          # this promotion resolved.
+          {
+            echo "HEALTH_BODY<<PROMOTE_HEALTH_EOF"
+            echo "$HEALTH"
+            echo "PROMOTE_HEALTH_EOF"
+          } >> "$GITHUB_ENV"
+
           # A health endpoint answering with something other than JSON -- an
           # HTML error page from a proxy in front of the service, say -- must
           # refuse under a named reason. Letting jq's parse error surface
@@ -141,6 +155,66 @@ jobs:
 
           echo "$SOURCE_ENV is healthy (status=ok) at $SERVICE_URL."
 
+      # Implements: DIARY-OPS-artifact-source-attestation/B+C
+      #
+      # WHICH SOURCE the artifact was built from, read FROM the artifact. The
+      # alternative -- a dispatch input naming the commit -- is a string typed
+      # by the operator, and a gate that keys evidence on it verifies the
+      # operator's belief rather than the deployment. Read here, it cannot be
+      # mistyped or misreported, for the same reason the digest above is read
+      # from the serving revision rather than from a tag.
+      #
+      # TWO revisions, not one, and this is the part that is easy to get wrong.
+      # A portal-final image composes two independently pinned core images:
+      # `server_commit` names the commit that last rebuilt the portal-server
+      # BINARY -- a version-gated build that skips whenever portal_server_evs is
+      # unchanged -- while `core_commit` names the sponsor-ci tree the portal UI
+      # was compiled from, which advances on every core merge touching the
+      # source. A gate reading only server_commit would, for any release whose
+      # changes were UI-side, look up an older revision and find a passing
+      # record about code this artifact does not contain.
+      - name: Read the source revisions the artifact reports
+        id: revisions
+        shell: bash
+        env:
+          SOURCE_ENV: ${{ inputs.source-env }}
+        run: |
+          set -euo pipefail
+
+          REVISIONS=""
+          for key in server_commit core_commit; do
+            value="$(echo "${HEALTH_BODY:-}" | jq -r --arg k "$key" '.versions[$k] // ""' 2>/dev/null || echo "")"
+
+            # C: absent OR malformed refuses, and the two are reported apart.
+            # An absent key means the image predates the attestation and cannot
+            # say what it is; a malformed one means something answered but not
+            # with a revision. Both fail closed; only one is fixed by rebuilding.
+            if [ -z "$value" ]; then
+              echo "::error::Refusing to promote out of '$SOURCE_ENV': its health manifest reports no '$key', so the source revision of the artifact cannot be established. An image built before the source attestation must be rebuilt from a core revision that carries it."
+              exit 1
+            fi
+
+            # Anchored both ends, and matched against the whole STRING rather
+            # than line by line. `grep -E '^...$'` anchors per line, so a value
+            # containing a newline passes it whenever every line happens to
+            # match -- and that value then flows into a $GITHUB_OUTPUT write,
+            # where a newline is how a second, attacker-chosen output is
+            # injected. Bash's own =~ anchors to the string, so an embedded
+            # newline can never satisfy it.
+            if ! [[ "$value" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "::error::Refusing to promote out of '$SOURCE_ENV': its health manifest reports '$key=$value', which is not a well-formed revision identifier."
+              exit 1
+            fi
+
+            case " $REVISIONS " in
+              *" $value "*) : ;;             # both halves built from one commit
+              *) REVISIONS="${REVISIONS:+$REVISIONS }$value" ;;
+            esac
+          done
+
+          echo "source_revisions=$REVISIONS" >> "$GITHUB_OUTPUT"
+          echo "$SOURCE_ENV is serving an artifact built from: $REVISIONS"
+
       # Implements: HHT-OPS-devops-action/H — names the action, the principal
       #   that initiated it, and what it acted on, so an announcement or record
       #   ends an investigation rather than starting one.
@@ -153,6 +227,7 @@ jobs:
           INITIATOR: ${{ github.actor }}
           REVISION: ${{ steps.source.outputs.revision_name }}
           DIGEST: ${{ steps.source.outputs.image_digest }}
+          SOURCE_REVISIONS: ${{ steps.revisions.outputs.source_revisions }}
         run: |
           set -euo pipefail
           {
@@ -164,6 +239,7 @@ jobs:
             echo "| Initiated by | \`$INITIATOR\` |"
             echo "| Target | \`$TARGET_ENV\` |"
             echo "| Source revision | \`$REVISION\` |"
+            echo "| Built from | \`$SOURCE_REVISIONS\` |"
             echo "| Promoted digest | \`$DIGEST\` |"
             echo
             echo "The digest was read from what \`$SOURCE_ENV\` is serving, not from a mutable tag."
