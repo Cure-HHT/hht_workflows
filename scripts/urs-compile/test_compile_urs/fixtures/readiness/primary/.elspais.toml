@@ -11,11 +11,15 @@ name = "Fixture Sponsor"
 
 [id-patterns]
 canonical = "{namespace}-{level.letter}-{component}"
-separators = ["-"]
-prefix_optional = false
 
 [id-patterns.component]
 style = "kebab-case"
+
+[id-patterns.assertions]
+# Citations take the form `FIX-PRD-sponsor-config/A`. A "-" separator cannot be
+# told apart from the "-" inside a kebab-case component, so the component would
+# absorb the label and the citation would bind to the wrong requirement.
+separator = "/"
 
 [levels.PRD]
 rank = 1
