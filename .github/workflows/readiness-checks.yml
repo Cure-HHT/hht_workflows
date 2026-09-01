@@ -37,7 +37,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Fetch Doppler secrets via doppler-oidc-auth
         uses: ./.github/actions/doppler-oidc-auth
         with:
@@ -76,7 +76,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Doppler CLI
         # Pin Doppler CLI version. Mirrors hht_admin's canonical pin in
         # cure-hht/hht_admin/.github/versions.env (DOPPLER_CLI_VERSION) so
@@ -130,7 +130,7 @@ jobs:
       id-token: write   # required by the WIF auth exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Auth to GCP via gcp-wif-auth
         id: auth
         uses: ./.github/actions/gcp-wif-auth
@@ -167,7 +167,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Seed RELEASE_NOTES.md and a pending fragment
         run: |
           set -euo pipefail
@@ -214,7 +214,7 @@ jobs:
       packages: write    # push to GHCR
       id-token: write    # keyless cosign sign (OIDC token)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
@@ -363,7 +363,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Initialize fixture repos
         # elspais resolves a project root via `git rev-parse --show-toplevel`.
         # Inside this checkout the fixture dirs resolve to the hht_workflows
@@ -403,7 +403,7 @@ jobs:
       id-token: write   # required by the gated Doppler-path step below
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Happy path - synthetic term absent from this PR
@@ -498,7 +498,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC fetch inside the action
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # the scan diffs base..head
       - name: Scan four surfaces for confidential terms
