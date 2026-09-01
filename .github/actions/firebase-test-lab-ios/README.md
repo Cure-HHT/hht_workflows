@@ -58,7 +58,7 @@ matrix result.
    already exist (use `gcp-wif-auth` first).
 2. Verifies the active gcloud identity and project, and writes the Test
    Lab device catalog into `evidence_dir`.
-3. Uses the explicit `devices` input when set; otherwise resolves the
+3. Splits explicit `devices` on newlines, whitespace, or semicolons; otherwise resolves the
    first available, non-deprecated, version-supported device from
    `device_fallbacks` against the live catalog. Errors when neither
    yields a device; records the choice in

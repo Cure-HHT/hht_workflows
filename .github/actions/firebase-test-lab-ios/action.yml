@@ -35,7 +35,7 @@ inputs:
     default: ''
   devices:
     description: >
-      Optional explicit device specs, one per line
+      Optional explicit device specs separated by newlines, whitespace, or semicolons
       (model=...,version=...,locale=...,orientation=...). When set, this
       overrides catalog fallback resolution entirely. Blank resolves a
       device from device_fallbacks against the live catalog.
