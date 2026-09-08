@@ -1,9 +1,17 @@
 # Validate PR Title — composite action.
 #
-# Asserts that the PR title contains the required traceability prefix
-# (`[CUR-XXX]` or `[Dependabot]`). Squash-merges use the PR title
-# verbatim as the main-branch commit subject, so this guards downstream
-# traceability across the org.
+# Asserts that the PR title contains a traceability prefix -- a Linear
+# issue reference in brackets (`[CUR-1296]`, `[TOOL-90]`), or
+# `[Dependabot]`. Squash-merges use the PR title verbatim as the
+# main-branch commit subject, so this guards downstream traceability
+# across the org.
+#
+# Any team's prefix is accepted, not only `CUR`. The org runs more than
+# one Linear team, and work on the developer tooling is tracked outside
+# `CUR`; requiring that one prefix forced such a PR to either borrow an
+# unrelated ticket or go untraceable. The check exists to guarantee the
+# commit subject names SOMETHING a reader can look up, and it cannot
+# know which team owns a given change.
 #
 # CANONICAL HOME: cure-hht/hht_workflows (this file).
 # Consumer repos invoke this from a thin workflow wrapper:
@@ -12,7 +20,7 @@
 # resulting check matches the org-level ruleset's required context.
 
 name: 'Validate PR Title'
-description: 'Assert PR title contains [CUR-XXX] or [Dependabot] traceability prefix'
+description: 'Assert PR title contains a [TEAM-NNN] or [Dependabot] traceability prefix'
 
 runs:
   using: 'composite'
@@ -27,15 +35,17 @@ runs:
         set -euo pipefail
         echo "PR #${PR_NUMBER}: ${PR_TITLE}"
 
-        if echo "$PR_TITLE" | grep -qE '\[CUR-[0-9]+\]|\[Dependabot\]'; then
-          echo "PR title contains accepted prefix ([CUR-XXX] or [Dependabot])"
+        if echo "$PR_TITLE" | grep -qE '\[[A-Z]+-[0-9]+\]|\[Dependabot\]'; then
+          echo "PR title contains accepted prefix ([TEAM-NNN] or [Dependabot])"
           exit 0
         fi
 
-        echo "::error::PR title missing [CUR-XXX] reference"
+        echo "::error::PR title missing an issue reference"
         echo ""
         echo "Squash merge uses the PR title verbatim as the commit message."
-        echo "Required format: [CUR-XXX] Description of changes"
+        echo "Required format: [TEAM-NNN] Description of changes, e.g."
+        echo "  [CUR-1296] Description of changes"
+        echo "  [TOOL-90] Description of changes"
         echo "(Dependabot-authored PRs may use the [Dependabot] prefix instead.)"
         echo "Edit the PR title at: ${PR_URL}"
         exit 1

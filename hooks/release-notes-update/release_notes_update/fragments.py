@@ -16,8 +16,11 @@ from typing import Iterable, Iterator, TypeVar
 
 _HEADER = "<!-- release-notes-fragment v1 -->"
 _VERSION_RE = re.compile(r"^<!-- version: (.+) -->$")
-_BULLET_RE = re.compile(r"^- (\[CUR-\d+\].*)$")
-_CUR_PREFIX_RE = re.compile(r"^\[CUR-\d+\]")
+# Any Linear team's prefix, matching what validate-pr-title admits. The two
+# must agree: a subject the gate accepts but this drops is a change that
+# merged with a traceability ref and then vanished from the release notes.
+_BULLET_RE = re.compile(r"^- (\[[A-Z]+-\d+\].*)$")
+_TICKET_PREFIX_RE = re.compile(r"^\[[A-Z]+-\d+\]")
 
 _ID = TypeVar("_ID")
 
@@ -35,8 +38,8 @@ class Fragment:
 
 def fragment_from_commits(commit_subjects, *, version: str) -> Fragment:
     """Build a fragment from a list of commit subject lines, keeping only
-    those starting with the [CUR-XXX] prefix."""
-    bullets = [s for s in commit_subjects if _CUR_PREFIX_RE.match(s)]
+    those starting with a [TEAM-NNN] issue prefix."""
+    bullets = [s for s in commit_subjects if _TICKET_PREFIX_RE.match(s)]
     return Fragment(version=version, bullets=bullets)
 
 

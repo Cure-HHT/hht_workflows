@@ -20,7 +20,7 @@ repos:
 On every commit:
 
 1. Reads the current version from the configured `--version-command`.
-2. Refreshes the fragment for the current branch at `.release-notes/<branch-slug>.md` from `git log merge-base..HEAD --pretty=%s`, keeping only commits whose subject starts with `[CUR-XXX]`.
+2. Refreshes the fragment for the current branch at `.release-notes/<branch-slug>.md` from `git log merge-base..HEAD --pretty=%s`, keeping only commits whose subject starts with a `[TEAM-NNN]` issue prefix.
 3. Consolidates any fragments on `origin/main` not yet represented in `RELEASE_NOTES.md` into their respective version sections, then removes those fragments.
 4. Re-stages the modified files so they land in the dev's commit.
 
