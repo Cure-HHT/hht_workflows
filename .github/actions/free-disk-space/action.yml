@@ -1,0 +1,47 @@
+# Free Disk Space — composite action.
+#
+# Reclaims the ~30 GB of preinstalled tooling a stock GitHub-hosted runner
+# ships with, so a large `docker build` does not overflow / mid-build.
+#
+# WHY THIS EXISTS AS A SHARED ACTION (CUR-1988): the portal-final base
+# (sponsor-ci) carries a full Dart .pub-cache (googleapis alone is hundreds of
+# MB) that unpacks into the docker data root on /, which otherwise fills — the
+# failure is a "no space left on device" while registering the base image
+# layer, not a Dockerfile fault. That cleanup lived only inline in
+# hht_sponsor_iac's sponsor-build-template.yml (CUR-1987); the sponsor
+# hotfix-deploy.yml build path builds independently and overflowed because the
+# fix never reached it. Two build paths carrying one copy of the cleanup drift.
+# This action is the single source of truth both paths invoke.
+#
+# The caller runs this BEFORE the docker build (and, when it also uses the
+# runner's Docker cache, before that cache is populated).
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file). Consumers invoke via:
+#   uses: Cure-HHT/hht_workflows/.github/actions/free-disk-space@<sha>
+
+name: 'Free Disk Space'
+description: 'Remove preinstalled runner tooling to free ~30 GB before a large docker build.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Free up disk space
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Disk space before cleanup:"
+        df -h /
+        # Reclaim the ~30 GB of preinstalled tooling the runner ships with.
+        # The two biggest trees are /opt/hostedtoolcache (~10 GB) and the
+        # language toolchains; without them / overflows unpacking the base.
+        sudo rm -rf /opt/hostedtoolcache
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf /usr/share/swift
+        sudo rm -rf /usr/local/lib/node_modules
+        docker image prune -af
+        docker container prune -f
+        echo "Disk space after cleanup:"
+        df -h /
