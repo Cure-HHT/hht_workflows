@@ -14,7 +14,7 @@ from release_notes_update.fragments import (
 )
 
 
-def test_fragment_from_commits_keeps_only_cur_prefixed():
+def test_fragment_from_commits_keeps_only_ticket_prefixed():
     commits = [
         "[CUR-123] First change",
         "fixup",
@@ -27,6 +27,37 @@ def test_fragment_from_commits_keeps_only_cur_prefixed():
         "[CUR-123] First change",
         "[CUR-456] Second change",
     )
+
+
+def test_fragment_from_commits_keeps_any_team_prefix():
+    """Whatever validate-pr-title admits must reach the release notes.
+
+    The gate accepts any team's Linear prefix, not only CUR. A subject it
+    lets through that this filter drops is a change that merged with a
+    traceability ref and then vanished from the notes.
+    """
+    commits = [
+        "[CUR-123] Core change",
+        "[TOOL-90] Tooling change",
+        "[HSI-12] Infrastructure change",
+        "fixup",
+    ]
+    frag = fragment_from_commits(commits, version="v1.2.3+5")
+    assert frag.bullets == (
+        "[CUR-123] Core change",
+        "[TOOL-90] Tooling change",
+        "[HSI-12] Infrastructure change",
+    )
+
+
+def test_fragment_from_commits_rejects_malformed_prefixes():
+    commits = [
+        "CUR-123 no brackets",
+        "[cur-123] lowercase team",
+        "[TOOL-] no number",
+        "[123] no team",
+    ]
+    assert fragment_from_commits(commits, version="v1.0.0+1").bullets == ()
 
 
 def test_fragment_from_commits_empty_when_no_prefix():
