@@ -1,7 +1,7 @@
 # elspais configuration — Readiness Fixture Sponsor (primary)
 #
 # Holds FIX-* sponsor requirements consumed by the sponsor chapter of the
-# readiness fixture URS. Mirrors the structure of hht_diary_callisto.
+# readiness fixture URS. Mirrors the structure of hht_diary_<sponsor>.
 
 version = 4
 

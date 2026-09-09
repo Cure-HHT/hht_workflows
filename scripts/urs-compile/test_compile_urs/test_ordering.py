@@ -30,8 +30,8 @@ def test_parse_req_id_splits_namespace_level_name():
     assert parse_req_id("DIARY-PRD-user-account-create") == (
         "DIARY", "PRD", "user-account-create"
     )
-    assert parse_req_id("CAL-GUI-trial-start-workflow") == (
-        "CAL", "GUI", "trial-start-workflow"
+    assert parse_req_id("SPN-GUI-trial-start-workflow") == (
+        "SPN", "GUI", "trial-start-workflow"
     )
 
 
@@ -43,7 +43,7 @@ def test_parse_req_id_rejects_non_req_ids():
 def test_core_scope_emits_only_core_namespace():
     g = _graph(
         _req("DIARY-PRD-foo", parse_line=10),
-        _req("CAL-PRD-foo-configuration", parse_line=20),
+        _req("SPN-PRD-foo-configuration", parse_line=20),
     )
     groups = grouped_section_requirements(g, ["spec/x.md"], scope="core")
     assert _ids(groups) == [["DIARY-PRD-foo"]]
@@ -52,11 +52,11 @@ def test_core_scope_emits_only_core_namespace():
 def test_sponsor_scope_emits_only_sponsor_namespace():
     g = _graph(
         _req("DIARY-PRD-foo", parse_line=10),
-        _req("CAL-PRD-foo-configuration", parse_line=20),
-        _req("CAL-GUI-bar-modal", parse_line=30),
+        _req("SPN-PRD-foo-configuration", parse_line=20),
+        _req("SPN-GUI-bar-modal", parse_line=30),
     )
     groups = grouped_section_requirements(g, ["spec/x.md"], scope="sponsor")
-    assert _ids(groups) == [["CAL-PRD-foo-configuration"], ["CAL-GUI-bar-modal"]]
+    assert _ids(groups) == [["SPN-PRD-foo-configuration"], ["SPN-GUI-bar-modal"]]
 
 
 def test_non_urs_levels_excluded():
@@ -121,14 +121,14 @@ def test_non_matching_names_keep_source_order():
 
 def test_multiple_files_collected_in_manifest_order():
     g = _graph(
-        _req("CAL-PRD-zeta-configuration", "spec/a.md", parse_line=10),
-        _req("CAL-PRD-alpha-configuration", "spec/b.md", parse_line=10),
+        _req("SPN-PRD-zeta-configuration", "spec/a.md", parse_line=10),
+        _req("SPN-PRD-alpha-configuration", "spec/b.md", parse_line=10),
     )
     groups = grouped_section_requirements(
         g, ["spec/a.md", "spec/b.md"], scope="sponsor"
     )
     assert _ids(groups) == [
-        ["CAL-PRD-zeta-configuration"], ["CAL-PRD-alpha-configuration"],
+        ["SPN-PRD-zeta-configuration"], ["SPN-PRD-alpha-configuration"],
     ]
 
 

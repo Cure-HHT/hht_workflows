@@ -17,11 +17,11 @@ GitHub-hosted `ubuntu-*` runners). Pin by commit SHA.
       with:
         service: portal-service
         region: europe-west9
-        project: callisto4-dev
+        project: <sponsor>-dev
         image: europe-west9-docker.pkg.dev/.../portal-final@sha256:...
-        cloudsql_instances: callisto4:europe-west9:callisto4-dev-db-503e
-        vpc_connector: callisto4-dev-vpc-con
-        update_env_vars: "ENVIRONMENT=dev,SPONSOR_ID=callisto,..."
+        cloudsql_instances: <sponsor>:europe-west9:<sponsor>-dev-db-503e
+        vpc_connector: <sponsor>-dev-vpc-con
+        update_env_vars: "ENVIRONMENT=dev,SPONSOR_ID=<sponsor>,..."
         remove_env_vars: "DOPPLER_TOKEN"
     # steps.canary.outputs.tagged_url / .revision_name
 

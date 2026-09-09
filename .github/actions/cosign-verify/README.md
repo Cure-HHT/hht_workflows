@@ -56,8 +56,12 @@ explicitly discouraged — they can change without your knowledge.
 
 Consolidates three near-duplicate inline cosign-verify implementations across
 the org (existing in `hht_diary/build-ghcr-containers.yml`, planned for
-callisto builds, future sponsor-build-template workflows). Centralizes the
+sponsor builds, future sponsor-build-template workflows). Centralizes the
 upstream `cosign-installer` version and enforces retry/soft-fail consistency.
 
-Implements `CAL-OPS-deploy-provenance-traceability` from
-`Cure-HHT/hht_diary_callisto/spec/ops-deployment.md`.
+Verifying signatures is what makes a deployed image traceable to the run that
+built it. An image that is unsigned, or signed by an identity outside the
+expected pattern, fails the check before it can be promoted.
+
+TODO: cite the deploy-provenance requirement once one is drafted as `HSI-*`
+in `hht_sponsor_iac`.

@@ -200,22 +200,22 @@
       "children": [],
       "edges": []
     },
-    "CAL-PRD-role-definitions": {
-      "id": "CAL-PRD-role-definitions",
+    "SPN-PRD-role-definitions": {
+      "id": "SPN-PRD-role-definitions",
       "kind": "REQUIREMENT",
-      "label": "Role Definitions (Callisto Permissions Table)",
+      "label": "Role Definitions (Sponsor Permissions Table)",
       "content": {
         "title": "Role Definitions",
-        "rationale": "The Callisto sponsor's specific permissions matrix.",
+        "rationale": "The sponsor's specific permissions matrix.",
         "level": "prd",
         "status": "Active",
         "source_file": "spec/prd-rbac.md",
         "parse_line": 10,
         "refines_refs": ["DIARY-PRD-role-definitions"]
       },
-      "children": ["CAL-PRD-role-definitions-A"],
+      "children": ["SPN-PRD-role-definitions-A"],
       "edges": [
-        {"target": "CAL-PRD-role-definitions-A", "kind": "STRUCTURES"},
+        {"target": "SPN-PRD-role-definitions-A", "kind": "STRUCTURES"},
         {"target": "DIARY-PRD-role-definitions", "kind": "REFINES"}
       ]
     },
@@ -246,8 +246,8 @@
       "children": [],
       "edges": []
     },
-    "CAL-PRD-role-definitions-A": {
-      "id": "CAL-PRD-role-definitions-A",
+    "SPN-PRD-role-definitions-A": {
+      "id": "SPN-PRD-role-definitions-A",
       "kind": "ASSERTION",
       "label": "Permissions matrix as defined in the table below.",
       "content": {
@@ -259,5 +259,5 @@
     }
   },
   "roots": ["file:DIARY:spec/prd-rbac.md", "file:SPN:spec/prd-rbac.md"],
-  "metadata": {"federated": true, "repos": ["diary", "callisto"]}
+  "metadata": {"federated": true, "repos": ["diary", "sponsor"]}
 }

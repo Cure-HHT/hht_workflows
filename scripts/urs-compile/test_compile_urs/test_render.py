@@ -36,7 +36,7 @@ def test_requirement_renders_remainder_sections_above_rationale(sample_graph_dic
 
 def test_requirement_renders_refines_edge(sample_graph_dict):
     g = Graph.from_dict(sample_graph_dict)
-    node = g.get_node("CAL-PRD-role-definitions")
+    node = g.get_node("SPN-PRD-role-definitions")
     out = render_requirement(node, g)
     assert "Refines:" in out
     assert "DIARY-PRD-role-definitions" in out

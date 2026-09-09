@@ -1,6 +1,6 @@
 """Group section REQs by their kebab ID name into URS level-3 sections.
 
-The URS body no longer interleaves sponsor (CAL-*) REQs with core
+The URS body no longer interleaves sponsor (non-core) REQs with core
 (DIARY-*) REQs. Each manifest chapter declares a ``scope`` — ``core``
 chapters emit only core-namespace REQs, the ``sponsor`` chapter collects
 every sponsor-namespace REQ from the files it references.
