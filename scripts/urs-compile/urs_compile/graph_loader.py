@@ -67,18 +67,22 @@ class Graph:
         ]
 
     @staticmethod
-    def file_namespace(file_node: GraphNode) -> str | None:
+    def file_namespace(file_node: GraphNode) -> str:
         """Return the REQ-id namespace of the repo a FILE node came from.
 
-        ``file:SPN:spec/prd-rbac.md`` -> ``"SPN"``. Current elspais
-        namespaces every FILE id, federated or not. None means the graph
-        predates the convention, and therefore also predates holding one
-        FILE node per repo for a shared path -- see
-        :func:`urs_compile.ordering.section_remainders`, which is what the
-        distinction is for.
+        ``file:SPN:spec/prd-rbac.md`` -> ``"SPN"``. elspais namespaces every
+        FILE id, federated or not. An id without one means the graph came
+        from a version this pipeline does not support, so raise: callers
+        filter a section's prose on this, and guessing would silently drop
+        the prose or attribute it to the wrong repo.
         """
         m = _FILE_ID_RE.match(file_node.id)
-        return m.group(1) if m else None
+        if m is None:
+            raise ValueError(
+                f"FILE node id carries no namespace segment: {file_node.id!r} "
+                "(expected 'file:<NAMESPACE>:<relative_path>')"
+            )
+        return m.group(1)
 
     def iter_children(self, file_node: GraphNode) -> Iterable[GraphNode]:
         for cid in file_node.children:

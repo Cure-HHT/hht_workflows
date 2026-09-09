@@ -25,12 +25,13 @@ def test_file_namespace_reads_the_id_segment(sample_graph_dict):
     assert g.file_namespace(g.get_node("file:DIARY:spec/prd-rbac.md")) == "DIARY"
 
 
-def test_file_namespace_is_none_on_a_pre_namespacing_graph():
+def test_file_namespace_raises_without_a_namespace_segment():
     node = GraphNode(
         id="file:spec/prd-rbac.md", kind="FILE", label="prd-rbac.md",
         content={"relative_path": "spec/prd-rbac.md"}, children=(), edges=(),
     )
-    assert Graph({}, {}).file_namespace(node) is None
+    with pytest.raises(ValueError, match="no namespace segment"):
+        Graph({}, {}).file_namespace(node)
 
 
 def test_iter_children_yields_in_order(sample_graph_dict):

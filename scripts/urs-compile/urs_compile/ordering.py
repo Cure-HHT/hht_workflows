@@ -124,13 +124,7 @@ def section_remainders(
     for relpath in relpaths:
         for file_node in graph.files_for_relative_path(relpath):
             namespace = graph.file_namespace(file_node)
-            # An un-namespaced FILE id comes from an elspais old enough to
-            # merge the repos' files into one node, so there is a single
-            # node for the path and nothing to choose between: take its
-            # prose, which is what that graph shape means.
-            if namespace is None:
-                pass
-            elif (namespace == CORE_NAMESPACE) != (scope == "core"):
+            if (namespace == CORE_NAMESPACE) != (scope == "core"):
                 continue
             out.extend(
                 child for child in graph.iter_children(file_node)

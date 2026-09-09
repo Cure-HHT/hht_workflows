@@ -149,29 +149,23 @@ def test_section_remainders_excludes_the_overlay_repo_prose(sample_graph_dict):
     assert "rem:SPN:spec/prd-rbac.md:1" not in [r.id for r in rems]
 
 
-def test_section_remainders_keeps_prose_from_a_pre_namespacing_graph():
-    # The readiness fixture builds on an older pinned elspais, which merges
-    # the repos' files into one un-namespaced FILE node. There is nothing to
-    # choose between then, so the section keeps its prose rather than
-    # silently rendering none.
+def test_section_remainders_rejects_a_graph_without_namespaced_file_ids():
+    # An un-namespaced FILE id means a graph this pipeline does not support.
+    # Failing here is deliberate: guessing would silently drop a section's
+    # prose or attribute it to the wrong repo.
     g = Graph.from_dict({
         "nodes": {
             "file:spec/prd-rbac.md": {
                 "id": "file:spec/prd-rbac.md", "kind": "FILE",
                 "label": "prd-rbac.md",
                 "content": {"relative_path": "spec/prd-rbac.md"},
-                "children": ["rem:spec/prd-rbac.md:1"], "edges": [],
-            },
-            "rem:spec/prd-rbac.md:1": {
-                "id": "rem:spec/prd-rbac.md:1", "kind": "REMAINDER",
-                "label": "# User Roles", "content": {"text": "# User Roles"},
                 "children": [], "edges": [],
             },
         },
         "roots": [], "metadata": {},
     })
-    rems = section_remainders(g, ["spec/prd-rbac.md"], scope="core")
-    assert [r.id for r in rems] == ["rem:spec/prd-rbac.md:1"]
+    with pytest.raises(ValueError, match="no namespace segment"):
+        section_remainders(g, ["spec/prd-rbac.md"], scope="core")
 
 
 def test_section_remainders_sponsor_scope_takes_the_overlay_prose(sample_graph_dict):
