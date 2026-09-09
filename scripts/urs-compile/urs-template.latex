@@ -292,7 +292,7 @@ $endfor$
 % cover is provided, NO title page renders — the document opens directly
 % on the TOC (if any) or the body. This supports the multi-stage compile
 % in tools/compile-urs.sh, which generates the cover-and-frontmatter
-% half via pandoc directly and produces the diary / callisto bodies via
+% half via pandoc directly and produces the diary / sponsor bodies via
 % elspais pdf WITHOUT --cover so they don't render interstitial title
 % pages when merged.
 $if(cover-tex)$

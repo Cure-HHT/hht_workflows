@@ -15,5 +15,5 @@ Prerequisites: the job must be authenticated to GCP (e.g.
       with:
         service: portal-service
         region: europe-west9
-        project: callisto4-dev
+        project: <sponsor>-dev
         revision: ${{ steps.canary.outputs.revision_name }}

@@ -20,8 +20,8 @@ def parse_prohibit_list(raw):
 
 # A term matches at a letter boundary: nothing letter-like immediately
 # before it, or a lowercase-to-uppercase transition (camelCase embedding).
-# There is no trailing constraint: identifier tails (for_callisto,
-# callisto4, CallistoService, callistos) are exactly the mistakes the
+# There is no trailing constraint: identifier tails (for_acme-x,
+# acme-x1, AcmeXService, acme-xs) are exactly the mistakes the
 # guard exists to catch, and the registry lint requires terms distinctive
 # enough that substring tails cannot collide with ordinary words.
 _LEAD = r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))"

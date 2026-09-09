@@ -38,9 +38,17 @@ def _styles_root(path: Path):
 
 
 def _find_style(root, display_name: str):
+    """Find a style by its w:name, ignoring case.
+
+    The display name is seeded from pandoc's bundled default reference doc,
+    which has shifted between "heading 4" and "Heading 4" across pandoc
+    releases. The capitalisation is pandoc's to choose; these tests are
+    about the style's own attributes.
+    """
+    want = display_name.casefold()
     for st in root.findall(f"{{{W}}}style"):
         nm = st.find(f"{{{W}}}name")
-        if nm is not None and nm.get(f"{{{W}}}val") == display_name:
+        if nm is not None and (nm.get(f"{{{W}}}val") or "").casefold() == want:
             return st
     return None
 

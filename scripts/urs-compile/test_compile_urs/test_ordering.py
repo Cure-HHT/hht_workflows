@@ -30,8 +30,8 @@ def test_parse_req_id_splits_namespace_level_name():
     assert parse_req_id("DIARY-PRD-user-account-create") == (
         "DIARY", "PRD", "user-account-create"
     )
-    assert parse_req_id("CAL-GUI-trial-start-workflow") == (
-        "CAL", "GUI", "trial-start-workflow"
+    assert parse_req_id("SPN-GUI-trial-start-workflow") == (
+        "SPN", "GUI", "trial-start-workflow"
     )
 
 
@@ -43,7 +43,7 @@ def test_parse_req_id_rejects_non_req_ids():
 def test_core_scope_emits_only_core_namespace():
     g = _graph(
         _req("DIARY-PRD-foo", parse_line=10),
-        _req("CAL-PRD-foo-configuration", parse_line=20),
+        _req("SPN-PRD-foo-configuration", parse_line=20),
     )
     groups = grouped_section_requirements(g, ["spec/x.md"], scope="core")
     assert _ids(groups) == [["DIARY-PRD-foo"]]
@@ -52,11 +52,11 @@ def test_core_scope_emits_only_core_namespace():
 def test_sponsor_scope_emits_only_sponsor_namespace():
     g = _graph(
         _req("DIARY-PRD-foo", parse_line=10),
-        _req("CAL-PRD-foo-configuration", parse_line=20),
-        _req("CAL-GUI-bar-modal", parse_line=30),
+        _req("SPN-PRD-foo-configuration", parse_line=20),
+        _req("SPN-GUI-bar-modal", parse_line=30),
     )
     groups = grouped_section_requirements(g, ["spec/x.md"], scope="sponsor")
-    assert _ids(groups) == [["CAL-PRD-foo-configuration"], ["CAL-GUI-bar-modal"]]
+    assert _ids(groups) == [["SPN-PRD-foo-configuration"], ["SPN-GUI-bar-modal"]]
 
 
 def test_non_urs_levels_excluded():
@@ -121,14 +121,14 @@ def test_non_matching_names_keep_source_order():
 
 def test_multiple_files_collected_in_manifest_order():
     g = _graph(
-        _req("CAL-PRD-zeta-configuration", "spec/a.md", parse_line=10),
-        _req("CAL-PRD-alpha-configuration", "spec/b.md", parse_line=10),
+        _req("SPN-PRD-zeta-configuration", "spec/a.md", parse_line=10),
+        _req("SPN-PRD-alpha-configuration", "spec/b.md", parse_line=10),
     )
     groups = grouped_section_requirements(
         g, ["spec/a.md", "spec/b.md"], scope="sponsor"
     )
     assert _ids(groups) == [
-        ["CAL-PRD-zeta-configuration"], ["CAL-PRD-alpha-configuration"],
+        ["SPN-PRD-zeta-configuration"], ["SPN-PRD-alpha-configuration"],
     ]
 
 
@@ -136,7 +136,42 @@ def test_section_remainders_walks_file_children(sample_graph_dict):
     g = Graph.from_dict(sample_graph_dict)
     rems = section_remainders(g, ["spec/prd-rbac.md"])
     ids = [r.id for r in rems]
-    assert ids == ["rem:spec/prd-rbac.md:1", "rem:spec/prd-rbac.md:2"]
+    assert ids == ["rem:DIARY:spec/prd-rbac.md:1", "rem:DIARY:spec/prd-rbac.md:2"]
+
+
+def test_section_remainders_excludes_the_overlay_repo_prose(sample_graph_dict):
+    # The sponsor overlay shares the relative path, so its FILE node offers
+    # prose for the same section. A core section must not render it: doing
+    # so puts the overlay's intro under the platform section heading and
+    # emits the platform file's own title as a second heading below it.
+    g = Graph.from_dict(sample_graph_dict)
+    rems = section_remainders(g, ["spec/prd-rbac.md"], scope="core")
+    assert "rem:SPN:spec/prd-rbac.md:1" not in [r.id for r in rems]
+
+
+def test_section_remainders_rejects_a_graph_without_namespaced_file_ids():
+    # An un-namespaced FILE id means a graph this pipeline does not support.
+    # Failing here is deliberate: guessing would silently drop a section's
+    # prose or attribute it to the wrong repo.
+    g = Graph.from_dict({
+        "nodes": {
+            "file:spec/prd-rbac.md": {
+                "id": "file:spec/prd-rbac.md", "kind": "FILE",
+                "label": "prd-rbac.md",
+                "content": {"relative_path": "spec/prd-rbac.md"},
+                "children": [], "edges": [],
+            },
+        },
+        "roots": [], "metadata": {},
+    })
+    with pytest.raises(ValueError, match="no namespace segment"):
+        section_remainders(g, ["spec/prd-rbac.md"], scope="core")
+
+
+def test_section_remainders_sponsor_scope_takes_the_overlay_prose(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    rems = section_remainders(g, ["spec/prd-rbac.md"], scope="sponsor")
+    assert [r.id for r in rems] == ["rem:SPN:spec/prd-rbac.md:1"]
 
 
 def test_grouped_respects_explicit_levels():

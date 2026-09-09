@@ -7,7 +7,7 @@ description: >
 inputs:
   doppler_project:
     description: >
-      Doppler project slug, e.g. 'admin', 'sponsor-callisto'. Pass via
+      Doppler project slug, e.g. 'admin', 'sponsor-<id>'. Pass via
       vars.<NAME> from caller; do NOT hardcode.
     required: true
   doppler_config:

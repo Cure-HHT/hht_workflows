@@ -49,6 +49,14 @@ inputs:
       builds are reproducible and traceable to a known tool version. Pass the
       value from the caller repo's .github/versions.env (ELSPAIS_VERSION).
     required: true
+  pandoc-version:
+    description: |
+      Exact pandoc release to install (e.g. "3.1.3"). The docx reference is
+      seeded from pandoc's default data file, so the pandoc version decides
+      the style names the deliverable carries; pinning it keeps a CI build
+      byte-comparable with a local one.
+    required: false
+    default: "3.1.3"
   manifest:
     description: |
       Path (relative to primary-root) of the URS manifest to compile.
@@ -85,15 +93,31 @@ runs:
 
     - name: Install pandoc + LaTeX engine
       shell: bash
+      env:
+        PANDOC_VERSION: ${{ inputs.pandoc-version }}
       run: |
+        set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          pandoc \
           texlive-xetex \
           texlive-latex-extra \
           texlive-fonts-recommended \
           fonts-liberation \
           librsvg2-bin
+        # pandoc from its own release, not the runner image: the docx
+        # reference is seeded from pandoc's default data file, so the
+        # emitted style names track the pandoc version. Ubuntu's package
+        # moves with the image and would drift the deliverable silently.
+        deb="$(mktemp --suffix=.deb)"
+        curl -fsSL -o "$deb" \
+          "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+        sudo dpkg -i "$deb"
+        rm -f "$deb"
+        installed="$(pandoc --version | head -1 | awk '{print $2}')"
+        if [ "$installed" != "${PANDOC_VERSION}" ]; then
+          echo "::error::pandoc ${installed} installed, expected ${PANDOC_VERSION}" >&2
+          exit 1
+        fi
 
     - name: Install elspais
       shell: bash

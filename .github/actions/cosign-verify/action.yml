@@ -48,7 +48,11 @@ runs:
       uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159  # v3.9.2
       with:
         cosign-release: ${{ inputs.cosign-version != '' && inputs.cosign-version || 'v2.5.3' }}
-    # Implements: CAL-OPS-deploy-provenance-traceability  (callisto spec/ops-deployment.md)
+    # Checks each image's keyless signature against the expected workflow
+    # identity, so a deployed image is traceable to the run that built it
+    # and an altered or unsigned image fails before it can be promoted.
+    # TODO: cite the deploy-provenance requirement once one is drafted as
+    # HSI-* in hht_sponsor_iac.
     - name: Verify signatures
       shell: bash
       env:

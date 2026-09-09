@@ -23,6 +23,9 @@ on:
       # added here, so a post-merge change to the action ran no tests on main.
       - '.github/actions/cloud-run-resolve-serving-digest/**'
       - '.github/workflows/promote-template.yml'
+      # The urs-compile suite had no CI runner at all: a pre-existing
+      # failure sat unnoticed because nothing ever executed it.
+      - 'scripts/urs-compile/**'
       - 'tests/**'
       - 'bootstrap/**'
       - 'pyproject.toml'
@@ -100,6 +103,31 @@ jobs:
         run: |
           set -euo pipefail
           pytest tests/test_promote_template.py -v
+      # pandoc pinned to the same release the build-urs action installs: the
+      # docx reference builder seeds from pandoc's default data file, so an
+      # unpinned pandoc makes these assertions track the runner image.
+      - name: Install pandoc + urs-compile test deps
+        run: |
+          set -euo pipefail
+          # Read the pin from the build-urs action's default so this job and
+          # the action can never disagree about which pandoc they mean.
+          PANDOC_VERSION="$(python3 -c "import yaml;print(yaml.safe_load(open('.github/actions/build-urs/action.yml'))['inputs']['pandoc-version']['default'])")"
+          echo "pinned pandoc: ${PANDOC_VERSION}"
+          deb="$(mktemp --suffix=.deb)"
+          curl -fsSL -o "$deb" \
+            "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+          sudo dpkg -i "$deb"
+          rm -f "$deb"
+          installed="$(pandoc --version | head -1 | awk '{print $2}')"
+          if [ "$installed" != "${PANDOC_VERSION}" ]; then
+            echo "::error::pandoc ${installed} installed, expected ${PANDOC_VERSION}" >&2
+            exit 1
+          fi
+          pip install --quiet -r scripts/urs-compile/requirements-compile.txt lxml
+      - name: Run urs-compile tests
+        run: |
+          set -euo pipefail
+          pytest scripts/urs-compile/test_compile_urs/ -v
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.

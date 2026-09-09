@@ -31,11 +31,11 @@ def test_assemble_markdown_emits_chapter_section_headings_and_content(
     assert "Customizable Role-Based Access Control" in out
     # Sponsor content is no longer interleaved with the core REQs — it
     # lands in the sponsor chapter after the body chapters.
-    assert "Role Definitions (Callisto Permissions Table)" in out
+    assert "Role Definitions (Sponsor Permissions Table)" in out
     assert "# SPONSOR CONFIGURATION REQUIREMENTS" in out
     sponsor_chapter_pos = out.find("# SPONSOR CONFIGURATION REQUIREMENTS")
     diary_pos = out.find("DIARY-PRD-role-definitions")
-    cal_pos = out.find("CAL-PRD-role-definitions")
+    cal_pos = out.find("SPN-PRD-role-definitions")
     assert 0 < diary_pos < sponsor_chapter_pos < cal_pos
     # File prose (REMAINDERs) renders ahead of the section's REQs.
     prose_pos = out.find("Intro prose for the section.")

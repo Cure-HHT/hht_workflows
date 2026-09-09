@@ -146,7 +146,7 @@ When `bookmark-title` is non-empty, the action maintains a single
 channel bookmark with that exact title pointing at the just-posted
 message's permalink. Bookmarks render as full-row entries under the
 channel's Bookmarks tab (alongside Messages / Files), so descriptive
-titles read well — e.g. `Cloud Run live versions (callisto / DEV)`
+titles read well — e.g. `Cloud Run live versions (Sponsor / DEV)`
 rather than a terse slot key.
 
 This replaces the older "pin the deploy message" approach (which
@@ -187,7 +187,7 @@ token (only when `bookmark-title` is set).
     event: deploy-success
     env:   ${{ inputs.sponsor-env }}
     text:  "..."
-    bookmark-title: "Cloud Run live versions (callisto / ${{ inputs.sponsor-env }})"
+    bookmark-title: "Cloud Run live versions (Sponsor / ${{ inputs.sponsor-env }})"
     slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
 

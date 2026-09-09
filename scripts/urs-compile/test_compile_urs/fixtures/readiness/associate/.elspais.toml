@@ -3,7 +3,7 @@
 # Holds DIARY-* requirements consumed by the core chapters of the
 # readiness fixture URS. Mirrors the structure of hht_diary.
 
-version = 4
+version = 5
 
 [project]
 namespace = "DIARY"
@@ -11,11 +11,15 @@ name = "Fixture Core Platform"
 
 [id-patterns]
 canonical = "{namespace}-{level.letter}-{component}"
-separators = ["-"]
-prefix_optional = false
 
 [id-patterns.component]
 style = "kebab-case"
+
+[id-patterns.assertions]
+# Citations take the form `<REQ-id>/A`. A "-" separator cannot be used
+# with kebab-case components: the component would absorb it and the
+# label after it, binding the citation to a different requirement.
+separator = "/"
 
 [levels.PRD]
 rank = 1

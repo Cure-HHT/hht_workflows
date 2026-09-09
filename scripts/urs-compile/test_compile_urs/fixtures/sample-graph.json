@@ -1,7 +1,7 @@
 {
   "nodes": {
-    "file:spec/prd-rbac.md": {
-      "id": "file:spec/prd-rbac.md",
+    "file:DIARY:spec/prd-rbac.md": {
+      "id": "file:DIARY:spec/prd-rbac.md",
       "kind": "FILE",
       "label": "prd-rbac.md",
       "content": {
@@ -13,17 +13,17 @@
         "git_commit": "fixture"
       },
       "children": [
-        "rem:spec/prd-rbac.md:1",
+        "rem:DIARY:spec/prd-rbac.md:1",
         "DIARY-PRD-rbac",
         "DIARY-PRD-action-inventory",
         "DIARY-PRD-role-definitions",
-        "rem:spec/prd-rbac.md:2",
+        "rem:DIARY:spec/prd-rbac.md:2",
         "DIARY-GUI-role-switching"
       ],
       "edges": []
     },
-    "rem:spec/prd-rbac.md:1": {
-      "id": "rem:spec/prd-rbac.md:1",
+    "rem:DIARY:spec/prd-rbac.md:1": {
+      "id": "rem:DIARY:spec/prd-rbac.md:1",
       "kind": "REMAINDER",
       "label": "# User Roles and Permissions",
       "content": {
@@ -32,8 +32,8 @@
       "children": [],
       "edges": []
     },
-    "rem:spec/prd-rbac.md:2": {
-      "id": "rem:spec/prd-rbac.md:2",
+    "rem:DIARY:spec/prd-rbac.md:2": {
+      "id": "rem:DIARY:spec/prd-rbac.md:2",
       "kind": "REMAINDER",
       "label": "### Role Switching",
       "content": {
@@ -200,27 +200,54 @@
       "children": [],
       "edges": []
     },
-    "CAL-PRD-role-definitions": {
-      "id": "CAL-PRD-role-definitions",
+    "SPN-PRD-role-definitions": {
+      "id": "SPN-PRD-role-definitions",
       "kind": "REQUIREMENT",
-      "label": "Role Definitions (Callisto Permissions Table)",
+      "label": "Role Definitions (Sponsor Permissions Table)",
       "content": {
         "title": "Role Definitions",
-        "rationale": "The Callisto sponsor's specific permissions matrix.",
+        "rationale": "The sponsor's specific permissions matrix.",
         "level": "prd",
         "status": "Active",
         "source_file": "spec/prd-rbac.md",
         "parse_line": 10,
         "refines_refs": ["DIARY-PRD-role-definitions"]
       },
-      "children": ["CAL-PRD-role-definitions-A"],
+      "children": ["SPN-PRD-role-definitions-A"],
       "edges": [
-        {"target": "CAL-PRD-role-definitions-A", "kind": "STRUCTURES"},
+        {"target": "SPN-PRD-role-definitions-A", "kind": "STRUCTURES"},
         {"target": "DIARY-PRD-role-definitions", "kind": "REFINES"}
       ]
     },
-    "CAL-PRD-role-definitions-A": {
-      "id": "CAL-PRD-role-definitions-A",
+    "file:SPN:spec/prd-rbac.md": {
+      "id": "file:SPN:spec/prd-rbac.md",
+      "kind": "FILE",
+      "label": "prd-rbac.md",
+      "content": {
+        "file_type": "spec",
+        "absolute_path": "/fake/sponsor/spec/prd-rbac.md",
+        "relative_path": "spec/prd-rbac.md",
+        "repo": null,
+        "git_branch": "URS-1",
+        "git_commit": "fixture"
+      },
+      "children": [
+        "rem:SPN:spec/prd-rbac.md:1"
+      ],
+      "edges": []
+    },
+    "rem:SPN:spec/prd-rbac.md:1": {
+      "id": "rem:SPN:spec/prd-rbac.md:1",
+      "kind": "REMAINDER",
+      "label": "# Sponsor RBAC Overlays",
+      "content": {
+        "text": "# Sponsor RBAC Overlays\n\nSponsor overlay prose."
+      },
+      "children": [],
+      "edges": []
+    },
+    "SPN-PRD-role-definitions-A": {
+      "id": "SPN-PRD-role-definitions-A",
       "kind": "ASSERTION",
       "label": "Permissions matrix as defined in the table below.",
       "content": {
@@ -231,6 +258,6 @@
       "edges": []
     }
   },
-  "roots": ["file:spec/prd-rbac.md"],
-  "metadata": {"federated": true, "repos": ["diary", "callisto"]}
+  "roots": ["file:DIARY:spec/prd-rbac.md", "file:SPN:spec/prd-rbac.md"],
+  "metadata": {"federated": true, "repos": ["diary", "sponsor"]}
 }

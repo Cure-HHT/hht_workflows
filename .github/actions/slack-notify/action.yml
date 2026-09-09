@@ -85,7 +85,7 @@ inputs:
       channel it is edited (link updated), otherwise it is added.
       Bookmarks render as full-row entries inside the channel's
       Bookmarks tab, so descriptive titles read well — e.g.
-      "Cloud Run live versions (callisto / DEV)" rather than a terse
+      "Cloud Run live versions (Sponsor / DEV)" rather than a terse
       slot key. The title is the dedup key, so it must be stable across
       runs for the same slot. Bookmark errors are soft-failed
       (::warning::) so a Slack-side hiccup never turns a successful
@@ -240,7 +240,7 @@ runs:
         fi
 
         # PyYAML — same pattern as validate-build-paths.yml in the
-        # callisto repo. --user bypasses PEP 668's externally-managed
+        # sponsor repo. --user bypasses PEP 668's externally-managed
         # marker on ubuntu-latest. yq's runner preinstall is undocumented
         # and image-version-dependent, so we don't depend on it.
         pip install --user --quiet pyyaml
