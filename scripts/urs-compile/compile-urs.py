@@ -455,7 +455,9 @@ def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path,
                 # REMAINDER / file prose is always driven by section.files
                 # only — a by-level section (files-less, levels-driven)
                 # emits no prose, just the whole-corpus REQs for its levels.
-                for rem in section_remainders(graph, section.files):
+                for rem in section_remainders(
+                    graph, section.files, scope=chapter.scope,
+                ):
                     rendered_chunks.append((rem.kind, render_node(rem, graph, config)))
                     rendered_chunks.append(("SEP", "\n"))
             # Effective levels for this section: an explicit section override

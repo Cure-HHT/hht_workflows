@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+#: FILE node ids are ``file:<NAMESPACE>:<relative_path>`` under federation --
+#: the namespace segment is the REQ-id prefix of the repo the file came from
+#: (``DIARY`` for the platform, ``SPN`` for a sponsor overlay).
+_FILE_ID_RE = re.compile(r"^file:([A-Z][A-Z0-9]*):")
 
 
 @dataclass(frozen=True)
@@ -48,10 +54,31 @@ class Graph:
         return node_id in self._nodes
 
     def files_for_relative_path(self, relpath: str) -> list[GraphNode]:
+        """Return every FILE node for `relpath` -- one per federated repo.
+
+        A sponsor overlay and the platform file it overlays share one
+        relative path, so a federated graph holds a FILE node per repo
+        (``file:SPN:spec/prd-rbac.md`` and ``file:DIARY:spec/prd-rbac.md``).
+        Callers that want one repo's view filter on :meth:`file_namespace`.
+        """
         return [
             n for n in self._nodes.values()
             if n.kind == "FILE" and n.content.get("relative_path") == relpath
         ]
+
+    @staticmethod
+    def file_namespace(file_node: GraphNode) -> str | None:
+        """Return the REQ-id namespace of the repo a FILE node came from.
+
+        ``file:SPN:spec/prd-rbac.md`` -> ``"SPN"``. Current elspais
+        namespaces every FILE id, federated or not. None means the graph
+        predates the convention, and therefore also predates holding one
+        FILE node per repo for a shared path -- see
+        :func:`urs_compile.ordering.section_remainders`, which is what the
+        distinction is for.
+        """
+        m = _FILE_ID_RE.match(file_node.id)
+        return m.group(1) if m else None
 
     def iter_children(self, file_node: GraphNode) -> Iterable[GraphNode]:
         for cid in file_node.children:
@@ -61,11 +88,9 @@ class Graph:
     def requirements_for_source_file(self, relpath: str) -> list[GraphNode]:
         """Return REQUIREMENT nodes whose `source_file` matches `relpath`.
 
-        elspais federation merges FILE nodes that share a relative_path
-        (only one FILE node survives, biased to one repo). The REQUIREMENT
-        nodes themselves carry their own `source_file` field, so when we
-        need cross-repo REQ lookups for a section we go through this method
-        instead of `files_for_relative_path` -> children.
+        REQUIREMENT nodes carry their own `source_file` field, so this
+        method reaches every repo's REQs for a path in one call, without
+        walking the per-repo FILE nodes `relpath` resolves to.
         """
         return [
             n for n in self._nodes.values()
@@ -82,22 +107,4 @@ class Graph:
                 if sf and sf not in seen:
                     seen.add(sf)
                     out.append(sf)
-        return out
-
-    def remainders_for_source_file(self, relpath: str) -> list[GraphNode]:
-        """Return REMAINDER nodes attached to FILE nodes for `relpath`.
-
-        REMAINDERs are accessible only via FILE node children today; there
-        is no `source_file` on REMAINDER content. Callers that need both
-        REQs and REMAINDERs combine this with `files_for_relative_path` to
-        get the surviving FILE's REMAINDERs.
-        """
-        out: list[GraphNode] = []
-        for n in self._nodes.values():
-            if n.kind != "FILE" or n.content.get("relative_path") != relpath:
-                continue
-            for cid in n.children:
-                child = self._nodes.get(cid)
-                if child and child.kind == "REMAINDER":
-                    out.append(child)
         return out

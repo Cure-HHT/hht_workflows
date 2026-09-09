@@ -136,7 +136,48 @@ def test_section_remainders_walks_file_children(sample_graph_dict):
     g = Graph.from_dict(sample_graph_dict)
     rems = section_remainders(g, ["spec/prd-rbac.md"])
     ids = [r.id for r in rems]
-    assert ids == ["rem:spec/prd-rbac.md:1", "rem:spec/prd-rbac.md:2"]
+    assert ids == ["rem:DIARY:spec/prd-rbac.md:1", "rem:DIARY:spec/prd-rbac.md:2"]
+
+
+def test_section_remainders_excludes_the_overlay_repo_prose(sample_graph_dict):
+    # The sponsor overlay shares the relative path, so its FILE node offers
+    # prose for the same section. A core section must not render it: doing
+    # so puts the overlay's intro under the platform section heading and
+    # emits the platform file's own title as a second heading below it.
+    g = Graph.from_dict(sample_graph_dict)
+    rems = section_remainders(g, ["spec/prd-rbac.md"], scope="core")
+    assert "rem:SPN:spec/prd-rbac.md:1" not in [r.id for r in rems]
+
+
+def test_section_remainders_keeps_prose_from_a_pre_namespacing_graph():
+    # The readiness fixture builds on an older pinned elspais, which merges
+    # the repos' files into one un-namespaced FILE node. There is nothing to
+    # choose between then, so the section keeps its prose rather than
+    # silently rendering none.
+    g = Graph.from_dict({
+        "nodes": {
+            "file:spec/prd-rbac.md": {
+                "id": "file:spec/prd-rbac.md", "kind": "FILE",
+                "label": "prd-rbac.md",
+                "content": {"relative_path": "spec/prd-rbac.md"},
+                "children": ["rem:spec/prd-rbac.md:1"], "edges": [],
+            },
+            "rem:spec/prd-rbac.md:1": {
+                "id": "rem:spec/prd-rbac.md:1", "kind": "REMAINDER",
+                "label": "# User Roles", "content": {"text": "# User Roles"},
+                "children": [], "edges": [],
+            },
+        },
+        "roots": [], "metadata": {},
+    })
+    rems = section_remainders(g, ["spec/prd-rbac.md"], scope="core")
+    assert [r.id for r in rems] == ["rem:spec/prd-rbac.md:1"]
+
+
+def test_section_remainders_sponsor_scope_takes_the_overlay_prose(sample_graph_dict):
+    g = Graph.from_dict(sample_graph_dict)
+    rems = section_remainders(g, ["spec/prd-rbac.md"], scope="sponsor")
+    assert [r.id for r in rems] == ["rem:SPN:spec/prd-rbac.md:1"]
 
 
 def test_grouped_respects_explicit_levels():

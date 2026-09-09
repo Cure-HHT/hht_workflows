@@ -102,16 +102,38 @@ def grouped_section_requirements(
     return out
 
 
-def section_remainders(graph: Graph, relpaths: Iterable[str]) -> list[GraphNode]:
-    """Return the surviving FILE node's REMAINDERs for each path, in order.
+def section_remainders(
+    graph: Graph, relpaths: Iterable[str], scope: str = "core",
+) -> list[GraphNode]:
+    """Return the in-`scope` file prose (REMAINDERs) for each path, in order.
 
     REMAINDERs carry the file's title and intro prose. In the spec trees
     all non-empty REMAINDERs precede the first REQ, so emitting them as a
     block before the grouped REQs preserves the rendered prose.
-    Federation keeps a single FILE node per relative_path; its repo bias
-    decides whose prose survives (pre-existing pipeline behaviour).
+
+    A sponsor overlay and the platform file it overlays share one relative
+    path, so a federated graph holds one FILE node per repo for that path
+    and each carries its own prose. `scope` selects between them on the
+    same rule `grouped_section_requirements` applies to REQs: ``"core"``
+    takes the :data:`CORE_NAMESPACE` file's prose, ``"sponsor"`` takes the
+    overlay's. Without this a core section renders both repos' intros --
+    the sponsor's overlay prose under the platform section heading,
+    followed by a second heading from the platform file's own title.
     """
     out: list[GraphNode] = []
     for relpath in relpaths:
-        out.extend(graph.remainders_for_source_file(relpath))
+        for file_node in graph.files_for_relative_path(relpath):
+            namespace = graph.file_namespace(file_node)
+            # An un-namespaced FILE id comes from an elspais old enough to
+            # merge the repos' files into one node, so there is a single
+            # node for the path and nothing to choose between: take its
+            # prose, which is what that graph shape means.
+            if namespace is None:
+                pass
+            elif (namespace == CORE_NAMESPACE) != (scope == "core"):
+                continue
+            out.extend(
+                child for child in graph.iter_children(file_node)
+                if child.kind == "REMAINDER"
+            )
     return out

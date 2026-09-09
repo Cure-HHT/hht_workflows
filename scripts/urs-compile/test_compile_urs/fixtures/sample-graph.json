@@ -1,7 +1,7 @@
 {
   "nodes": {
-    "file:spec/prd-rbac.md": {
-      "id": "file:spec/prd-rbac.md",
+    "file:DIARY:spec/prd-rbac.md": {
+      "id": "file:DIARY:spec/prd-rbac.md",
       "kind": "FILE",
       "label": "prd-rbac.md",
       "content": {
@@ -13,17 +13,17 @@
         "git_commit": "fixture"
       },
       "children": [
-        "rem:spec/prd-rbac.md:1",
+        "rem:DIARY:spec/prd-rbac.md:1",
         "DIARY-PRD-rbac",
         "DIARY-PRD-action-inventory",
         "DIARY-PRD-role-definitions",
-        "rem:spec/prd-rbac.md:2",
+        "rem:DIARY:spec/prd-rbac.md:2",
         "DIARY-GUI-role-switching"
       ],
       "edges": []
     },
-    "rem:spec/prd-rbac.md:1": {
-      "id": "rem:spec/prd-rbac.md:1",
+    "rem:DIARY:spec/prd-rbac.md:1": {
+      "id": "rem:DIARY:spec/prd-rbac.md:1",
       "kind": "REMAINDER",
       "label": "# User Roles and Permissions",
       "content": {
@@ -32,8 +32,8 @@
       "children": [],
       "edges": []
     },
-    "rem:spec/prd-rbac.md:2": {
-      "id": "rem:spec/prd-rbac.md:2",
+    "rem:DIARY:spec/prd-rbac.md:2": {
+      "id": "rem:DIARY:spec/prd-rbac.md:2",
       "kind": "REMAINDER",
       "label": "### Role Switching",
       "content": {
@@ -219,6 +219,33 @@
         {"target": "DIARY-PRD-role-definitions", "kind": "REFINES"}
       ]
     },
+    "file:SPN:spec/prd-rbac.md": {
+      "id": "file:SPN:spec/prd-rbac.md",
+      "kind": "FILE",
+      "label": "prd-rbac.md",
+      "content": {
+        "file_type": "spec",
+        "absolute_path": "/fake/sponsor/spec/prd-rbac.md",
+        "relative_path": "spec/prd-rbac.md",
+        "repo": null,
+        "git_branch": "URS-1",
+        "git_commit": "fixture"
+      },
+      "children": [
+        "rem:SPN:spec/prd-rbac.md:1"
+      ],
+      "edges": []
+    },
+    "rem:SPN:spec/prd-rbac.md:1": {
+      "id": "rem:SPN:spec/prd-rbac.md:1",
+      "kind": "REMAINDER",
+      "label": "# Sponsor RBAC Overlays",
+      "content": {
+        "text": "# Sponsor RBAC Overlays\n\nSponsor overlay prose."
+      },
+      "children": [],
+      "edges": []
+    },
     "CAL-PRD-role-definitions-A": {
       "id": "CAL-PRD-role-definitions-A",
       "kind": "ASSERTION",
@@ -231,6 +258,6 @@
       "edges": []
     }
   },
-  "roots": ["file:spec/prd-rbac.md"],
+  "roots": ["file:DIARY:spec/prd-rbac.md", "file:SPN:spec/prd-rbac.md"],
   "metadata": {"federated": true, "repos": ["diary", "callisto"]}
 }

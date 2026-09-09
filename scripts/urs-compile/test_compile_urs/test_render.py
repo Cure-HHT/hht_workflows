@@ -4,7 +4,7 @@ from urs_compile.render import RenderConfig, render_node, render_remainder, rend
 
 def test_remainder_emits_verbatim(sample_graph_dict):
     g = Graph.from_dict(sample_graph_dict)
-    node = g.get_node("rem:spec/prd-rbac.md:1")
+    node = g.get_node("rem:DIARY:spec/prd-rbac.md:1")
     assert render_remainder(node) == "# User Roles and Permissions\n\nIntro prose for the section."
 
 
@@ -56,7 +56,7 @@ def test_requirement_omits_rationale_block_when_empty(sample_graph_dict):
 def test_render_node_dispatches_on_kind(sample_graph_dict):
     g = Graph.from_dict(sample_graph_dict)
     req = g.get_node("DIARY-PRD-rbac")
-    rem = g.get_node("rem:spec/prd-rbac.md:1")
+    rem = g.get_node("rem:DIARY:spec/prd-rbac.md:1")
     assert "Customizable" in render_node(req, g)
     assert "Intro prose" in render_node(rem)
 
