@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             files_to_stage.append(path)
 
     # Generate / refresh this PR's fragment — or retire a stale fragment
-    # if the branch no longer has any [CUR-XXX]-prefixed commit subjects
+    # if the branch no longer has any [TEAM-NNN]-prefixed commit subjects
     # (e.g. after a rebase or commit-message edit that dropped them).
     # Skipped on detached HEAD or directly on main.
     branch = git_mod.current_branch()
