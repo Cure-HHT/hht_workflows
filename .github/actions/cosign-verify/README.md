@@ -54,10 +54,7 @@ explicitly discouraged — they can change without your knowledge.
 
 ## Why this exists
 
-Consolidates three near-duplicate inline cosign-verify implementations across
-the org (existing in `hht_diary/build-ghcr-containers.yml`, planned for
-sponsor builds, future sponsor-build-template workflows). Centralizes the
-upstream `cosign-installer` version and enforces retry/soft-fail consistency.
+Centralizes the upstream `cosign-installer` version and enforces retry/soft-fail consistency.
 
 Verifying signatures is what makes a deployed image traceable to the run that
 built it. An image that is unsigned, or signed by an identity outside the
