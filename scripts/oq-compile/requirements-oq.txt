@@ -1,0 +1,5 @@
+# Runtime dependencies for the OQ traceability report generator.
+PyYAML>=6.0
+# openpyxl writes the xlsx workbook (render.write_workbook).
+openpyxl>=3.1
+pytest>=7.4
