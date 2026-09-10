@@ -18,6 +18,7 @@ on:
       - '.github/actions/release-notes-publish/**'
       - '.github/actions/sponsor-base-preflight/**'
       - '.github/actions/elspais-federate/**'
+      - '.github/actions/obtain-upstream/**'
       - '.github/actions/cosign-verify/**'
       # cloud-run-resolve-serving-digest was added with a test suite but never
       # added here, so a post-merge change to the action ran no tests on main.
@@ -83,6 +84,11 @@ jobs:
         run: |
           set -euo pipefail
           cd .github/actions/elspais-federate
+          PYTHONPATH=. pytest tests/ -v
+      - name: Run obtain-upstream tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/obtain-upstream
           PYTHONPATH=. pytest tests/ -v
       - name: Run bootstrap guard tests
         run: |
