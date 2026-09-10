@@ -39,11 +39,14 @@ fi
 # suite needs on top.
 python3 -m pip install --quiet -e '.[test]'
 
-# The three hook suites share the default path; the two action suites each need
-# their own PYTHONPATH, exactly as release-notes-tests.yml runs them.
-pytest hooks/release-notes-update/tests/ \
-       hooks/no-or-true-guard/tests/ \
-       hooks/confidential-terms-scan/tests/
+# The three hook suites each run separately to avoid namespace collision of
+# their __init__.py files (all named 'tests'). The action suites already run
+# individually with PYTHONPATH set, so this is consistent.
+pytest hooks/release-notes-update/tests/ -v
+
+pytest hooks/no-or-true-guard/tests/ -v
+
+pytest hooks/confidential-terms-scan/tests/ -v
 
 ( cd .github/actions/release-notes-publish && \
   PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ )
@@ -59,4 +62,5 @@ pytest bootstrap/tests/
 pytest scripts/urs-compile/test_compile_urs/
 
 python3 -m pip install --quiet -r scripts/oq-compile/requirements-oq.txt
-pytest scripts/oq-compile/test_oq_compile/
+
+python3 -m pytest scripts/oq-compile/test_oq_compile/
