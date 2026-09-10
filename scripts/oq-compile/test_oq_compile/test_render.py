@@ -490,3 +490,35 @@ def test_legend_explains_the_colour_coding(tmp_path, sample_manifest_path):
     assert "green" in text.lower()
     assert "red" in text.lower()
     assert "absence of evidence" in text.lower()
+
+
+def test_colour_coding_sentence_does_not_hardcode_sheet_names(
+    tmp_path, sample_manifest_dict
+):
+    """Every other legend/definition row names its sheet from the manifest
+    (`test_legend_uses_the_manifest_column_titles` pins that for column
+    titles); the colour-coding sentence must not silently reintroduce a
+    hardcoded 'REQ'/'UAT Test Cases' that would go stale under a rename."""
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["sheets"] = {
+        **raw["sheets"],
+        "req": {**raw["sheets"]["req"], "name": "Requirements"},
+        "uat": {**raw["sheets"]["uat"], "name": "Acceptance Tests"},
+    }
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    text = _provenance_text(tmp_path, path)
+
+    # The colour statement itself is still present...
+    assert "green" in text.lower()
+    assert "red" in text.lower()
+    # ...and does not depend on -- or go stale by naming -- either sheet.
+    sentence = next(
+        line for line in text.splitlines() if "shown in green" in line.lower()
+    )
+    assert "REQ" not in sentence
+    assert "UAT Test Cases" not in sentence
+    assert "Requirements" not in sentence
+    assert "Acceptance Tests" not in sentence

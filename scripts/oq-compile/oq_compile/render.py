@@ -26,11 +26,11 @@ _WIDTH_PADDING = 2
 
 #: Font colours for verdict cells, matched by exact value rather than column
 #: position. Chosen dark and muted rather than pure FF0000/00FF00: legible on
-#: a white background, distinguishable from each other and from plain black
-#: text when printed in greyscale, and not harsh on screen. These are the
-#: same hex values Excel's own built-in "Light Red/Green Fill with Dark
-#: Red/Green Text" conditional-formatting styles use for the same PASS/FAIL
-#: convention.
+#: a white background and, since colour is an aid and the verdict text itself
+#: carries the distinction, legible (not necessarily distinguishable from
+#: each other) when printed in greyscale. These are the same hex values
+#: Excel's own built-in "Light Red/Green Fill with Dark Red/Green Text"
+#: conditional-formatting styles use for the same PASS/FAIL convention.
 _FAIL_FONT_COLOR = "9C0006"
 _PASS_FONT_COLOR = "006100"
 
@@ -157,9 +157,10 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
         ],
         [
             "",
-            f"On the REQ and UAT Test Cases sheets, {PASS} is shown in green "
-            f"text and {FAIL} in red; {NOT_RUN} is left unstyled because it "
-            "reports an absence of evidence, not an outcome.",
+            f"Wherever a verdict cell holds one of these values, {PASS} is "
+            f"shown in green text and {FAIL} in red; {NOT_RUN} is left "
+            "unstyled because it reports an absence of evidence, not an "
+            "outcome.",
         ],
         [],
         [
