@@ -42,24 +42,26 @@ python3 -m pip install --quiet -e '.[test]'
 # The three hook suites each run separately to avoid namespace collision of
 # their __init__.py files (all named 'tests'). The action suites already run
 # individually with PYTHONPATH set, so this is consistent.
-pytest hooks/release-notes-update/tests/ -v
+python3 -m pytest hooks/release-notes-update/tests/ -v
 
-pytest hooks/no-or-true-guard/tests/ -v
+python3 -m pytest hooks/no-or-true-guard/tests/ -v
 
-pytest hooks/confidential-terms-scan/tests/ -v
+python3 -m pytest hooks/confidential-terms-scan/tests/ -v
 
 ( cd .github/actions/release-notes-publish && \
-  PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ )
+  PYTHONPATH=.:../../../hooks/release-notes-update python3 -m pytest tests/ )
 
 ( cd .github/actions/sponsor-base-preflight && \
-  PYTHONPATH=. pytest tests/ )
+  PYTHONPATH=. python3 -m pytest tests/ )
 
 ( cd .github/actions/elspais-federate && \
-  PYTHONPATH=. pytest tests/ )
+  PYTHONPATH=. python3 -m pytest tests/ )
 
-pytest bootstrap/tests/
+python3 -m pytest bootstrap/tests/
 
-pytest scripts/urs-compile/test_compile_urs/
+python3 -m pip install --quiet -r scripts/urs-compile/requirements-compile.txt lxml
+
+python3 -m pytest scripts/urs-compile/test_compile_urs/
 
 python3 -m pip install --quiet -r scripts/oq-compile/requirements-oq.txt
 

@@ -26,6 +26,7 @@ on:
       # The urs-compile suite had no CI runner at all: a pre-existing
       # failure sat unnoticed because nothing ever executed it.
       - 'scripts/urs-compile/**'
+      - 'scripts/oq-compile/**'
       - 'tests/**'
       - 'bootstrap/**'
       - 'pyproject.toml'
@@ -148,7 +149,7 @@ jobs:
   #   The standard job, verbatim — notify-failure-lint checks it literally.
   notify-failure:
     name: Notify failure
-    needs: [test]
+    needs: [test, oq-compile-tests]
     if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
