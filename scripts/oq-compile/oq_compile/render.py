@@ -86,7 +86,7 @@ def _column_definition_rows(manifest: Manifest) -> list[list[str]]:
     on each sheet, what one instance of it holds.
     """
     req_id_col, req_title_col, test_column, uat_column, req_journey_col = (
-        manifest.req_sheet.columns
+        manifest.req_columns_without_section()
     )
     uat_id_col, uat_title_col, uat_verdict_col, uat_journey_col, uat_req_col = (
         manifest.uat_sheet.columns
@@ -96,6 +96,16 @@ def _column_definition_rows(manifest: Manifest) -> list[list[str]]:
         [],
         [f"{manifest.req_sheet.name} sheet"],
         [req_id_col, "The requirement's id."],
+        *(
+            [[
+                manifest.req_section_column,
+                "The number of the User Requirements Specification section "
+                "this requirement appears in. Empty when the requirement "
+                "appears in no section of that document.",
+            ]]
+            if manifest.req_section_column is not None
+            else []
+        ),
         [req_title_col, "The requirement's title."],
         [
             test_column,
@@ -130,7 +140,7 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
     # The legend names the two verdict columns by the titles the manifest
     # declares, so a consumer that renames them keeps a legend that matches
     # its own sheet. The manifest guarantees both are present.
-    test_column, uat_column = manifest.req_sheet.columns[2:4]
+    test_column, uat_column = manifest.req_columns_without_section()[2:4]
     return [
         ["Report", manifest.title],
         ["Project", manifest.project],

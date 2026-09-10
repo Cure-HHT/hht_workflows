@@ -14,6 +14,7 @@ Generates the OQ traceability deliverables from the elspais graph:
 | `oq-compile.sh` | Entrypoint: federates associates, runs elspais, invokes the orchestrator. |
 | `compile-oq.py` | Orchestrator: loader to pivot to render. |
 | `oq_compile/manifest.py` | Manifest loading and validation. |
+| `oq_compile/urs_sections.py` | Section lookup, delegated to `urs-compile`. |
 | `oq_compile/load.py` | Trace and graph parsing. |
 | `oq_compile/pivot.py` | Both sheets and the verdict rollup. |
 | `oq_compile/render.py` | CSV and workbook writers. |
@@ -80,6 +81,35 @@ consumers that do not federate are unaffected. The check is not covered by
 `--allow-empty`: an empty report can be honest, but a report missing a
 namespace the manifest declares never is.
 
+### Stating each requirement's URS section
+
+An optional `urs_manifest` names the consuming repo's URS manifest, relative to
+that repo:
+
+```yaml
+urs_manifest: spec/URS-manifest/urs.yaml
+```
+
+Declared, the requirement sheet carries one further column holding the number
+of the URS section each requirement appears in — the number only, so it sorts
+under the sheet's autofilter and stays narrow. It sits second, next to the
+requirement id and the frozen first column, ahead of the wide description.
+
+Which section a requirement belongs to is not a property of its source file:
+a sponsor-scoped chapter lists the same files the core chapters do and
+collects the other namespace's requirements from them. That routing rule
+belongs to the URS generator, so this one does not restate it — it hands the
+manifest to `urs-compile`'s own loader and asks `urs_compile.ordering`'s
+section index for the answer. This tool holds no part of any consumer's
+chapter structure.
+
+A requirement the URS places in no section — one in a file no section lists,
+or at a level the URS excludes — gets an empty cell. An empty cell states an
+absence honestly; a guessed number in a regulatory column does not.
+
+Declaring nothing omits the column, so a consumer that publishes no URS still
+gets a report.
+
 ## Refusals
 
 The generator writes nothing and exits non-zero when:
@@ -88,9 +118,11 @@ The generator writes nothing and exits non-zero when:
 - the selection yields zero UAT test cases (a full REQ sheet with an empty UAT
   sheet is what a dropped or renamed `journeys` key produces);
 - a namespace declared in `require_namespaces` contributes no row;
-- the manifest's REQ sheet does not declare exactly five columns (requirement
-  id, description, test result, UAT result, and the journey column that
-  repeats);
+- the manifest's REQ sheet does not declare exactly five columns — six with a
+  `urs_manifest` declared — (requirement id, the URS section, description, test
+  result, UAT result, and the journey column that repeats);
+- a `urs_manifest` is declared but no such file exists;
+- the URS manifest places one requirement in two different sections;
 - the trace is a dict carrying no recognised rows key;
 - a required field is absent from a trace row;
 - the graph yields no journey node while the trace cites at least one.

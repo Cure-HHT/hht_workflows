@@ -19,6 +19,10 @@ from oq_compile.load import Requirement, load_journeys, load_trace  # noqa: E402
 from oq_compile.manifest import Manifest  # noqa: E402
 from oq_compile.pivot import req_rows, uat_rows  # noqa: E402
 from oq_compile.render import Provenance, write_csv, write_workbook  # noqa: E402
+from oq_compile.urs_sections import (  # noqa: E402
+    resolve_urs_manifest_path,
+    section_numbers,
+)
 
 
 def _namespace(req_id: str) -> str:
@@ -65,6 +69,7 @@ def build(
     out_xlsx: Path,
     provenance_overrides: dict[str, Any] | None = None,
     allow_empty: bool = False,
+    primary_root: Path | None = None,
 ) -> tuple[int, int]:
     """Produce both deliverables. Returns (requirement count, UAT case count).
 
@@ -92,7 +97,19 @@ def build(
     cited_journeys = sum(len(r.journeys) for r in requirements)
     journey_titles = load_journeys(Path(graph_path), cited_journeys)
 
-    rows_req = req_rows(requirements, manifest)
+    # The URS-section column is optional: a consumer that publishes no URS
+    # declares no URS manifest and gets a report without it. Declaring one
+    # that cannot be read is an error, not a blank column.
+    sections: dict[str, str] = {}
+    if manifest.urs_manifest:
+        sections = section_numbers(
+            resolve_urs_manifest_path(
+                manifest.urs_manifest, Path(manifest_path), primary_root
+            ),
+            Path(graph_path),
+        )
+
+    rows_req = req_rows(requirements, manifest, sections)
     rows_uat = uat_rows(requirements, journey_titles, manifest)
 
     if not rows_uat and not allow_empty:
@@ -144,6 +161,17 @@ def main() -> int:
     parser.add_argument("--elspais-version", default="")
     parser.add_argument("--tool-version", default="")
     parser.add_argument(
+        "--primary-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root of the consuming repository, used to resolve the "
+            "repo-relative URS manifest the OQ manifest may declare. "
+            "Omitted, the OQ manifest's own directory and its parents are "
+            "searched instead."
+        ),
+    )
+    parser.add_argument(
         "--allow-empty",
         action="store_true",
         help=(
@@ -167,6 +195,7 @@ def main() -> int:
             "tool_version": args.tool_version,
         },
         allow_empty=args.allow_empty,
+        primary_root=args.primary_root,
     )
     print(f"OQ report: {reqs} requirements, {cases} UAT test cases")
     return 0

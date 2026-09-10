@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Mapping
+
 from .load import Requirement
-from .manifest import Manifest
+from .manifest import SECTION_COLUMN_INDEX, Manifest
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -84,9 +86,20 @@ def rendered_verification_verdict(req: Requirement) -> str:
     return f"{verdict}{CARRIED_SUFFIX}" if req.verified_carried else verdict
 
 
-def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str]]:
+def req_rows(
+    reqs: tuple[Requirement, ...],
+    manifest: Manifest,
+    sections: Mapping[str, str] | None = None,
+) -> list[list[str]]:
     """One row per requirement: id, title, test result, UAT result, then one
     journey per column.
+
+    When the manifest names a URS manifest, the row also carries the number
+    of the URS section the requirement appears in, in the position the row
+    shape fixes. ``sections`` maps requirement id to section number; a
+    requirement the URS places in no section is absent from it and its cell
+    is left empty. An empty cell states that the requirement appears in no
+    section, which is honest; a guessed number in a regulatory column is not.
 
     The two verdicts are stated side by side and never combined. They answer
     different questions -- did this requirement's tests pass, and did a
@@ -102,8 +115,11 @@ def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str
     and the CSV extract is committed and diffed: a reordering upstream would
     otherwise show up as a spurious evidence change.
     """
-    return [
-        [
+    lookup = sections or {}
+    with_section = manifest.req_section_column is not None
+    rows: list[list[str]] = []
+    for r in sorted(reqs, key=lambda r: r.id):
+        row = [
             r.id,
             r.title,
             rendered_verification_verdict(r),
@@ -113,8 +129,10 @@ def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str
                 for j in sorted(r.journeys, key=lambda j: j.id)
             ],
         ]
-        for r in sorted(reqs, key=lambda r: r.id)
-    ]
+        if with_section:
+            row.insert(SECTION_COLUMN_INDEX, lookup.get(r.id, ""))
+        rows.append(row)
+    return rows
 
 
 def uat_rows(

@@ -21,9 +21,12 @@ in manifest-referenced files are excluded from the URS deliverable.
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from .graph_loader import Graph, GraphNode
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .manifest import Manifest, Section
 
 _ID_RE = re.compile(r"^([A-Z][A-Z0-9]*)-([A-Z]+)-([a-z0-9][a-z0-9-]*)$")
 
@@ -131,3 +134,77 @@ def section_remainders(
                 if child.kind == "REMAINDER"
             )
     return out
+
+
+def effective_section_levels(
+    section: "Section", document_levels: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The REQ levels a section emits: its own override, else the document's.
+
+    Stated once, here, because two callers decide it -- the URS assembler
+    and the section index below -- and a section whose levels are resolved
+    differently by the two would be indexed under a section it does not
+    actually appear in.
+    """
+    return section.levels or document_levels
+
+
+def section_requirement_relpaths(graph: Graph, section: "Section") -> list[str]:
+    """The source-file paths a section draws its REQs from.
+
+    - explicit ``files`` -> the section's own files.
+    - ``levels`` but no ``files`` -> a by-level section selecting across the
+      whole corpus (every distinct REQUIREMENT source_file in the graph).
+    - neither -> nothing.
+
+    Shared with the section index for the same reason as
+    :func:`effective_section_levels`.
+    """
+    if section.files:
+        return list(section.files)
+    if section.levels:
+        return graph.requirement_source_files()
+    return list(section.files)
+
+
+def section_index(graph: Graph, manifest: "Manifest") -> dict[str, str]:
+    """Map each REQ id to the number of the document section it appears in.
+
+    The inverse of the section-by-section walk the document assembler
+    performs, built from the same routing: a section's REQs are selected by
+    :func:`grouped_section_requirements` under its chapter's ``scope`` and
+    its effective levels. Callers outside this package (the OQ traceability
+    report, which states each requirement's section number) use this rather
+    than re-deriving the rule from ``files`` alone -- a file does not
+    determine the section, because a sponsor-scoped chapter lists the same
+    files the core chapters do and takes the other namespace's REQs from
+    them.
+
+    A REQ absent from the mapping appears in no section of this document.
+
+    Raises ValueError when one REQ is claimed by two different sections.
+    The manifest does not structurally forbid a file appearing in two
+    same-scope sections, so the ambiguity is detected here and named
+    rather than resolved by arrival order.
+    """
+    index: dict[str, str] = {}
+    for chapter in manifest.chapters:
+        for section in chapter.sections:
+            groups = grouped_section_requirements(
+                graph,
+                section_requirement_relpaths(graph, section),
+                scope=chapter.scope,
+                levels=effective_section_levels(section, manifest.levels),
+            )
+            for group in groups:
+                for req in group:
+                    previous = index.get(req.id)
+                    if previous is not None and previous != section.number:
+                        raise ValueError(
+                            f"requirement {req.id} is claimed by more than one "
+                            f"section: {previous} and {section.number}. The "
+                            "document structure must place each requirement "
+                            "in exactly one section."
+                        )
+                    index[req.id] = section.number
+    return index

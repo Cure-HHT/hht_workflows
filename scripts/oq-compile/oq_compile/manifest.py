@@ -16,6 +16,17 @@ _DEFAULT_UAT_PREFIX = "UAT-"
 #: older single-verdict shape is refused instead of silently mislabelled.
 _REQ_SHEET_COLUMNS = 5
 
+#: A manifest that declares `urs_manifest` gets one further column, holding
+#: the number of the URS section the requirement appears in.
+_REQ_SHEET_COLUMNS_WITH_SECTION = _REQ_SHEET_COLUMNS + 1
+
+#: Where the section column sits in the REQ row. The row shape is the
+#: generator's, not the consumer's -- the manifest supplies column titles,
+#: never positions -- so the position is stated once, here, and read by the
+#: pivot and the renderer. Second column: a narrow locator next to the
+#: requirement id and the frozen first column, ahead of the wide description.
+SECTION_COLUMN_INDEX = 1
+
 #: The UAT sheet's declared header: test-case id, description, verdict,
 #: source journey id, then the requirement column that repeats once per
 #: validated requirement. Enforced for the same reason as the REQ count: the
@@ -80,6 +91,34 @@ class Manifest:
     req_sheet: SheetSpec
     uat_sheet: SheetSpec
     provenance_sheet_name: str
+    #: Repo-relative path to the consuming repo's URS manifest, or None when
+    #: the consumer publishes no URS. The generator learns only where that
+    #: manifest is; the document structure inside it stays the consumer's.
+    urs_manifest: str | None = None
+
+    @property
+    def req_section_column(self) -> str | None:
+        """Title of the URS-section column, or None when there is no URS.
+
+        The column exists exactly when the manifest names a URS manifest,
+        so every consumer of the row shape asks this rather than inferring
+        the column from the declared header's length.
+        """
+        if self.urs_manifest is None:
+            return None
+        return self.req_sheet.columns[SECTION_COLUMN_INDEX]
+
+    def req_columns_without_section(self) -> tuple[str, ...]:
+        """The declared REQ header with the section column removed.
+
+        The five fixed columns are what the renderer's definitions and
+        legend are written against; this lets them index those by fixed
+        position whether or not the optional column is present.
+        """
+        columns = list(self.req_sheet.columns)
+        if self.req_section_column is not None:
+            del columns[SECTION_COLUMN_INDEX]
+        return tuple(columns)
 
     @classmethod
     def from_path(cls, path: Path) -> Manifest:
@@ -100,18 +139,37 @@ class Manifest:
                 ),
             )
 
+        urs_manifest = raw.get("urs_manifest")
+        if urs_manifest is not None and not (
+            isinstance(urs_manifest, str) and urs_manifest
+        ):
+            raise ValueError(
+                f"{path}: 'urs_manifest' must be a non-empty string naming the "
+                f"consuming repo's URS manifest, got {urs_manifest!r}"
+            )
+
         req_sheet = sheet("req", "REQ")
-        if len(req_sheet.columns) != _REQ_SHEET_COLUMNS:
+        expected_req_columns = (
+            _REQ_SHEET_COLUMNS_WITH_SECTION if urs_manifest else _REQ_SHEET_COLUMNS
+        )
+        if len(req_sheet.columns) != expected_req_columns:
             # The renderer repeats the last declared column to reach the widest
             # row. A manifest still declaring the older four-column REQ header
             # would therefore label the UAT-result column with the journey
             # column's title -- a wrong header over real verdicts, silently.
+            shape = (
+                "requirement id, URS section, description, test result, UAT "
+                "result, and the journey column that repeats once per "
+                "validating journey"
+                if urs_manifest
+                else "requirement id, description, test result, UAT result, "
+                "and the journey column that repeats once per validating "
+                "journey"
+            )
             raise ValueError(
                 f"{path}: sheets.req 'columns' must declare exactly "
-                f"{_REQ_SHEET_COLUMNS} columns -- requirement id, description, "
-                "test result, UAT result, and the journey column that repeats "
-                f"once per validating journey -- got {len(req_sheet.columns)}: "
-                f"{list(req_sheet.columns)}"
+                f"{expected_req_columns} columns -- {shape} -- got "
+                f"{len(req_sheet.columns)}: {list(req_sheet.columns)}"
             )
 
         uat_sheet = sheet("uat", "UAT Test Cases")
@@ -143,4 +201,5 @@ class Manifest:
             provenance_sheet_name=str(
                 provenance.get("name", _DEFAULT_PROVENANCE_NAME)
             ),
+            urs_manifest=str(urs_manifest) if urs_manifest else None,
         )

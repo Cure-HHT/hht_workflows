@@ -154,6 +154,7 @@ declare -a CMD=(
   --graph "${WORK}/graph.json"
   --out-csv-dir "${PRIMARY_ROOT}/${REPORTS_DIR}"
   --out-xlsx "${PRIMARY_ROOT}/${BUILD_DIR}/oq-report.xlsx"
+  --primary-root "$PRIMARY_ROOT"
   --primary-commit "$PRIMARY_COMMIT"
   --elspais-version "$ELSPAIS_VERSION"
   --tool-version "$TOOL_VERSION"
