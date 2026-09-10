@@ -26,7 +26,9 @@ hooks/confidential-terms-scan/tests
 .github/actions/release-notes-publish/tests
 .github/actions/sponsor-base-preflight/tests
 .github/actions/elspais-federate/tests
-bootstrap/tests'
+bootstrap/tests
+scripts/urs-compile/test_compile_urs
+scripts/oq-compile/test_oq_compile'
 
 if [ "${1:-}" = "--list" ]; then
   echo "$TARGETS"
@@ -53,3 +55,8 @@ pytest hooks/release-notes-update/tests/ \
   PYTHONPATH=. pytest tests/ )
 
 pytest bootstrap/tests/
+
+pytest scripts/urs-compile/test_compile_urs/
+
+python3 -m pip install --quiet -r scripts/oq-compile/requirements-oq.txt
+pytest scripts/oq-compile/test_oq_compile/
