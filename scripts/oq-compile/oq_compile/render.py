@@ -24,6 +24,16 @@ _MIN_COLUMN_WIDTH = 10
 _MAX_COLUMN_WIDTH = 50
 _WIDTH_PADDING = 2
 
+#: Font colours for verdict cells, matched by exact value rather than column
+#: position. Chosen dark and muted rather than pure FF0000/00FF00: legible on
+#: a white background, distinguishable from each other and from plain black
+#: text when printed in greyscale, and not harsh on screen. These are the
+#: same hex values Excel's own built-in "Light Red/Green Fill with Dark
+#: Red/Green Text" conditional-formatting styles use for the same PASS/FAIL
+#: convention.
+_FAIL_FONT_COLOR = "9C0006"
+_PASS_FONT_COLOR = "006100"
+
 
 @dataclass(frozen=True)
 class Provenance:
@@ -145,6 +155,12 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
             "two columns. They are reported separately and never combined, so "
             "a reader can see which kind of evidence is absent or failing.",
         ],
+        [
+            "",
+            f"On the REQ and UAT Test Cases sheets, {PASS} is shown in green "
+            f"text and {FAIL} in red; {NOT_RUN} is left unstyled because it "
+            "reports an absence of evidence, not an outcome.",
+        ],
         [],
         [
             test_column,
@@ -233,6 +249,37 @@ def _bold_header_row(ws: Worksheet) -> None:
         cell.font = Font(bold=True)
 
 
+def _colour_verdict_cells(ws: Worksheet) -> None:
+    """Colour a verdict cell by its exact value: red text for FAIL, green
+    text for PASS. NOT_RUN is left entirely unstyled -- it reports an
+    absence of evidence, not an outcome.
+
+    Matched on value rather than column position: the requirement sheet
+    carries two verdict columns (test-verification and UAT), the test-case
+    sheet carries one, and this stays correct if either sheet's columns are
+    ever reordered.
+    """
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value == FAIL:
+                cell.font = Font(color=_FAIL_FONT_COLOR)
+            elif cell.value == PASS:
+                cell.font = Font(color=_PASS_FONT_COLOR)
+
+
+def _set_autofilter(ws: Worksheet, n_cols: int, n_rows: int) -> None:
+    """Add filter/sort dropdowns to the header row, ranged over the sheet's
+    actual used extent.
+
+    Both grid sheets have a variable number of trailing columns (one per
+    journey or per validated requirement), so the range is computed from the
+    written content rather than a hardcoded column letter.
+    """
+    last_col = get_column_letter(max(n_cols, 1))
+    last_row = max(n_rows, 1)
+    ws.auto_filter.ref = f"A1:{last_col}{last_row}"
+
+
 def _bold_provenance_labels(ws: Worksheet, rows: list[list[str]]) -> None:
     """Bold column A wherever it holds a label or heading.
 
@@ -307,9 +354,11 @@ def write_workbook(
     for row in req_rows_:
         req.append(row)
     _bold_header_row(req)
+    _colour_verdict_cells(req)
     _wrap_all_cells(req)
     _size_columns_to_content(req, [req_header, *req_rows_])
     req.freeze_panes = "B2"
+    _set_autofilter(req, req_width, 1 + len(req_rows_))
 
     uat = wb.create_sheet(manifest.uat_sheet.name)
     uat_width = max([len(manifest.uat_sheet.columns), *(len(r) for r in uat_rows_)] or [0])
@@ -318,8 +367,10 @@ def write_workbook(
     for row in uat_rows_:
         uat.append(row)
     _bold_header_row(uat)
+    _colour_verdict_cells(uat)
     _wrap_all_cells(uat)
     _size_columns_to_content(uat, [uat_header, *uat_rows_])
     uat.freeze_panes = "B2"
+    _set_autofilter(uat, uat_width, 1 + len(uat_rows_))
 
     wb.save(Path(path))

@@ -378,3 +378,115 @@ def test_column_widths_are_bounded_and_content_driven(tmp_path, sample_manifest_
     # The short-valued verdict columns must still stay readable.
     assert ws.column_dimensions["C"].width >= 10
     assert ws.column_dimensions["D"].width >= 10
+
+
+def test_fail_cells_are_red_and_pass_cells_are_green_on_both_grid_sheets(
+    tmp_path, sample_manifest_path
+):
+    """Matched on exact cell value, not column position: the REQ sheet's two
+    verdict columns (Test Result, UAT Result) and the UAT sheet's one
+    (Pass/Fail) must all pick up the colour regardless of which column they
+    sit in."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(
+        out, m,
+        [["SPN-PRD-a", "A", "FAIL", "PASS", "JNY-1"]],
+        [["UAT-JNY-1", "J", "FAIL", "JNY-1", "SPN-PRD-a"]],
+        _provenance(),
+    )
+    wb = openpyxl.load_workbook(out)
+    req, uat = wb["REQ"], wb["UAT Test Cases"]
+    assert req["C2"].value == "FAIL"
+    assert req["C2"].font.color.rgb == "009C0006"
+    assert req["D2"].value == "PASS"
+    assert req["D2"].font.color.rgb == "00006100"
+    assert uat["C2"].value == "FAIL"
+    assert uat["C2"].font.color.rgb == "009C0006"
+
+
+def test_not_run_cells_are_left_unstyled(tmp_path, sample_manifest_path):
+    """NOT RUN reports an absence of evidence, not an outcome, so it gets no
+    font colour at all -- distinct from an ordinary, never-touched cell only
+    in that we assert it explicitly."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(
+        out, m,
+        [["SPN-PRD-a", "A", "NOT RUN", "NOT RUN", "JNY-1"]],
+        [["UAT-JNY-1", "J", "NOT RUN", "JNY-1", "SPN-PRD-a"]],
+        _provenance(),
+    )
+    wb = openpyxl.load_workbook(out)
+    req, uat = wb["REQ"], wb["UAT Test Cases"]
+    def _is_unstyled(cell):
+        color = cell.font.color
+        return color is None or color.type != "rgb"
+
+    assert req["C2"].value == "NOT RUN"
+    assert _is_unstyled(req["C2"])
+    assert req["D2"].value == "NOT RUN"
+    assert _is_unstyled(req["D2"])
+    assert uat["C2"].value == "NOT RUN"
+    assert _is_unstyled(uat["C2"])
+
+
+def test_provenance_sheet_has_no_pass_or_fail_exact_values(
+    tmp_path, sample_manifest_path
+):
+    """The provenance sheet's legend rows read 'Test Result: PASS' and
+    similar -- labels, not bare verdicts -- so a value-exact colouring rule
+    must not find anything to colour there."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [], [], _provenance())
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    for row in ws.iter_rows():
+        for cell in row:
+            assert cell.value not in ("PASS", "FAIL")
+
+
+def test_grid_sheets_carry_an_autofilter_over_the_full_used_extent(
+    tmp_path, sample_manifest_path
+):
+    """A reader opening the file gets filter/sort dropdowns on every column
+    heading. The range is computed from the actual written extent -- both
+    grid sheets carry a variable number of trailing columns -- rather than a
+    hardcoded column letter."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(
+        out, m,
+        [
+            ["SPN-PRD-a", "A", "PASS", "PASS", "JNY-1", "JNY-2"],
+            ["SPN-PRD-b", "B", "FAIL", "NOT RUN", "JNY-3", "JNY-4"],
+        ],
+        [["UAT-JNY-1", "J", "PASS", "JNY-1", "SPN-PRD-a"]],
+        _provenance(),
+    )
+    wb = openpyxl.load_workbook(out)
+    # REQ: 6 columns wide (widened by the extra trailing journey column),
+    # header + 2 data rows.
+    assert wb["REQ"].auto_filter.ref == "A1:F3"
+    # UAT Test Cases: 5 declared columns, header + 1 data row.
+    assert wb["UAT Test Cases"].auto_filter.ref == "A1:E2"
+
+
+def test_provenance_sheet_has_no_autofilter(tmp_path, sample_manifest_path):
+    """It is a label/value list, not a grid -- an autofilter there would be
+    noise."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [], [], _provenance())
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    assert ws.auto_filter.ref is None
+
+
+def test_legend_explains_the_colour_coding(tmp_path, sample_manifest_path):
+    """Colour a reader can see but not interpret is a gap in a sheet meant
+    to be self-explanatory: the legend must state what green and red mean,
+    and why NOT RUN carries neither."""
+    text = _provenance_text(tmp_path, sample_manifest_path)
+    assert "green" in text.lower()
+    assert "red" in text.lower()
+    assert "absence of evidence" in text.lower()
