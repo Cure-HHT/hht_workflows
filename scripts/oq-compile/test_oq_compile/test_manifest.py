@@ -135,3 +135,51 @@ def test_req_sheet_with_too_many_columns_is_refused(tmp_path, sample_manifest_di
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError):
         Manifest.from_path(path)
+
+
+def test_uat_sheet_with_too_few_columns_is_refused(tmp_path, sample_manifest_dict):
+    """The provenance sheet's column-definitions section and the render/CSV
+    writers index into the declared UAT columns by fixed position
+    (id, description, verdict, journey id, then the repeating requirement
+    column). An under-declared header must be refused here, not reach an
+    IndexError deep inside rendering."""
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["sheets"] = {
+        **raw["sheets"],
+        "uat": {
+            "name": "UAT Test Cases",
+            "columns": ["UAT Test Case ID", "Description", "Pass/Fail"],
+        },
+    }
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError) as exc:
+        Manifest.from_path(path)
+    message = str(exc.value)
+    assert "sheets.uat" in message
+    assert "5" in message
+
+
+def test_uat_sheet_with_too_many_columns_is_refused(tmp_path, sample_manifest_dict):
+    """Only one column repeats. A sixth declared column would silently
+    mislabel the definitions section and every requirement column after the
+    first."""
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["sheets"] = {
+        **raw["sheets"],
+        "uat": {
+            "name": "UAT Test Cases",
+            "columns": [
+                "UAT Test Case ID", "Description", "Pass/Fail",
+                "User Journey ID", "Req ID", "Extra",
+            ],
+        },
+    }
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError):
+        Manifest.from_path(path)

@@ -15,6 +15,15 @@ _DEFAULT_UAT_PREFIX = "UAT-"
 #: journey. Declared rather than inferred so a manifest written against the
 #: older single-verdict shape is refused instead of silently mislabelled.
 _REQ_SHEET_COLUMNS = 5
+
+#: The UAT sheet's declared header: test-case id, description, verdict,
+#: source journey id, then the requirement column that repeats once per
+#: validated requirement. Enforced for the same reason as the REQ count: the
+#: renderer's provenance-sheet column definitions index into this tuple by
+#: fixed position (`columns[0..3]`, `columns[-1]`), so an under-declared
+#: manifest must be refused here rather than raise deep inside rendering.
+_UAT_SHEET_COLUMNS = 5
+
 _DEFAULT_PROVENANCE_NAME = "Provenance"
 
 
@@ -105,6 +114,21 @@ class Manifest:
                 f"{list(req_sheet.columns)}"
             )
 
+        uat_sheet = sheet("uat", "UAT Test Cases")
+        if len(uat_sheet.columns) != _UAT_SHEET_COLUMNS:
+            # Mirrors the REQ-sheet check above: the provenance sheet's
+            # column-definitions section and the CSV/workbook renderers both
+            # index into this tuple by fixed position, so an under- or
+            # over-declared UAT header must be refused here, loud, rather
+            # than reach an IndexError deep inside rendering.
+            raise ValueError(
+                f"{path}: sheets.uat 'columns' must declare exactly "
+                f"{_UAT_SHEET_COLUMNS} columns -- test-case id, description, "
+                "verdict, source journey id, and the requirement column that "
+                f"repeats once per validated requirement -- got "
+                f"{len(uat_sheet.columns)}: {list(uat_sheet.columns)}"
+            )
+
         provenance = sheets.get("provenance") or {}
         return cls(
             title=str(_require(document, "title", f"{path}: document")),
@@ -115,7 +139,7 @@ class Manifest:
                 raw.get("require_namespaces"), str(path)
             ),
             req_sheet=req_sheet,
-            uat_sheet=sheet("uat", "UAT Test Cases"),
+            uat_sheet=uat_sheet,
             provenance_sheet_name=str(
                 provenance.get("name", _DEFAULT_PROVENANCE_NAME)
             ),

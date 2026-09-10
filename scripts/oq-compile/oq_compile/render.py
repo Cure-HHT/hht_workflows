@@ -7,9 +7,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from .manifest import Manifest
 from .pivot import CARRIED_SUFFIX, FAIL, NOT_RUN, PASS
+
+#: Column-width bounds applied to every sheet, in Excel's character-count
+#: width unit. MIN keeps a column of short values (a verdict, a short id)
+#: from reading as a sliver next to its header. MAX caps how far a single
+#: long value -- a requirement title, a legend paragraph -- can stretch its
+#: column; content past the cap relies on wrap_text (set below) rather than
+#: sheet width, so one outlier cell cannot make the whole sheet unwieldy.
+_MIN_COLUMN_WIDTH = 10
+_MAX_COLUMN_WIDTH = 50
+_WIDTH_PADDING = 2
 
 
 @dataclass(frozen=True)
@@ -55,6 +68,59 @@ def write_csv(path: Path, header: tuple[str, ...], rows: list[list[str]]) -> Non
             writer.writerow(list(row) + [""] * (width - len(row)))
 
 
+def _column_definition_rows(manifest: Manifest) -> list[list[str]]:
+    """Define every column on the two grid sheets, named as the manifest
+    declares them so a renamed column keeps a definition that matches it.
+
+    Covers the fixed columns and states, for the repeating trailing column
+    on each sheet, what one instance of it holds.
+    """
+    req_id_col, req_title_col, test_column, uat_column, req_journey_col = (
+        manifest.req_sheet.columns
+    )
+    uat_id_col, uat_title_col, uat_verdict_col, uat_journey_col, uat_req_col = (
+        manifest.uat_sheet.columns
+    )
+    return [
+        ["Column definitions", ""],
+        [],
+        [f"{manifest.req_sheet.name} sheet", ""],
+        [req_id_col, "The requirement's id."],
+        [req_title_col, "The requirement's title."],
+        [
+            test_column,
+            "Test-verification verdict: did this requirement's own tests "
+            "pass? See the legend below.",
+        ],
+        [
+            uat_column,
+            "User-acceptance verdict: did a user journey validating this "
+            "requirement pass? See the legend below.",
+        ],
+        [
+            req_journey_col,
+            "Repeats once per validating test case; each cell holds one "
+            "validating test-case identifier.",
+        ],
+        [],
+        [f"{manifest.uat_sheet.name} sheet", ""],
+        [uat_id_col, "The test case's identifier."],
+        [uat_title_col, "The test case's title."],
+        [uat_verdict_col, "The test case's verdict. See the legend below."],
+        [uat_journey_col, "The identifier of the source user journey."],
+        [
+            uat_req_col,
+            "Repeats once per validated requirement; each cell holds one "
+            "requirement id this test case validates.",
+        ],
+        [],
+        [
+            f"{manifest.provenance_sheet_name} sheet",
+            "This sheet: a label and its value, one pair per row.",
+        ],
+    ]
+
+
 def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
     # The legend names the two verdict columns by the titles the manifest
     # declares, so a consumer that renames them keeps a legend that matches
@@ -74,6 +140,8 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
         *[["Associate repository commit", c] for c in prov.associate_commits],
         ["elspais version", prov.elspais_version],
         ["Generator version", prov.tool_version],
+        [],
+        *_column_definition_rows(manifest),
         [],
         ["Verdict legend", ""],
         [
@@ -136,14 +204,52 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
             "means no test result has been ingested, the second means no "
             "validating journey has been run. Neither is a failure.",
         ],
-        [],
-        [
-            "Note",
-            "Coverage figures here are federated across every repository in the "
-            "graph. The checks report aggregates only its own repository, so the "
-            "two surfaces answer different questions and need not agree.",
-        ],
     ]
+
+
+def _size_columns_to_content(ws: Worksheet, rows: list[list[str]]) -> None:
+    """Set each column's width from the longest value actually in it,
+    clamped to [_MIN_COLUMN_WIDTH, _MAX_COLUMN_WIDTH]."""
+    n_cols = max((len(r) for r in rows), default=0)
+    for idx in range(n_cols):
+        longest = max(
+            (len(str(r[idx])) for r in rows if idx < len(r) and r[idx] is not None),
+            default=0,
+        )
+        width = max(_MIN_COLUMN_WIDTH, min(longest + _WIDTH_PADDING, _MAX_COLUMN_WIDTH))
+        ws.column_dimensions[get_column_letter(idx + 1)].width = width
+
+
+def _wrap_all_cells(ws: Worksheet) -> None:
+    """Turn on wrapping everywhere content exceeding the (capped) column
+    width would otherwise be clipped.
+
+    openpyxl cannot compute a fitted row height -- there is no text-layout
+    engine behind it -- so row heights are left at the viewer's default and
+    the viewer (Excel, Sheets, ...) grows them to fit on open/edit.
+    """
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+
+def _bold_header_row(ws: Worksheet) -> None:
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+
+def _bold_provenance_labels(ws: Worksheet, rows: list[list[str]]) -> None:
+    """Bold column A wherever it holds a label or heading.
+
+    The provenance sheet reads throughout as label/value pairs -- plain
+    facts ("Report", "Project"), section headings ("Column definitions",
+    "Verdict legend"), and column/legend-entry names alike sit in column A,
+    so bolding it uniformly bolds every one of them and nothing else (rows
+    that are pure explanatory prose keep column A blank).
+    """
+    for idx, row in enumerate(rows, start=1):
+        if row and row[0]:
+            ws.cell(row=idx, column=1).font = Font(bold=True)
 
 
 def write_workbook(
@@ -153,7 +259,7 @@ def write_workbook(
     uat_rows_: list[list[str]],
     provenance: Provenance,
 ) -> None:
-    """Write the three-sheet workbook.
+    """Write the three-sheet workbook, provenance first.
 
     Not committed: a workbook embeds creation and modification times and
     per-entry archive timestamps, so two with identical content differ byte
@@ -161,21 +267,33 @@ def write_workbook(
     """
     wb = Workbook()
 
-    req = wb.active
-    req.title = manifest.req_sheet.name
+    prov = wb.active
+    prov.title = manifest.provenance_sheet_name
+    prov_rows = _provenance_rows(manifest, provenance)
+    for row in prov_rows:
+        prov.append(row)
+    _bold_provenance_labels(prov, prov_rows)
+    _wrap_all_cells(prov)
+    _size_columns_to_content(prov, prov_rows)
+
+    req = wb.create_sheet(manifest.req_sheet.name)
     req_width = max([len(manifest.req_sheet.columns), *(len(r) for r in req_rows_)] or [0])
-    req.append(_headers(manifest.req_sheet.columns, req_width))
+    req_header = _headers(manifest.req_sheet.columns, req_width)
+    req.append(req_header)
     for row in req_rows_:
         req.append(row)
+    _bold_header_row(req)
+    _wrap_all_cells(req)
+    _size_columns_to_content(req, [req_header, *req_rows_])
 
     uat = wb.create_sheet(manifest.uat_sheet.name)
     uat_width = max([len(manifest.uat_sheet.columns), *(len(r) for r in uat_rows_)] or [0])
-    uat.append(_headers(manifest.uat_sheet.columns, uat_width))
+    uat_header = _headers(manifest.uat_sheet.columns, uat_width)
+    uat.append(uat_header)
     for row in uat_rows_:
         uat.append(row)
-
-    prov = wb.create_sheet(manifest.provenance_sheet_name)
-    for row in _provenance_rows(manifest, provenance):
-        prov.append(row)
+    _bold_header_row(uat)
+    _wrap_all_cells(uat)
+    _size_columns_to_content(uat, [uat_header, *uat_rows_])
 
     wb.save(Path(path))

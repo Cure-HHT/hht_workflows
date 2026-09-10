@@ -40,13 +40,14 @@ def test_csv_is_byte_identical_across_runs(tmp_path):
     ).hexdigest()
 
 
-def test_workbook_has_three_named_sheets(tmp_path, sample_manifest_path):
+def test_workbook_has_three_named_sheets_provenance_first(tmp_path, sample_manifest_path):
     m = Manifest.from_path(sample_manifest_path)
     out = tmp_path / "oq.xlsx"
     write_workbook(out, m, [["SPN-PRD-a", "A", "PASS", "PASS", "JNY-1"]],
                    [["UAT-JNY-1", "J", "PASS", "JNY-1", "SPN-PRD-a"]], _provenance())
     wb = openpyxl.load_workbook(out)
-    assert wb.sheetnames == ["REQ", "UAT Test Cases", "Provenance"]
+    assert wb.sheetnames == ["Provenance", "REQ", "UAT Test Cases"]
+    assert wb.active.title == "Provenance"
 
 
 def test_workbook_writes_headers_and_rows(tmp_path, sample_manifest_path):
@@ -133,6 +134,44 @@ def test_legend_uses_the_manifest_column_titles(tmp_path, sample_manifest_dict):
     assert "Test Result" not in text
 
 
+def test_column_definitions_use_the_manifest_uat_column_titles(
+    tmp_path, sample_manifest_dict
+):
+    """A consumer that renames a UAT-sheet column gets column definitions
+    matching its own sheet, the same guarantee as the REQ-sheet titles."""
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["sheets"] = {
+        **raw["sheets"],
+        "uat": {
+            "name": "UAT Test Cases",
+            "columns": [
+                "UAT Test Case ID", "Description", "Outcome",
+                "User Journey ID", "Req ID",
+            ],
+        },
+    }
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    text = _provenance_text(tmp_path, path)
+    assert "Outcome" in text
+    assert "Pass/Fail" not in text
+
+
+def test_provenance_sheet_reads_facts_then_definitions_then_legend(
+    tmp_path, sample_manifest_path
+):
+    """The sheet is laid out so it reads well as the first thing someone
+    sees: identifying facts first, then the column definitions, then the
+    verdict legend."""
+    text = _provenance_text(tmp_path, sample_manifest_path)
+    facts_at = text.index("Generated at (UTC)")
+    definitions_at = text.index("Column definitions")
+    legend_at = text.index("Verdict legend")
+    assert facts_at < definitions_at < legend_at
+
+
 def test_legend_distinguishes_the_two_not_run_meanings(
     tmp_path, sample_manifest_path
 ):
@@ -149,3 +188,82 @@ def test_legend_explains_the_carried_marker(tmp_path, sample_manifest_path):
     text = _provenance_text(tmp_path, sample_manifest_path)
     assert "(carried)" in text
     assert "carried forward from a baseline" in text.lower()
+
+
+def test_stale_federation_note_is_gone(tmp_path, sample_manifest_path):
+    """The report no longer states any coverage figure -- only verdicts --
+    so a note contrasting its coverage numbers with the checks report's own
+    aggregate describes something not on the sheet."""
+    text = _provenance_text(tmp_path, sample_manifest_path)
+    assert "federated across every repository" not in text
+    assert "checks report aggregates only its own repository" not in text
+
+
+def test_provenance_sheet_defines_every_grid_column(tmp_path, sample_manifest_path):
+    """A reader must be able to learn what every column means from the
+    workbook alone, named as the manifest declares them."""
+    text = _provenance_text(tmp_path, sample_manifest_path)
+    for title in ("Req ID", "Description", "Test Result", "UAT Result", "UAT Test Case ID"):
+        assert title in text
+    for title in ("Pass/Fail", "User Journey ID"):
+        assert title in text
+    assert "validating test-case identifier" in text.lower()
+    assert "validated requirement" in text.lower() or "requirement id this test case validates" in text.lower()
+
+
+def test_grid_sheet_headers_are_bold(tmp_path, sample_manifest_path):
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [["SPN-PRD-a", "A", "PASS", "PASS", "JNY-1"]],
+                   [["UAT-JNY-1", "J", "PASS", "JNY-1", "SPN-PRD-a"]], _provenance())
+    wb = openpyxl.load_workbook(out)
+    for name in ("REQ", "UAT Test Cases"):
+        ws = wb[name]
+        assert all(c.font.bold for c in ws[1])
+        # A data row is not bold.
+        assert not any(c.font.bold for c in ws[2])
+
+
+def test_provenance_labels_are_bold_but_prose_is_not(tmp_path, sample_manifest_path):
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [], [], _provenance())
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    labeled = [row for row in ws.iter_rows() if row[0].value]
+    assert labeled  # sanity: there are labeled rows
+    assert all(row[0].font.bold for row in labeled)
+    # A row whose first cell is blank carries explanatory prose, not a label.
+    prose_rows = [row for row in ws.iter_rows() if not row[0].value and row[1].value]
+    assert prose_rows
+    assert not any(row[0].font.bold for row in prose_rows)
+
+
+def test_cells_wrap_on_all_three_sheets(tmp_path, sample_manifest_path):
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [["SPN-PRD-a", "A", "PASS", "PASS", "JNY-1"]],
+                   [["UAT-JNY-1", "J", "PASS", "JNY-1", "SPN-PRD-a"]], _provenance())
+    wb = openpyxl.load_workbook(out)
+    for name in ("Provenance", "REQ", "UAT Test Cases"):
+        ws = wb[name]
+        for row in ws.iter_rows():
+            for cell in row:
+                assert cell.alignment.wrap_text is True
+
+
+def test_column_widths_are_bounded_and_content_driven(tmp_path, sample_manifest_path):
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    long_title = "A" * 500
+    write_workbook(
+        out, m,
+        [["SPN-PRD-a", long_title, "PASS", "PASS", "JNY-1"]],
+        [["UAT-JNY-1", "J", "PASS", "JNY-1", "SPN-PRD-a"]],
+        _provenance(),
+    )
+    ws = openpyxl.load_workbook(out)["REQ"]
+    # A 500-character title must not blow the column out arbitrarily wide.
+    assert ws.column_dimensions["B"].width <= 50
+    # The short-valued verdict columns must still stay readable.
+    assert ws.column_dimensions["C"].width >= 10
+    assert ws.column_dimensions["D"].width >= 10
