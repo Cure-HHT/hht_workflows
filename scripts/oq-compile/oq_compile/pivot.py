@@ -43,9 +43,19 @@ def requirement_verdict(req: Requirement) -> str:
 
 
 def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str]]:
-    """One row per requirement: id, title, verdict, then one journey per column."""
+    """One row per requirement: id, title, verdict, then one journey per column.
+
+    Each journey column carries the same `UAT Test Case ID` header as the UAT
+    sheet's identifier column, so it must hold the same value: the journey id
+    under the manifest's configured case prefix, not the raw journey id.
+    """
     return [
-        [r.id, r.title, requirement_verdict(r), *[j.id for j in r.journeys]]
+        [
+            r.id,
+            r.title,
+            requirement_verdict(r),
+            *[f"{manifest.uat_case_prefix}{j.id}" for j in r.journeys],
+        ]
         for r in sorted(reqs, key=lambda r: r.id)
     ]
 

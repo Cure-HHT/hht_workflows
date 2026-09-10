@@ -50,9 +50,24 @@ def test_req_rows_have_variable_width(sample_trace_path, sample_manifest_path):
     m = Manifest.from_path(sample_manifest_path)
     rows = req_rows(reqs, m)
     by_id = {r[0]: r for r in rows}
-    assert by_id["SPN-PRD-session-management"][3:] == ["JNY-AUTH-06"]
-    assert by_id["SPN-GUI-calendar-day-view"][3:] == ["JNY-EPIS-10", "JNY-EPIS-07"]
+    assert by_id["SPN-PRD-session-management"][3:] == ["UAT-JNY-AUTH-06"]
+    assert by_id["SPN-GUI-calendar-day-view"][3:] == ["UAT-JNY-EPIS-10", "UAT-JNY-EPIS-07"]
     assert by_id["SPN-PRD-audit-log"][3:] == []
+
+
+def test_req_rows_emit_the_prefixed_case_id_not_the_raw_journey_id(
+    sample_trace_path, sample_manifest_path
+):
+    """A reader following a `UAT Test Case ID` reference from the REQ sheet
+    must land on a real row on the UAT sheet, which is keyed by the prefixed
+    case id — not the raw journey id."""
+    reqs, _ = load_trace(sample_trace_path)
+    m = Manifest.from_path(sample_manifest_path)
+    rows = req_rows(reqs, m)
+    by_id = {r[0]: r for r in rows}
+    journey_cols = by_id["SPN-PRD-session-management"][3:]
+    assert journey_cols == ["UAT-JNY-AUTH-06"]
+    assert "JNY-AUTH-06" not in journey_cols
 
 
 def test_uat_rows_invert_the_mapping(
@@ -94,6 +109,27 @@ def test_rows_are_ordered_by_id(sample_trace_path, sample_manifest_path):
     m = Manifest.from_path(sample_manifest_path)
     ids = [r[0] for r in req_rows(reqs, m)]
     assert ids == sorted(ids)
+
+
+def test_req_sheet_journey_id_matches_uat_sheet_case_id(
+    sample_trace_path, sample_graph_path, sample_manifest_path
+):
+    """Cross-reference invariant: for a journey validating a requirement, the
+    identifier the REQ sheet emits for it must be identical to the identifier
+    the UAT sheet emits in its first column for that same journey. A reader
+    following a reference from one sheet to the other must land on a real
+    row on the other side."""
+    reqs, _ = load_trace(sample_trace_path)
+    titles = load_journeys(sample_graph_path)
+    m = Manifest.from_path(sample_manifest_path)
+
+    req_journey_ids = {
+        jid for row in req_rows(reqs, m) for jid in row[3:]
+    }
+    uat_case_ids = {row[0] for row in uat_rows(reqs, titles, m)}
+
+    assert req_journey_ids
+    assert req_journey_ids == uat_case_ids
 
 
 def test_journey_shared_across_two_reqs_with_same_verdict(sample_manifest_path):
