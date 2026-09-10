@@ -1,0 +1,109 @@
+---
+# Materialise another repository's whole content at a pinned commit, once per
+# run, at a path every later step reads.
+#
+# Whole content, not a curated subset: nothing here selects which files count,
+# so no class of file can change without changing what a consumer sees. A
+# subset would reproduce, in a new location, the defect of an artifact whose
+# identity does not move when its requirements do.
+#
+# Once per run, not once per consumer: the stamp makes a repeat request for the
+# same commit a no-op, so a run needing the upstream in five steps materialises
+# it once. Two steps reading the same path are reading the same bytes, not two
+# copies that happen to agree.
+
+name: Obtain upstream at a pinned commit
+description: >
+  Materialise another repository's whole content at a pinned commit, once per
+  run, at a path every later step reads. A second call naming the same commit
+  is a no-op.
+
+inputs:
+  repository:
+    description: 'Upstream as owner/name, e.g. cure-hht/hht_diary.'
+    required: true
+  commit:
+    description: 'The pinned commit: 40 lowercase hex characters.'
+    required: true
+  registry:
+    description: 'Registry holding the upstream artifacts.'
+    required: false
+    default: 'ghcr.io'
+  dest:
+    description: >
+      Where to materialise the tree. Defaults to a per-repository path under
+      the runner temp directory, so two upstreams in one run do not collide.
+    required: false
+    default: ''
+  token:
+    description: 'Token with read access to the upstream artifact.'
+    required: true
+
+outputs:
+  path:
+    description: 'Absolute path to the materialised tree.'
+    value: ${{ steps.materialise.outputs.path }}
+  digest:
+    description: 'Resolved artifact digest, for the provenance record.'
+    value: ${{ steps.materialise.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Materialise the upstream
+      id: materialise
+      shell: bash
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+        COMMIT: ${{ inputs.commit }}
+        REGISTRY: ${{ inputs.registry }}
+        DEST_INPUT: ${{ inputs.dest }}
+        TOKEN: ${{ inputs.token }}
+        ACTOR: ${{ github.actor }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        dest="${DEST_INPUT:-${RUNNER_TEMP}/upstream/${REPOSITORY##*/}}"
+
+        # An absent stamp is the ordinary first-call case, not an error, so its
+        # non-zero exit is tolerated here and only here. Any other failure of
+        # the reader still surfaces, because the value simply will not match.
+        existing=""
+        if stamped="$(python3 "${ACTION_PATH}/stamp.py" --read "$dest" 2>/dev/null)"; then
+          existing="$stamped"
+        fi
+
+        if [ "$existing" = "$COMMIT" ]; then
+          echo "already materialised at $dest ($COMMIT); not copying again"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "digest=$(cat "$dest/.upstream-digest")" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        ref="$(python3 "${ACTION_PATH}/resolve_pin.py" "$REGISTRY" "$REPOSITORY" "$COMMIT")"
+
+        echo "$TOKEN" | docker login "$REGISTRY" -u "$ACTOR" --password-stdin
+
+        if ! docker pull "$ref"; then
+          echo "::error::no artifact published for $REPOSITORY at $COMMIT."
+          echo "::error::Looked for: $ref"
+          echo "::error::The upstream publishes one artifact per commit on its main line."
+          echo "::error::A pin naming a commit that published nothing cannot be resolved,"
+          echo "::error::and this action will not fall back to a nearby revision."
+          exit 1
+        fi
+
+        digest="$(docker image inspect "$ref" --format '{{index .RepoDigests 0}}')"
+
+        mkdir -p "$dest"
+        cid="$(docker create "$ref")"
+        docker cp "$cid:/upstream/." "$dest"
+        docker rm "$cid" > /dev/null
+
+        printf '%s\n' "$digest" > "$dest/.upstream-digest"
+        python3 "${ACTION_PATH}/stamp.py" --write "$dest" "$COMMIT"
+
+        echo "materialised $REPOSITORY at $COMMIT -> $dest"
+        echo "path=$dest" >> "$GITHUB_OUTPUT"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"

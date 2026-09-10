@@ -1,0 +1,92 @@
+---
+# One artifact per commit on the main line, tagged by that commit.
+#
+# Unconditional on purpose. A consumer pins a commit, so an artifact has to
+# exist for every commit that can be pinned. A path filter here would leave
+# commits that published nothing, and a pin naming one of those cannot be
+# resolved -- the consumer fails, or worse, someone adds a fallback to a nearby
+# revision and the pin stops meaning anything.
+#
+# Filtering which checks run BEFORE a merge is a different question and belongs
+# on the pull-request workflows, where it costs nothing: an identity that does
+# not exist yet cannot be wrong. Do not "optimise" this trigger by adding paths.
+
+name: Publish artifact
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-artifact-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish this commit's artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the registry
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/cure-hht/hht_workflows:commit-${GITHUB_SHA}"
+
+          # The build context is the tracked tree at this commit, not the
+          # working directory: content defined by git rather than by an ignore
+          # list someone has to remember to maintain.
+          git archive --format=tar HEAD \
+            | docker build -f Dockerfile.artifact -t "$ref" -
+
+          docker push "$ref"
+          echo "published $ref"
+
+      - name: Confirm a consumer can read it
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/cure-hht/hht_workflows:commit-${GITHUB_SHA}"
+
+          # Publishing a pushable image is not the same as publishing a usable
+          # one. A consumer extracts the tree with `docker create` plus
+          # `docker cp`, so rehearse exactly that here -- an image that pushes
+          # but cannot be created would fail in every consumer instead, one
+          # repository away from the change that caused it.
+          cid="$(docker create "$ref")"
+          mkdir -p /tmp/artifact-check
+          docker cp "$cid:/upstream/." /tmp/artifact-check
+          docker rm "$cid" > /dev/null
+
+          if [ ! -f /tmp/artifact-check/pyproject.toml ]; then
+            echo "::error::the published artifact does not carry this repository's tree"
+            exit 1
+          fi
+          echo "artifact is readable and carries the repository tree"
+
+  # Implements: HHT-OPS-failure-notification-routing/A
+  #   The standard job, verbatim — notify-failure-lint checks it literally.
+  notify-failure:
+    name: Notify failure
+    needs: [publish]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+        with:
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}

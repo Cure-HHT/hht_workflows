@@ -146,6 +146,22 @@ Override the stem with `OUTPUT_BASENAME=custom` to produce `docs/custom.pdf`
 etc., or set `MANIFEST=spec/URS-manifest/other.yaml` to use a different manifest
 (stem `other` derives automatically).
 
+### Reproducible builds
+
+`SOURCE_DATE_EPOCH` fixes the build date the provenance file records, and is
+honoured by `pandoc` and `xelatex` as well, so it fixes the whole toolchain's
+idea of now:
+
+```bash
+SOURCE_DATE_EPOCH=1788998400 ./compile-urs.sh /path/to/consumer/worktree
+```
+
+Unset, the date comes from the clock. That means a recompile from identical
+sources produces a different provenance file the next day, so two builds cannot
+be compared byte for byte unless the epoch is fixed. Set it to a value derived
+from the sources being compiled — the newest input commit's date — rather than
+to an arbitrary constant, so the recorded date still means something.
+
 Prerequisites:
 
 - `pandoc` 3.x and `xelatex` on `PATH`

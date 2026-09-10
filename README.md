@@ -389,6 +389,23 @@ Consumers **SHA-pin** every `uses:` reference to this repo
 `@main` or a moving tag — an unreviewed change here would otherwise reach
 every consumer on their next run.
 
+### Published artifact
+
+Every commit on `main` publishes this repository's tracked tree as
+`ghcr.io/cure-hht/hht_workflows:commit-<sha>`, carrying the whole tree at
+`/upstream`. A consumer that needs these files — rather than a `uses:`
+reference to an action — pins a commit and reads that artifact through the
+`obtain-upstream` action.
+
+Publishing is unconditional. A consumer pins a commit, so an artifact has to
+exist for every commit that can be pinned; a path-filtered publish would leave
+commits that cannot be resolved. Filtering which checks run before a merge is a
+separate question and belongs on the pull-request workflows.
+
+The build context is `git archive HEAD`, so the artifact's content is the
+tracked tree and nothing else — no ignore list to maintain, and no untracked
+local state.
+
 ### Versioning & releases
 
 This repo follows semantic versioning:
