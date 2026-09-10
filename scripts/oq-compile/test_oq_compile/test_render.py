@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 import openpyxl
+from openpyxl.cell.cell import MergedCell
 
 from oq_compile.manifest import Manifest
 from oq_compile.render import Provenance, write_csv, write_workbook
@@ -248,7 +249,66 @@ def test_cells_wrap_on_all_three_sheets(tmp_path, sample_manifest_path):
         ws = wb[name]
         for row in ws.iter_rows():
             for cell in row:
+                # A block-heading row is merged A:B; the merged-away cell
+                # (column B) carries no style of its own -- only the anchor
+                # (column A) does.
+                if isinstance(cell, MergedCell):
+                    continue
                 assert cell.alignment.wrap_text is True
+
+
+def test_block_heading_rows_are_merged_and_centered(tmp_path, sample_manifest_path):
+    """Column definitions / <sheet> sheet / Verdict legend introduce a block
+    rather than pairing a label with a value: they merge A:B and centre.
+    Detected structurally (column A set, column B empty), not by matching
+    the heading text -- two of the four headings come from manifest-supplied
+    sheet names."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [], [], _provenance())
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    merged = {str(r) for r in ws.merged_cells.ranges}
+
+    heading_cells = [
+        row[0]
+        for row in ws.iter_rows()
+        if row[0].value and row[1].value is None
+    ]
+    assert heading_cells, "expected at least one block-heading row"
+    for cell in heading_cells:
+        assert cell.alignment.horizontal == "center"
+        merge_range = f"A{cell.row}:B{cell.row}"
+        assert merge_range in merged, f"{merge_range} not merged ({merged})"
+
+    headings = {c.value for c in heading_cells}
+    assert headings == {
+        "Column definitions",
+        f"{m.req_sheet.name} sheet",
+        f"{m.uat_sheet.name} sheet",
+        "Verdict legend",
+    }
+
+    # A label/value row is untouched: not merged, not centred.
+    report_cell = ws["A1"]
+    assert report_cell.value == "Report"
+    assert "A1:B1" not in merged
+    assert report_cell.alignment.horizontal != "center"
+
+
+def test_no_self_definition_row_for_the_provenance_sheet(
+    tmp_path, sample_manifest_path
+):
+    """The sheet a reader is already looking at does not need explaining --
+    the definitions block only describes the REQ and UAT Test Cases sheets."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [], [], _provenance())
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    text = "\n".join(
+        str(c.value) for row in ws.iter_rows() for c in row if c.value is not None
+    )
+    assert f"{m.provenance_sheet_name} sheet" not in text
+    assert "one pair per row" not in text
 
 
 def test_column_widths_are_bounded_and_content_driven(tmp_path, sample_manifest_path):

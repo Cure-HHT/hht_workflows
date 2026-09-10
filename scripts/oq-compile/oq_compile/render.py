@@ -82,9 +82,9 @@ def _column_definition_rows(manifest: Manifest) -> list[list[str]]:
         manifest.uat_sheet.columns
     )
     return [
-        ["Column definitions", ""],
+        ["Column definitions"],
         [],
-        [f"{manifest.req_sheet.name} sheet", ""],
+        [f"{manifest.req_sheet.name} sheet"],
         [req_id_col, "The requirement's id."],
         [req_title_col, "The requirement's title."],
         [
@@ -103,7 +103,7 @@ def _column_definition_rows(manifest: Manifest) -> list[list[str]]:
             "validating test-case identifier.",
         ],
         [],
-        [f"{manifest.uat_sheet.name} sheet", ""],
+        [f"{manifest.uat_sheet.name} sheet"],
         [uat_id_col, "The test case's identifier."],
         [uat_title_col, "The test case's title."],
         [uat_verdict_col, "The test case's verdict. See the legend below."],
@@ -112,11 +112,6 @@ def _column_definition_rows(manifest: Manifest) -> list[list[str]]:
             uat_req_col,
             "Repeats once per validated requirement; each cell holds one "
             "requirement id this test case validates.",
-        ],
-        [],
-        [
-            f"{manifest.provenance_sheet_name} sheet",
-            "This sheet: a label and its value, one pair per row.",
         ],
     ]
 
@@ -143,7 +138,7 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
         [],
         *_column_definition_rows(manifest),
         [],
-        ["Verdict legend", ""],
+        ["Verdict legend"],
         [
             "",
             "Each requirement carries two independent kinds of evidence, in "
@@ -252,6 +247,28 @@ def _bold_provenance_labels(ws: Worksheet, rows: list[list[str]]) -> None:
             ws.cell(row=idx, column=1).font = Font(bold=True)
 
 
+def _merge_and_center_block_headings(ws: Worksheet, rows: list[list[str]]) -> None:
+    """Merge A:B and centre each block-heading row.
+
+    A block heading -- "Column definitions", a sheet-name heading introducing
+    that sheet's column definitions, "Verdict legend" -- is authored with no
+    column-B slot at all: a one-element row, rather than a label/value pair.
+    Every other row, including blank separators and the two rows of pure
+    explanatory prose (column A blank, column B holding the sentence), keeps
+    its two-column left-aligned form. Detecting the row's arity rather than
+    matching specific heading text keeps this correct for the two headings
+    the manifest supplies as sheet names, not just the ones defined in this
+    module -- and does not misfire on a fact row (e.g. a commit hash) whose
+    *value* happens to be an empty string.
+    """
+    for idx, row in enumerate(rows, start=1):
+        if row and row[0] and len(row) < 2:
+            ws.merge_cells(start_row=idx, start_column=1, end_row=idx, end_column=2)
+            ws.cell(row=idx, column=1).alignment = Alignment(
+                horizontal="center", vertical="center", wrap_text=True
+            )
+
+
 def write_workbook(
     path: Path,
     manifest: Manifest,
@@ -274,6 +291,7 @@ def write_workbook(
         prov.append(row)
     _bold_provenance_labels(prov, prov_rows)
     _wrap_all_cells(prov)
+    _merge_and_center_block_headings(prov, prov_rows)
     _size_columns_to_content(prov, prov_rows)
 
     req = wb.create_sheet(manifest.req_sheet.name)
