@@ -1,0 +1,30 @@
+version = 5
+
+[project]
+namespace = "SPN"
+name = "Readiness Fixture"
+
+[id-patterns]
+canonical = "{namespace}-{level.letter}-{component}"
+
+[id-patterns.assertions]
+separator = "/"
+label_style = "uppercase"
+multi_separator = "+"
+
+[levels.PRD]
+rank = 1
+letter = "PRD"
+implements = ["PRD"]
+expects_validation = true
+
+[levels.GUI]
+rank = 2
+letter = "GUI"
+implements = ["GUI", "PRD"]
+
+[scopes.readiness]
+level = ["PRD", "GUI"]
+
+[[scanning.spec.targets]]
+path = "spec"

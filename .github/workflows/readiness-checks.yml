@@ -393,6 +393,44 @@ jobs:
           grep -q "DIARY-DEV-sample-internal" "$d"/build/urs-assembled*.md
           echo "build-urs readiness OK: urs.pdf + urs.docx produced with expected content."
 
+  build-oq:
+    # End-to-end readiness check for the build-oq composite action: compiles
+    # the self-contained synthetic fixture and asserts both the committed CSV
+    # extract and the run-bound workbook are produced, with the fixture
+    # journey traced to the fixture requirement.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize fixture repo
+        # elspais resolves a project root via `git rev-parse --show-toplevel`;
+        # the fixture needs its own toplevel. No commit required.
+        run: git init -q scripts/oq-compile/test_oq_compile/fixtures/readiness/primary
+      - name: Compile the readiness fixture
+        uses: ./.github/actions/build-oq
+        with:
+          # Tracks the estate-wide elspais pin (consumers' .github/versions.env).
+          elspais-version: "0.123.0"
+          primary-root: scripts/oq-compile/test_oq_compile/fixtures/readiness/primary
+          manifest: spec/OQ-manifest/oq.yaml
+      - name: Assert deliverables exist and carry fixture content
+        run: |
+          set -euo pipefail
+          d=scripts/oq-compile/test_oq_compile/fixtures/readiness/primary
+          test -s "$d/promotion-evidence/_reports/oq-req.csv"
+          test -s "$d/promotion-evidence/_reports/oq-uat.csv"
+          test -s "$d/promotion-evidence/_build/oq-report.xlsx"
+          grep -q "SPN-PRD-fixture-obligation" "$d/promotion-evidence/_reports/oq-req.csv"
+          grep -q "JNY-FIX-01" "$d/promotion-evidence/_reports/oq-req.csv"
+          grep -q "UAT-JNY-FIX-01" "$d/promotion-evidence/_reports/oq-uat.csv"
+          # An unverified journey must read NOT RUN, never FAIL.
+          grep -q "NOT RUN" "$d/promotion-evidence/_reports/oq-req.csv"
+          if grep -q "FAIL" "$d/promotion-evidence/_reports/oq-req.csv"; then
+            echo "::error::unverified journey rendered as FAIL" >&2
+            exit 1
+          fi
+
   confidential-terms-scan:
     # Implements: HHT-OPS-confidential-keywords-scrubbing/F,G,I
     #   End-to-end readiness of the scanner action. Uses test_terms
@@ -836,6 +874,7 @@ jobs:
   notify-failure:
     name: Notify failure
     needs:
+      - build-oq
       - build-urs
       - confidential-terms-gate
       - confidential-terms-scan
