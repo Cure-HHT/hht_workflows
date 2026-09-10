@@ -34,6 +34,12 @@ _WIDTH_PADDING = 2
 _FAIL_FONT_COLOR = "9C0006"
 _PASS_FONT_COLOR = "006100"
 
+#: The organisation that produces these reports. Fixed across every
+#: consumer -- unlike the sponsor, it is not something a manifest declares
+#: or a repo-relative file states, so it is a constant here rather than a
+#: field threaded through Manifest/Provenance.
+VENDOR_NAME = "Anspar Foundation"
+
 
 @dataclass(frozen=True)
 class Provenance:
@@ -46,6 +52,21 @@ class Provenance:
     generated_at: str
     req_count: int
     uat_count: int
+    #: The sponsor's legal name, read from the consuming repo's
+    #: sponsor-info.yaml. None when that file (or its urs_manifest
+    #: declaration, or the sponsor_name key) is absent -- the Sponsor row is
+    #: then omitted rather than shown empty or with a placeholder.
+    sponsor_name: str | None = None
+    #: The study protocol number, read from the same sponsor-info.yaml's
+    #: protocol_number key. Independently optional of protocol_version and
+    #: sponsor_name -- a file naming this but not the others yields only
+    #: this row.
+    protocol_number: str | None = None
+    #: The study protocol version, read from the same sponsor-info.yaml's
+    #: protocol_version key. Independently optional of protocol_number and
+    #: sponsor_name -- a file naming this but not the others yields only
+    #: this row.
+    protocol_version: str | None = None
 
 
 def _headers(columns: tuple[str, ...], width: int) -> list[str]:
@@ -141,9 +162,20 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
     # declares, so a consumer that renames them keeps a legend that matches
     # its own sheet. The manifest guarantees both are present.
     test_column, uat_column = manifest.req_columns_without_section()[2:4]
-    return [
+    identity_rows: list[list[str]] = [
         ["Report", manifest.title],
-        ["Project", manifest.project],
+    ]
+    if prov.protocol_number:
+        identity_rows.append(["Protocol number", prov.protocol_number])
+    if prov.protocol_version:
+        identity_rows.append(["Protocol version", prov.protocol_version])
+    identity_rows.append(["Project", manifest.project])
+    identity_rows.append(["Vendor", VENDOR_NAME])
+    if prov.sponsor_name:
+        identity_rows.append(["Sponsor", prov.sponsor_name])
+    identity_rows.append([])
+    return [
+        *identity_rows,
         ["Generated at (UTC)", prov.generated_at],
         [],
         ["Scope name", prov.scope_name],

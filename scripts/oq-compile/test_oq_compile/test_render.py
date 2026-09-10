@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 
 import openpyxl
 from openpyxl.cell.cell import MergedCell
 
 from oq_compile.manifest import Manifest
-from oq_compile.render import Provenance, write_csv, write_workbook
+from oq_compile.render import VENDOR_NAME, Provenance, write_csv, write_workbook
 
 
 def _provenance():
@@ -522,3 +523,144 @@ def test_colour_coding_sentence_does_not_hardcode_sheet_names(
     assert "UAT Test Cases" not in sentence
     assert "Requirements" not in sentence
     assert "Acceptance Tests" not in sentence
+
+
+def _provenance_grid(tmp_path, manifest_path, provenance):
+    m = Manifest.from_path(manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [], [], provenance)
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    return [list(row) for row in ws.iter_rows(min_row=1, max_row=8, values_only=True)]
+
+
+def test_vendor_row_present_regardless_of_sponsor(tmp_path, sample_manifest_path):
+    """The vendor is fixed identity of the tool, not of the consumer -- it
+    appears whether or not a sponsor name is resolvable."""
+    for sponsor_name in (None, "Example Sponsor, Inc."):
+        prov = dataclasses.replace(_provenance(), sponsor_name=sponsor_name)
+        grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+        assert ["Vendor", VENDOR_NAME] in grid
+
+
+def test_vendor_and_sponsor_rows_are_placed_after_project_before_generated_at(
+    tmp_path, sample_manifest_path
+):
+    prov = dataclasses.replace(
+        _provenance(), sponsor_name="Example Sponsor, Inc."
+    )
+    grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+    assert grid[:6] == [
+        ["Report", "Operational Qualification — Traceability Report"],
+        ["Project", "Example Study"],
+        ["Vendor", VENDOR_NAME],
+        ["Sponsor", "Example Sponsor, Inc."],
+        [None, None],
+        ["Generated at (UTC)", "2026-09-09T12:00:00Z"],
+    ]
+
+
+def test_sponsor_row_omitted_when_sponsor_name_is_none(tmp_path, sample_manifest_path):
+    """No sponsor-info.yaml, or no sponsor_name key in it, means no Sponsor
+    row -- not an empty or placeholder one -- and the report is otherwise
+    unaffected: the blank separator and Generated-at row still follow."""
+    prov = dataclasses.replace(_provenance(), sponsor_name=None)
+    grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+    assert grid[:5] == [
+        ["Report", "Operational Qualification — Traceability Report"],
+        ["Project", "Example Study"],
+        ["Vendor", VENDOR_NAME],
+        [None, None],
+        ["Generated at (UTC)", "2026-09-09T12:00:00Z"],
+    ]
+    assert "Sponsor" not in [row[0] for row in grid]
+
+
+def test_protocol_rows_present_and_ordered_between_report_and_project(
+    tmp_path, sample_manifest_path
+):
+    """Protocol number and Protocol version land immediately after Report
+    and before Project -- rows 2 and 3, pushing Project down."""
+    prov = dataclasses.replace(
+        _provenance(), protocol_number="EXAMPLE-0001", protocol_version="3.0"
+    )
+    grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+    assert grid[:7] == [
+        ["Report", "Operational Qualification — Traceability Report"],
+        ["Protocol number", "EXAMPLE-0001"],
+        ["Protocol version", "3.0"],
+        ["Project", "Example Study"],
+        ["Vendor", VENDOR_NAME],
+        [None, None],
+        ["Generated at (UTC)", "2026-09-09T12:00:00Z"],
+    ]
+
+
+def test_protocol_row_labels_are_bold_like_their_neighbours(
+    tmp_path, sample_manifest_path
+):
+    """Protocol number / Protocol version are identity rows styled the same
+    as Report, Project, Vendor and Sponsor around them: bold label cell."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    prov = dataclasses.replace(
+        _provenance(), protocol_number="EXAMPLE-0001", protocol_version="3.0"
+    )
+    write_workbook(out, m, [], [], prov)
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    assert ws["A2"].value == "Protocol number"
+    assert ws["A3"].value == "Protocol version"
+    assert ws["A2"].font.bold
+    assert ws["A3"].font.bold
+
+
+def test_protocol_number_row_omitted_when_absent(tmp_path, sample_manifest_path):
+    """protocol_number and protocol_version are independently optional: a
+    version with no number yields one row, not zero and not a blank."""
+    prov = dataclasses.replace(
+        _provenance(), protocol_number=None, protocol_version="3.0"
+    )
+    grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+    assert grid[:6] == [
+        ["Report", "Operational Qualification — Traceability Report"],
+        ["Protocol version", "3.0"],
+        ["Project", "Example Study"],
+        ["Vendor", VENDOR_NAME],
+        [None, None],
+        ["Generated at (UTC)", "2026-09-09T12:00:00Z"],
+    ]
+    assert "Protocol number" not in [row[0] for row in grid]
+
+
+def test_protocol_version_row_omitted_when_absent(tmp_path, sample_manifest_path):
+    prov = dataclasses.replace(
+        _provenance(), protocol_number="EXAMPLE-0001", protocol_version=None
+    )
+    grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+    assert grid[:6] == [
+        ["Report", "Operational Qualification — Traceability Report"],
+        ["Protocol number", "EXAMPLE-0001"],
+        ["Project", "Example Study"],
+        ["Vendor", VENDOR_NAME],
+        [None, None],
+        ["Generated at (UTC)", "2026-09-09T12:00:00Z"],
+    ]
+    assert "Protocol version" not in [row[0] for row in grid]
+
+
+def test_both_protocol_rows_omitted_when_both_absent(tmp_path, sample_manifest_path):
+    """The default Provenance (as build() constructs it when sponsor-info.yaml
+    is entirely absent) carries neither field: no Protocol number or
+    Protocol version row, and Report is immediately followed by Project."""
+    prov = dataclasses.replace(
+        _provenance(), protocol_number=None, protocol_version=None
+    )
+    grid = _provenance_grid(tmp_path, sample_manifest_path, prov)
+    assert grid[:5] == [
+        ["Report", "Operational Qualification — Traceability Report"],
+        ["Project", "Example Study"],
+        ["Vendor", VENDOR_NAME],
+        [None, None],
+        ["Generated at (UTC)", "2026-09-09T12:00:00Z"],
+    ]
+    assert "Protocol number" not in [row[0] for row in grid]
+    assert "Protocol version" not in [row[0] for row in grid]

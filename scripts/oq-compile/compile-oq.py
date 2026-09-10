@@ -19,6 +19,11 @@ from oq_compile.load import Requirement, load_journeys, load_trace  # noqa: E402
 from oq_compile.manifest import Manifest  # noqa: E402
 from oq_compile.pivot import req_rows, uat_rows  # noqa: E402
 from oq_compile.render import Provenance, write_csv, write_workbook  # noqa: E402
+from oq_compile.sponsor_info import (  # noqa: E402
+    resolve_protocol_number,
+    resolve_protocol_version,
+    resolve_sponsor_name,
+)
 from oq_compile.urs_sections import (  # noqa: E402
     resolve_urs_manifest_path,
     section_numbers,
@@ -101,13 +106,22 @@ def build(
     # declares no URS manifest and gets a report without it. Declaring one
     # that cannot be read is an error, not a blank column.
     sections: dict[str, str] = {}
+    urs_manifest_path: Path | None = None
     if manifest.urs_manifest:
-        sections = section_numbers(
-            resolve_urs_manifest_path(
-                manifest.urs_manifest, Path(manifest_path), primary_root
-            ),
-            Path(graph_path),
+        urs_manifest_path = resolve_urs_manifest_path(
+            manifest.urs_manifest, Path(manifest_path), primary_root
         )
+        sections = section_numbers(urs_manifest_path, Path(graph_path))
+
+    # The Sponsor, Protocol number and Protocol version rows are optional the
+    # same way: sponsor-info.yaml sits beside the URS manifest this consumer
+    # already declared above, so no separate manifest key names its path.
+    # Each is absent entirely for a consumer with no URS manifest, no
+    # sponsor-info.yaml, or no corresponding key -- independently of the
+    # other two.
+    sponsor_name = resolve_sponsor_name(urs_manifest_path)
+    protocol_number = resolve_protocol_number(urs_manifest_path)
+    protocol_version = resolve_protocol_version(urs_manifest_path)
 
     rows_req = req_rows(requirements, manifest, sections)
     rows_uat = uat_rows(requirements, journey_titles, manifest)
@@ -135,6 +149,9 @@ def build(
         ),
         req_count=len(rows_req),
         uat_count=len(rows_uat),
+        sponsor_name=sponsor_name,
+        protocol_number=protocol_number,
+        protocol_version=protocol_version,
     )
 
     csv_dir = Path(out_csv_dir)

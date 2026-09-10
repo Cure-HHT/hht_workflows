@@ -297,6 +297,108 @@ def test_all_declared_namespaces_present_passes(
     assert counts == (3, 3)
 
 
+def _urs_backed_manifest_path(tmp_path, primary_root, *, columns_extra=True):
+    """An OQ manifest declaring a urs_manifest, alongside a minimal (but
+    valid) URS manifest under primary_root -- everything resolve_sponsor_name
+    needs to look beside it for sponsor-info.yaml."""
+    import yaml
+
+    urs_dir = primary_root / "spec" / "URS-manifest"
+    urs_dir.mkdir(parents=True, exist_ok=True)
+    (urs_dir / "urs.yaml").write_text("document: {}\n")
+
+    req_columns = ["Req ID", "Description", "Test Result", "UAT Result", "UAT Test Case ID"]
+    if columns_extra:
+        req_columns.insert(1, "URS Section")
+    doc = {
+        "document": {"title": "OQ", "project": "Example Study"},
+        "scope": "example-scope",
+        "urs_manifest": "spec/URS-manifest/urs.yaml",
+        "sheets": {
+            "req": {"name": "Requirements", "columns": req_columns},
+            "uat": {
+                "name": "UAT Test Cases",
+                "columns": [
+                    "UAT Test Case ID", "Description", "Pass/Fail",
+                    "User Journey ID", "Req ID",
+                ],
+            },
+        },
+    }
+    path = tmp_path / "oq.yaml"
+    path.write_text(yaml.safe_dump(doc))
+    return path, urs_dir
+
+
+def test_sponsor_row_resolved_from_sponsor_info_yaml(
+    compile_oq, tmp_path, sample_trace_path, sample_graph_path
+):
+    """End-to-end: a real sponsor-info.yaml beside the URS manifest this OQ
+    manifest declares is the only source for the Sponsor row's value."""
+    import openpyxl
+
+    from oq_compile.render import VENDOR_NAME
+
+    primary_root = tmp_path / "primary"
+    manifest_path, urs_dir = _urs_backed_manifest_path(tmp_path, primary_root)
+    (urs_dir / "sponsor-info.yaml").write_text(
+        "sponsor_name: Example Sponsor, Inc.\n"
+    )
+    out_xlsx = tmp_path / "build" / "oq.xlsx"
+
+    compile_oq.build(
+        manifest_path=manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=out_xlsx,
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        primary_root=primary_root,
+    )
+
+    wb = openpyxl.load_workbook(out_xlsx)
+    prov_rows = dict(
+        (row[0], row[1])
+        for row in wb["Provenance"].iter_rows(values_only=True)
+        if row and row[0]
+    )
+    assert prov_rows["Vendor"] == VENDOR_NAME
+    assert prov_rows["Sponsor"] == "Example Sponsor, Inc."
+
+
+def test_sponsor_row_absent_without_a_sponsor_info_file(
+    compile_oq, tmp_path, sample_trace_path, sample_graph_path
+):
+    """A urs_manifest is declared, but no sponsor-info.yaml sits beside it
+    -- the report is still produced, just without a Sponsor row."""
+    import openpyxl
+
+    from oq_compile.render import VENDOR_NAME
+
+    primary_root = tmp_path / "primary"
+    manifest_path, _urs_dir = _urs_backed_manifest_path(tmp_path, primary_root)
+    out_xlsx = tmp_path / "build" / "oq.xlsx"
+
+    compile_oq.build(
+        manifest_path=manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=out_xlsx,
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        primary_root=primary_root,
+    )
+
+    wb = openpyxl.load_workbook(out_xlsx)
+    prov_rows = dict(
+        (row[0], row[1])
+        for row in wb["Provenance"].iter_rows(values_only=True)
+        if row and row[0]
+    )
+    assert prov_rows["Vendor"] == VENDOR_NAME
+    assert "Sponsor" not in prov_rows
+
+
 def test_no_namespace_declaration_behaves_as_before(
     compile_oq, tmp_path, sample_manifest_path, sample_trace_path, sample_graph_path
 ):
@@ -384,3 +486,70 @@ def test_zero_uat_rows_permitted_with_flag(
         allow_empty=True,
     )
     assert counts == (1, 0)
+
+
+def test_protocol_rows_resolved_from_sponsor_info_yaml(
+    compile_oq, tmp_path, sample_trace_path, sample_graph_path
+):
+    """End-to-end: a real sponsor-info.yaml beside the URS manifest this OQ
+    manifest declares is the only source for the Protocol number and
+    Protocol version rows, same as the Sponsor row above."""
+    import openpyxl
+
+    primary_root = tmp_path / "primary"
+    manifest_path, urs_dir = _urs_backed_manifest_path(tmp_path, primary_root)
+    (urs_dir / "sponsor-info.yaml").write_text(
+        "protocol_number: EXAMPLE-0001\nprotocol_version: '3.0'\n"
+    )
+    out_xlsx = tmp_path / "build" / "oq.xlsx"
+
+    compile_oq.build(
+        manifest_path=manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=out_xlsx,
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        primary_root=primary_root,
+    )
+
+    wb = openpyxl.load_workbook(out_xlsx)
+    prov_rows = dict(
+        (row[0], row[1])
+        for row in wb["Provenance"].iter_rows(values_only=True)
+        if row and row[0]
+    )
+    assert prov_rows["Protocol number"] == "EXAMPLE-0001"
+    assert prov_rows["Protocol version"] == "3.0"
+
+
+def test_protocol_rows_absent_without_a_sponsor_info_file(
+    compile_oq, tmp_path, sample_trace_path, sample_graph_path
+):
+    """A urs_manifest is declared, but no sponsor-info.yaml sits beside it
+    -- the report is still produced, just without Protocol number or
+    Protocol version rows (same file-absent case the Sponsor row covers)."""
+    import openpyxl
+
+    primary_root = tmp_path / "primary"
+    manifest_path, _urs_dir = _urs_backed_manifest_path(tmp_path, primary_root)
+    out_xlsx = tmp_path / "build" / "oq.xlsx"
+
+    compile_oq.build(
+        manifest_path=manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=out_xlsx,
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        primary_root=primary_root,
+    )
+
+    wb = openpyxl.load_workbook(out_xlsx)
+    prov_rows = dict(
+        (row[0], row[1])
+        for row in wb["Provenance"].iter_rows(values_only=True)
+        if row and row[0]
+    )
+    assert "Protocol number" not in prov_rows
+    assert "Protocol version" not in prov_rows
