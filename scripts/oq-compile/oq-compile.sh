@@ -84,13 +84,18 @@ for root in "${ROOTS[@]:-}"; do
   ASSOC_ARGS+=(--associate-commit "$(basename "$root")@${sha}")
 done
 
-"$PYTHON" "${SCRIPT_DIR}/compile-oq.py" \
-  --manifest "${PRIMARY_ROOT}/${MANIFEST}" \
-  --trace "${WORK}/trace-uat.json" \
-  --graph "${WORK}/graph.json" \
-  --out-csv-dir "${PRIMARY_ROOT}/${REPORTS_DIR}" \
-  --out-xlsx "${PRIMARY_ROOT}/${BUILD_DIR}/oq-report.xlsx" \
-  --primary-commit "$PRIMARY_COMMIT" \
-  --elspais-version "$ELSPAIS_VERSION" \
-  --tool-version "$TOOL_VERSION" \
-  "${ASSOC_ARGS[@]:-}"
+declare -a CMD=(
+  "$PYTHON" "${SCRIPT_DIR}/compile-oq.py"
+  --manifest "${PRIMARY_ROOT}/${MANIFEST}"
+  --trace "${WORK}/trace-uat.json"
+  --graph "${WORK}/graph.json"
+  --out-csv-dir "${PRIMARY_ROOT}/${REPORTS_DIR}"
+  --out-xlsx "${PRIMARY_ROOT}/${BUILD_DIR}/oq-report.xlsx"
+  --primary-commit "$PRIMARY_COMMIT"
+  --elspais-version "$ELSPAIS_VERSION"
+  --tool-version "$TOOL_VERSION"
+)
+if [ "${#ASSOC_ARGS[@]}" -gt 0 ]; then
+  CMD+=("${ASSOC_ARGS[@]}")
+fi
+"${CMD[@]}"
