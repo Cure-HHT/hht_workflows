@@ -37,6 +37,12 @@ pytestmark = pytest.mark.skipif(
 _STUB_ELSPAIS = """#!/usr/bin/env bash
 set -euo pipefail
 FIXTURES="{fixtures}"
+# Record every invocation's argv so a test can assert the CLI contract the
+# entrypoint depends on, which is otherwise invisible: the stub answers the
+# same whatever flags it is handed.
+if [ -n "${{ELSPAIS_ARGV_LOG:-}}" ]; then
+  printf '%s\\n' "$*" >> "$ELSPAIS_ARGV_LOG"
+fi
 _out_arg() {{
   local prev=""
   for a in "$@"; do
@@ -110,12 +116,14 @@ def _make_primary(root: Path) -> None:
 
 
 def _run_entrypoint(
-    tmp_path: Path, primary: Path, *extra_args: str
+    tmp_path: Path, primary: Path, *extra_args: str, argv_log: Path | None = None
 ) -> subprocess.CompletedProcess:
     bin_dir = tmp_path / "bin"
     _make_stub_elspais(bin_dir)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    if argv_log is not None:
+        env["ELSPAIS_ARGV_LOG"] = str(argv_log)
     return subprocess.run(
         ["bash", str(ENTRYPOINT), str(primary), *extra_args],
         env=env,
@@ -162,3 +170,30 @@ def test_with_associate_root_reaches_provenance(tmp_path):
     matches = [row for row in prov_rows if row[0] == "Associate repository commit"]
     assert matches, "no 'Associate repository commit' row in the Provenance sheet"
     assert matches[0][1] == f"associate@{associate_sha}"
+
+
+def test_trace_asks_for_the_verification_values_and_not_the_uat_dimension(tmp_path):
+    """The requirement sheet reports test-verification evidence beside the
+    user-acceptance verdict. `--dimension uat` suppresses the `verified` and
+    `tested` figures that evidence is computed from, so the entrypoint must
+    name the values instead. Nothing else in the suite sees the flags the
+    entrypoint sends -- the loader is fed fixtures -- so a silent reversion
+    here would render a report whose test column is uniformly wrong."""
+    primary = tmp_path / "primary"
+    _make_primary(primary)
+    argv_log = tmp_path / "elspais-argv.log"
+
+    result = _run_entrypoint(tmp_path, primary, argv_log=argv_log)
+    assert result.returncode == 0, (
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+    trace_calls = [
+        line for line in argv_log.read_text().splitlines() if line.startswith("trace ")
+    ]
+    assert len(trace_calls) == 1, argv_log.read_text()
+    call = trace_calls[0]
+    assert "--dimension" not in call
+    assert (
+        "--values id,title,level,status,verified,tested,uat_verified,journeys" in call
+    )

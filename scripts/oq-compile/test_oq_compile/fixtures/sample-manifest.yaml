@@ -6,7 +6,7 @@ uat_case_prefix: "UAT-"
 sheets:
   req:
     name: "REQ"
-    columns: ["Req ID", "Description", "Pass/Fail", "UAT Test Case ID"]
+    columns: ["Req ID", "Description", "Test Result", "UAT Result", "UAT Test Case ID"]
   uat:
     name: "UAT Test Cases"
     columns: ["UAT Test Case ID", "Description", "Pass/Fail", "User Journey ID", "Req ID"]

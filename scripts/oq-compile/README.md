@@ -25,6 +25,32 @@ pip install -r scripts/oq-compile/requirements-oq.txt
 scripts/oq-compile/oq-compile.sh /path/to/primary /path/to/associate
 ```
 
+## The two kinds of evidence
+
+The requirement sheet reports two verdicts per requirement, in two columns,
+and never combines them:
+
+| Column | Question it answers |
+| --- | --- |
+| test result | Did this requirement's own tests (unit, integration, end-to-end) pass? |
+| UAT result | Did a user journey validating this requirement pass? |
+
+Both use the same three labels and the same asymmetry. FAIL when something
+actually failed; PASS only on complete verification, never on partial; NOT RUN
+for every remaining state. A test that exists but whose result has not been
+ingested reports NOT RUN, never FAIL — absence of evidence is not evidence of
+failure.
+
+They are kept apart so a reader can see which kind of evidence is missing or
+failing, which a single rolled-up verdict hides. A test result whose
+verification was carried forward from a baseline rather than produced by a
+fresh run is marked `(carried)` on the cell, and the provenance sheet's legend
+explains both columns, both meanings of NOT RUN, and the marker.
+
+The trace export therefore names its values explicitly rather than selecting
+`--dimension uat`: that dimension suppresses the `verified` and `tested`
+figures the test-result column is computed from.
+
 ## Configuration
 
 The consuming repo supplies `spec/OQ-manifest/oq.yaml` (document title and
@@ -62,6 +88,9 @@ The generator writes nothing and exits non-zero when:
 - the selection yields zero UAT test cases (a full REQ sheet with an empty UAT
   sheet is what a dropped or renamed `journeys` key produces);
 - a namespace declared in `require_namespaces` contributes no row;
+- the manifest's REQ sheet does not declare exactly five columns (requirement
+  id, description, test result, UAT result, and the journey column that
+  repeats);
 - the trace is a dict carrying no recognised rows key;
 - a required field is absent from a trace row;
 - the graph yields no journey node while the trace cites at least one.

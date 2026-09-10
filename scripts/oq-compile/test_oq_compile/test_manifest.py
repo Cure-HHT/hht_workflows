@@ -72,3 +72,66 @@ def test_scalar_require_namespaces_fails_loud(tmp_path, sample_manifest_dict):
     with pytest.raises(ValueError) as excinfo:
         Manifest.from_path(path)
     assert "require_namespaces" in str(excinfo.value)
+
+
+def test_req_sheet_columns_are_loaded_in_order(sample_manifest_path):
+    """Both verdict columns are declared by the consumer, in the order the
+    rows emit them."""
+    m = Manifest.from_path(sample_manifest_path)
+    assert m.req_sheet.columns == (
+        "Req ID",
+        "Description",
+        "Test Result",
+        "UAT Result",
+        "UAT Test Case ID",
+    )
+
+
+def test_req_sheet_with_the_older_single_verdict_header_is_refused(
+    tmp_path, sample_manifest_dict
+):
+    """A consumer manifest still declaring one verdict column would be
+    rendered with the journey column's title repeated over the UAT-result
+    column, because the renderer repeats the last declared column to reach the
+    widest row. A wrong header over real verdicts must be refused, not
+    written."""
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["sheets"] = {
+        **raw["sheets"],
+        "req": {
+            "name": "REQ",
+            "columns": ["Req ID", "Description", "Pass/Fail", "UAT Test Case ID"],
+        },
+    }
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError) as exc:
+        Manifest.from_path(path)
+    message = str(exc.value)
+    assert "sheets.req" in message
+    assert "5" in message
+    assert "Pass/Fail" in message
+
+
+def test_req_sheet_with_too_many_columns_is_refused(tmp_path, sample_manifest_dict):
+    """Only one column repeats. A sixth declared column would silently become
+    the repeating one and mislabel every journey column after the first."""
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["sheets"] = {
+        **raw["sheets"],
+        "req": {
+            "name": "REQ",
+            "columns": [
+                "Req ID", "Description", "Test Result", "UAT Result",
+                "UAT Test Case ID", "Extra",
+            ],
+        },
+    }
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError):
+        Manifest.from_path(path)

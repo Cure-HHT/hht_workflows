@@ -40,7 +40,7 @@ def test_bare_list_has_no_scope_header(sample_trace_path):
 
 def test_accepts_dict_form_with_scope_header(sample_trace_scoped_path):
     # sample-trace-scoped.json is real `elspais trace --scope readiness
-    # --dimension uat --format json` output, captured against the readiness
+    # --values ... --format json` output, captured against the readiness
     # fixture -- not a hand-written approximation of the shape. A prior
     # version of this test invented a `requirements` rows key that does not
     # exist in real output (the real key is `nodes`), which is how a loader
@@ -87,6 +87,8 @@ def test_missing_requirement_id_fails_loud(tmp_path):
                     "level": "PRD",
                     "status": "Draft",
                     "uat_verified": {"ratio": 0.0},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [],
                 }
             ]
@@ -110,6 +112,8 @@ def test_missing_uat_verified_fails_loud(tmp_path):
                     "title": "A",
                     "level": "PRD",
                     "status": "Draft",
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [],
                 }
             ]
@@ -134,6 +138,8 @@ def test_missing_uat_verified_ratio_fails_loud(tmp_path):
                     "level": "PRD",
                     "status": "Draft",
                     "uat_verified": {},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [],
                 }
             ]
@@ -158,6 +164,8 @@ def test_missing_journey_id_fails_loud(tmp_path):
                     "level": "PRD",
                     "status": "Draft",
                     "uat_verified": {"ratio": 0.0},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [{"verdict": "pass"}],
                 }
             ]
@@ -187,6 +195,8 @@ def test_missing_journeys_key_fails_loud(tmp_path):
                     "level": "PRD",
                     "status": "Active",
                     "uat_verified": {"ratio": 1.0},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "validating_journeys": [{"id": "JNY-AUTH-06"}],
                 }
             ]
@@ -210,6 +220,8 @@ def test_empty_journeys_list_is_accepted(tmp_path):
                     "level": "PRD",
                     "status": "Active",
                     "uat_verified": {"ratio": 0.0},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [],
                 }
             ]

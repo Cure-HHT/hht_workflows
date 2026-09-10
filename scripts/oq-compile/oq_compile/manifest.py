@@ -9,6 +9,12 @@ from typing import Any
 import yaml
 
 _DEFAULT_UAT_PREFIX = "UAT-"
+
+#: The REQ sheet's declared header: requirement id, description, test result,
+#: UAT result, then the journey column that repeats once per validating
+#: journey. Declared rather than inferred so a manifest written against the
+#: older single-verdict shape is refused instead of silently mislabelled.
+_REQ_SHEET_COLUMNS = 5
 _DEFAULT_PROVENANCE_NAME = "Provenance"
 
 
@@ -85,6 +91,20 @@ class Manifest:
                 ),
             )
 
+        req_sheet = sheet("req", "REQ")
+        if len(req_sheet.columns) != _REQ_SHEET_COLUMNS:
+            # The renderer repeats the last declared column to reach the widest
+            # row. A manifest still declaring the older four-column REQ header
+            # would therefore label the UAT-result column with the journey
+            # column's title -- a wrong header over real verdicts, silently.
+            raise ValueError(
+                f"{path}: sheets.req 'columns' must declare exactly "
+                f"{_REQ_SHEET_COLUMNS} columns -- requirement id, description, "
+                "test result, UAT result, and the journey column that repeats "
+                f"once per validating journey -- got {len(req_sheet.columns)}: "
+                f"{list(req_sheet.columns)}"
+            )
+
         provenance = sheets.get("provenance") or {}
         return cls(
             title=str(_require(document, "title", f"{path}: document")),
@@ -94,7 +114,7 @@ class Manifest:
             require_namespaces=_coerce_namespaces(
                 raw.get("require_namespaces"), str(path)
             ),
-            req_sheet=sheet("req", "REQ"),
+            req_sheet=req_sheet,
             uat_sheet=sheet("uat", "UAT Test Cases"),
             provenance_sheet_name=str(
                 provenance.get("name", _DEFAULT_PROVENANCE_NAME)

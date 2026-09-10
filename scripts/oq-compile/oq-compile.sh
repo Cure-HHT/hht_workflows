@@ -68,10 +68,16 @@ mkdir -p "$WORK"
 SCOPE="$("$PYTHON" -c "import sys,yaml;print(yaml.safe_load(open(sys.argv[1]))['scope'])" \
   "${PRIMARY_ROOT}/${MANIFEST}")"
 
+# The values are named explicitly instead of selecting `--dimension uat`.
+# That dimension suppresses the `verified` and `tested` figures, which are the
+# only source for the requirement sheet's test-result column; asking for the
+# values by name yields both kinds of evidence in one export.
 echo "exporting trace for scope: ${SCOPE}"
 (cd "$PRIMARY_ROOT" && "$ELSPAIS" trace \
-  --scope "$SCOPE" --dimension uat --format json \
-  -o "${WORK}/trace-uat.json")
+  --scope "$SCOPE" \
+  --values id,title,level,status,verified,tested,uat_verified,journeys \
+  --format json \
+  -o "${WORK}/trace.json")
 
 echo "exporting graph"
 (cd "$PRIMARY_ROOT" && "$ELSPAIS" graph -o "${WORK}/graph.json")
@@ -144,7 +150,7 @@ done
 declare -a CMD=(
   "$PYTHON" "${SCRIPT_DIR}/compile-oq.py"
   --manifest "${PRIMARY_ROOT}/${MANIFEST}"
-  --trace "${WORK}/trace-uat.json"
+  --trace "${WORK}/trace.json"
   --graph "${WORK}/graph.json"
   --out-csv-dir "${PRIMARY_ROOT}/${REPORTS_DIR}"
   --out-xlsx "${PRIMARY_ROOT}/${BUILD_DIR}/oq-report.xlsx"

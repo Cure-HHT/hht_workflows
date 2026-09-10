@@ -1,9 +1,13 @@
 """Parse the elspais outputs the report is built from.
 
 Two inputs, because neither carries what the other does: `elspais trace
---dimension uat --format json` states every requirement with its validating
-journeys and their verdicts but not the journeys' titles, and `elspais graph`
-carries the titles but no verdicts.
+--values ... --format json` states every requirement with its test-verification
+figures and its validating journeys and their verdicts, but not the journeys'
+titles; `elspais graph` carries the titles but no verdicts.
+
+The value list is named explicitly rather than selected with `--dimension uat`,
+because that dimension suppresses the `verified` and `tested` figures the
+test-result column is computed from.
 """
 
 from __future__ import annotations
@@ -31,11 +35,23 @@ class JourneyRef:
 
 @dataclass(frozen=True)
 class Requirement:
+    """One requirement row, carrying both kinds of evidence.
+
+    ``uat_verified_ratio`` and ``journeys`` are the user-acceptance evidence;
+    ``verified_ratio``, ``verified_carried`` and ``tested_failed`` are the
+    test-verification evidence. They are kept apart, never combined, because
+    the report states them in separate columns: a reader must be able to see
+    which kind of evidence is missing, which a single rolled-up verdict hides.
+    """
+
     id: str
     title: str
     level: str
     status: str
     uat_verified_ratio: float
+    verified_ratio: float
+    verified_carried: bool
+    tested_failed: float
     journeys: tuple[JourneyRef, ...]
 
 
@@ -94,6 +110,34 @@ def load_trace(path: Path) -> tuple[tuple[Requirement, ...], tuple[str, ...]]:
                     _require(row, "uat_verified", f"requirement row {i}"),
                     "ratio",
                     f"requirement row {i}: uat_verified",
+                )
+            ),
+            # `verified.ratio`, `verified.carried` and `tested.failed` are all
+            # read with `_require`: each one, absent, would silently overstate
+            # the evidence. A missing `failed` renders a failing requirement as
+            # NOT RUN, and a missing `carried` renders a carried baseline as a
+            # fresh run -- the stronger claim in both cases. Contrast the
+            # tolerant `verdict` default above, which falls back to
+            # "unverified", the weaker claim, and so is safe to default.
+            verified_ratio=float(
+                _require(
+                    _require(row, "verified", f"requirement row {i}"),
+                    "ratio",
+                    f"requirement row {i}: verified",
+                )
+            ),
+            verified_carried=bool(
+                _require(
+                    _require(row, "verified", f"requirement row {i}"),
+                    "carried",
+                    f"requirement row {i}: verified",
+                )
+            ),
+            tested_failed=float(
+                _require(
+                    _require(row, "tested", f"requirement row {i}"),
+                    "failed",
+                    f"requirement row {i}: tested",
                 )
             ),
             journeys=_dedupe(_require(row, "journeys", f"requirement row {i}")),

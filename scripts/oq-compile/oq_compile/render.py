@@ -9,7 +9,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from .manifest import Manifest
-from .pivot import FAIL, NOT_RUN, PASS
+from .pivot import CARRIED_SUFFIX, FAIL, NOT_RUN, PASS
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,10 @@ def write_csv(path: Path, header: tuple[str, ...], rows: list[list[str]]) -> Non
 
 
 def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
+    # The legend names the two verdict columns by the titles the manifest
+    # declares, so a consumer that renames them keeps a legend that matches
+    # its own sheet. The manifest guarantees both are present.
+    test_column, uat_column = manifest.req_sheet.columns[2:4]
     return [
         ["Report", manifest.title],
         ["Project", manifest.project],
@@ -72,9 +76,66 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
         ["Generator version", prov.tool_version],
         [],
         ["Verdict legend", ""],
-        [PASS, "Every assertion the requirement expects is verified, and no validating journey failed."],
-        [FAIL, "At least one validating journey failed."],
-        [NOT_RUN, "No validating journey has been run, or coverage is partial. Not a failure."],
+        [
+            "",
+            "Each requirement carries two independent kinds of evidence, in "
+            "two columns. They are reported separately and never combined, so "
+            "a reader can see which kind of evidence is absent or failing.",
+        ],
+        [],
+        [
+            test_column,
+            "Did this requirement's own tests (unit, integration, end-to-end) "
+            "pass?",
+        ],
+        [
+            f"{test_column}: {PASS}",
+            "Every assertion of the requirement is verified by a passing test.",
+        ],
+        [
+            f"{test_column}: {FAIL}",
+            "At least one test citing this requirement failed.",
+        ],
+        [
+            f"{test_column}: {NOT_RUN}",
+            "No test result has been ingested for this requirement, or only "
+            "some of its assertions are verified by a passing test. A test "
+            "that exists but whose result has not been ingested reports here, "
+            "never as a failure: absence of evidence is not evidence of "
+            "failure.",
+        ],
+        [
+            f"{test_column}:{CARRIED_SUFFIX}",
+            "The verification was carried forward from a baseline rather than "
+            "produced by a fresh run, and is a weaker claim than an unmarked "
+            "verdict.",
+        ],
+        [],
+        [
+            uat_column,
+            "Did a user journey validating this requirement pass?",
+        ],
+        [
+            f"{uat_column}: {PASS}",
+            "Every assertion the requirement expects is verified, and no "
+            "validating journey failed.",
+        ],
+        [
+            f"{uat_column}: {FAIL}",
+            "At least one validating journey failed.",
+        ],
+        [
+            f"{uat_column}: {NOT_RUN}",
+            "No validating journey has been run, or journey coverage is "
+            "partial. Not a failure.",
+        ],
+        [],
+        [
+            "",
+            f"The two {NOT_RUN} entries are different absences: the first "
+            "means no test result has been ingested, the second means no "
+            "validating journey has been run. Neither is a failure.",
+        ],
         [],
         [
             "Note",

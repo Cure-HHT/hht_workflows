@@ -332,6 +332,8 @@ def test_zero_uat_rows_refused_by_default(
                     "level": "PRD",
                     "status": "Active",
                     "uat_verified": {"ratio": 0.0},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [],
                 }
             ]
@@ -366,6 +368,8 @@ def test_zero_uat_rows_permitted_with_flag(
                     "level": "PRD",
                     "status": "Active",
                     "uat_verified": {"ratio": 0.0},
+                    "verified": {"ratio": 0.0, "carried": False},
+                    "tested": {"failed": 0.0},
                     "journeys": [],
                 }
             ]

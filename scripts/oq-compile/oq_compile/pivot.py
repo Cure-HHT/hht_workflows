@@ -9,6 +9,12 @@ PASS = "PASS"
 FAIL = "FAIL"
 NOT_RUN = "NOT RUN"
 
+#: Appended to a test result whose verification came from a carried baseline
+#: rather than a fresh run. A carried value is a weaker claim than a fresh one,
+#: and it is a per-requirement property, so it is marked on the cell it
+#: qualifies rather than summarised on the provenance sheet.
+CARRIED_SUFFIX = " (carried)"
+
 _FAIL_VERDICTS = frozenset({"fail", "failed", "failure", "error"})
 _PASS_VERDICTS = frozenset({"pass", "passed", "success"})
 
@@ -42,8 +48,50 @@ def requirement_verdict(req: Requirement) -> str:
     return NOT_RUN
 
 
+def verification_verdict(req: Requirement) -> str:
+    """Roll a requirement's test-verification evidence up to one verdict.
+
+    Deliberately asymmetric, mirroring `requirement_verdict`:
+
+    FAIL when at least one test citing the requirement failed. PASS only when
+    every assertion is verified by a passing test -- partial verification is
+    not a pass. NOT RUN otherwise, which includes the `awaiting` case: a test
+    that exists but whose result has never been ingested is an absence of
+    evidence, not evidence of failure, and must never render as FAIL.
+
+    Returns one of the three labels only; the carried-baseline caveat is
+    rendered by the caller, so callers reasoning about the verdict itself
+    compare against a bare label.
+    """
+    if req.tested_failed > 0:
+        return FAIL
+    if req.verified_ratio >= 1.0:
+        return PASS
+    return NOT_RUN
+
+
+def rendered_verification_verdict(req: Requirement) -> str:
+    """The test verdict as it appears in the cell, carried baselines marked.
+
+    A carried value satisfies the same threshold as a fresh one but rests on a
+    previous run, so the cell states it. Marking it here rather than on the
+    provenance sheet keeps the caveat attached to the requirement it qualifies:
+    a provenance note cannot name which rows are carried, and the extract is
+    committed and diffed, so a carried-to-fresh transition shows up as the cell
+    change it is.
+    """
+    verdict = verification_verdict(req)
+    return f"{verdict}{CARRIED_SUFFIX}" if req.verified_carried else verdict
+
+
 def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str]]:
-    """One row per requirement: id, title, verdict, then one journey per column.
+    """One row per requirement: id, title, test result, UAT result, then one
+    journey per column.
+
+    The two verdicts are stated side by side and never combined. They answer
+    different questions -- did this requirement's tests pass, and did a
+    validating journey pass -- and a regulator must be able to see which kind
+    of evidence is absent or failing. A single rolled-up verdict cannot say.
 
     Each journey column carries the same `UAT Test Case ID` header as the UAT
     sheet's identifier column, so it must hold the same value: the journey id
@@ -58,6 +106,7 @@ def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str
         [
             r.id,
             r.title,
+            rendered_verification_verdict(r),
             requirement_verdict(r),
             *[
                 f"{manifest.uat_case_prefix}{j.id}"
