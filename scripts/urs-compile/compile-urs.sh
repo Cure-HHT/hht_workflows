@@ -218,7 +218,21 @@ git_slug() {
 PROVENANCE="${PRIMARY_ROOT}/docs/${NAME}-build-provenance.md"
 WF_SLUG="$(git_slug "${SCRIPT_DIR}")"
 WF_VERSION="$(git -C "${SCRIPT_DIR}" describe --tags --always --dirty 2>/dev/null || echo unknown)"
-BUILD_DATE="$(date -u +%Y-%m-%d)"
+# The build date is a property of the inputs, not of when the compile ran. A
+# provenance file stamped from the clock changes every day from identical
+# sources, so nothing can compare a committed deliverable against a rebuilt one
+# and conclude anything from a difference.
+#
+# SOURCE_DATE_EPOCH is the reproducible-builds convention, honoured by pandoc
+# and XeTeX as well, so setting it fixes the whole toolchain's idea of now.
+# Unset, the date falls back to the clock: the operator path keeps its current
+# behaviour, and is the only way to rebuild the deliverables until the CI path
+# replaces it.
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+  BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%d)"
+else
+  BUILD_DATE="$(date -u +%Y-%m-%d)"
+fi
 PANDOC_VERSION="$(pandoc --version 2>/dev/null | head -1)" || PANDOC_VERSION=""
 XETEX_VERSION="$(xelatex --version 2>/dev/null | head -1)" || XETEX_VERSION=""
 
