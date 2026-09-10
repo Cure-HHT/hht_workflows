@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from oq_compile.load import JourneyRef, Requirement, load_journeys, load_trace
 from oq_compile.manifest import Manifest
 from oq_compile.pivot import (
@@ -92,3 +94,56 @@ def test_rows_are_ordered_by_id(sample_trace_path, sample_manifest_path):
     m = Manifest.from_path(sample_manifest_path)
     ids = [r[0] for r in req_rows(reqs, m)]
     assert ids == sorted(ids)
+
+
+def test_journey_shared_across_two_reqs_with_same_verdict(sample_manifest_path):
+    """A journey validating two requirements with the same verdict appears once
+    on the UAT sheet with both requirement ids in its trailing columns."""
+    shared_journey = JourneyRef("JNY-SHARED", "pass")
+    r1 = _req("REQ-A", 1.0, [shared_journey])
+    r2 = _req("REQ-B", 1.0, [shared_journey])
+    m = Manifest.from_path(sample_manifest_path)
+    rows = uat_rows((r1, r2), {}, m)
+
+    # Should have one row for the shared journey
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[0] == f"{m.uat_case_prefix}JNY-SHARED"
+    assert row[2] == PASS
+    assert row[3] == "JNY-SHARED"
+    # Both requirement ids in trailing columns
+    assert row[4:] == ["REQ-A", "REQ-B"]
+
+
+def test_journey_shared_across_two_reqs_with_conflicting_verdicts(sample_manifest_path):
+    """A journey cited by multiple requirements with conflicting verdicts
+    raises ValueError naming the journey, both verdicts, and the requirement ids."""
+    r1 = _req("REQ-A", 1.0, [JourneyRef("JNY-CONFLICT", "pass")])
+    r2 = _req("REQ-B", 1.0, [JourneyRef("JNY-CONFLICT", "fail")])
+    m = Manifest.from_path(sample_manifest_path)
+
+    with pytest.raises(ValueError) as exc_info:
+        uat_rows((r1, r2), {}, m)
+
+    error = str(exc_info.value)
+    assert "JNY-CONFLICT" in error
+    assert "pass" in error
+    assert "fail" in error
+    assert "REQ-A" in error
+    assert "REQ-B" in error
+
+
+def test_journey_shared_across_two_reqs_with_equivalent_pass_verdicts(sample_manifest_path):
+    """A journey cited with 'pass' and 'passed' does not raise, since both
+    normalize to the same verdict."""
+    r1 = _req("REQ-A", 1.0, [JourneyRef("JNY-EQUIV", "pass")])
+    r2 = _req("REQ-B", 1.0, [JourneyRef("JNY-EQUIV", "passed")])
+    m = Manifest.from_path(sample_manifest_path)
+
+    # Should not raise
+    rows = uat_rows((r1, r2), {}, m)
+
+    # Should have one row with PASS verdict
+    assert len(rows) == 1
+    assert rows[0][2] == PASS
+    assert rows[0][4:] == ["REQ-A", "REQ-B"]

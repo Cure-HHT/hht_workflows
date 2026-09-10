@@ -61,13 +61,27 @@ def uat_rows(
     Membership is derived: a journey appears because it validates a
     requirement in scope. A journey validating nothing in scope has no
     traceability to report and no row here.
+
+    Raises ValueError if a journey is cited by multiple requirements with
+    conflicting verdicts, as that indicates upstream data integrity drift.
     """
     validated: dict[str, list[str]] = {}
     verdicts: dict[str, str] = {}
+    verdict_sources: dict[str, str] = {}  # Track which requirement first recorded each verdict
     for req in sorted(reqs, key=lambda r: r.id):
         for ref in req.journeys:
             validated.setdefault(ref.id, []).append(req.id)
-            verdicts.setdefault(ref.id, ref.verdict)
+            if ref.id not in verdicts:
+                verdicts[ref.id] = ref.verdict
+                verdict_sources[ref.id] = req.id
+            else:
+                # Check for conflict: compare normalized verdicts
+                if journey_verdict(ref.verdict) != journey_verdict(verdicts[ref.id]):
+                    raise ValueError(
+                        f"Journey {ref.id} cited by {verdict_sources[ref.id]} "
+                        f"(verdict: {verdicts[ref.id]}) and {req.id} "
+                        f"(verdict: {ref.verdict}) with conflicting verdicts"
+                    )
 
     return [
         [
