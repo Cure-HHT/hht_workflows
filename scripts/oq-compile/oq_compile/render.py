@@ -294,6 +294,12 @@ def write_workbook(
     _merge_and_center_block_headings(prov, prov_rows)
     _size_columns_to_content(prov, prov_rows)
 
+    # Freeze panes on the two grid sheets only: each is wide (a variable
+    # number of trailing journey/requirement columns) and long (hundreds of
+    # rows), so a reader scrolling right loses the header and a reader
+    # scrolling down loses the row's identifying first column. The
+    # provenance sheet is a label/value list, not a grid, and freezing there
+    # would be noise.
     req = wb.create_sheet(manifest.req_sheet.name)
     req_width = max([len(manifest.req_sheet.columns), *(len(r) for r in req_rows_)] or [0])
     req_header = _headers(manifest.req_sheet.columns, req_width)
@@ -303,6 +309,7 @@ def write_workbook(
     _bold_header_row(req)
     _wrap_all_cells(req)
     _size_columns_to_content(req, [req_header, *req_rows_])
+    req.freeze_panes = "B2"
 
     uat = wb.create_sheet(manifest.uat_sheet.name)
     uat_width = max([len(manifest.uat_sheet.columns), *(len(r) for r in uat_rows_)] or [0])
@@ -313,5 +320,6 @@ def write_workbook(
     _bold_header_row(uat)
     _wrap_all_cells(uat)
     _size_columns_to_content(uat, [uat_header, *uat_rows_])
+    uat.freeze_panes = "B2"
 
     wb.save(Path(path))

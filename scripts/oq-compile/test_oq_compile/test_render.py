@@ -260,9 +260,9 @@ def test_cells_wrap_on_all_three_sheets(tmp_path, sample_manifest_path):
 def test_block_heading_rows_are_merged_and_centered(tmp_path, sample_manifest_path):
     """Column definitions / <sheet> sheet / Verdict legend introduce a block
     rather than pairing a label with a value: they merge A:B and centre.
-    Detected structurally (column A set, column B empty), not by matching
-    the heading text -- two of the four headings come from manifest-supplied
-    sheet names."""
+    Detected structurally (the row is authored with no column-B slot at
+    all), not by matching the heading text -- two of the four headings come
+    from manifest-supplied sheet names."""
     m = Manifest.from_path(sample_manifest_path)
     out = tmp_path / "oq.xlsx"
     write_workbook(out, m, [], [], _provenance())
@@ -309,6 +309,57 @@ def test_no_self_definition_row_for_the_provenance_sheet(
     )
     assert f"{m.provenance_sheet_name} sheet" not in text
     assert "one pair per row" not in text
+
+
+def test_an_empty_valued_fact_row_is_not_mistaken_for_a_heading(
+    tmp_path, sample_manifest_path
+):
+    """A fact row (e.g. a commit hash) is a label/value pair even when its
+    *value* happens to be an empty string -- build() defaults primary_commit,
+    elspais_version and tool_version to "" when no override is supplied. Only
+    a row authored with no column-B slot at all is a heading. Detected via
+    merged_cells.ranges directly: openpyxl round-trips an empty string to
+    None on save, so a read-back cell value cannot distinguish "no value"
+    from "empty value" -- exactly the distinction this test guards."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    empty_provenance = Provenance(
+        primary_commit="",
+        associate_commits=(),
+        elspais_version="",
+        tool_version="",
+        scope_name="example-scope",
+        scope_lines=(),
+        generated_at="2026-09-09T12:00:00Z",
+        req_count=0,
+        uat_count=0,
+    )
+    write_workbook(out, m, [], [], empty_provenance)
+    ws = openpyxl.load_workbook(out)["Provenance"]
+    merged = {str(r) for r in ws.merged_cells.ranges}
+
+    # Exactly the four block headings are merged -- not the fact rows whose
+    # values are empty.
+    assert len(merged) == 4
+    fact_labels = ("Primary repository commit", "elspais version", "Generator version")
+    for row in ws.iter_rows():
+        if row[0].value in fact_labels:
+            assert f"A{row[0].row}:B{row[0].row}" not in merged
+
+
+def test_grid_sheets_freeze_header_and_first_column(tmp_path, sample_manifest_path):
+    """REQ and UAT Test Cases are wide (a variable trailing-column count)
+    and long, so the header row and identifying first column must stay
+    visible while scrolling. The provenance sheet is a label/value list, not
+    a grid, and is left unfrozen."""
+    m = Manifest.from_path(sample_manifest_path)
+    out = tmp_path / "oq.xlsx"
+    write_workbook(out, m, [["SPN-PRD-a", "A", "PASS", "PASS", "JNY-1"]],
+                   [["UAT-JNY-1", "J", "PASS", "JNY-1", "SPN-PRD-a"]], _provenance())
+    wb = openpyxl.load_workbook(out)
+    assert wb["REQ"].freeze_panes == "B2"
+    assert wb["UAT Test Cases"].freeze_panes == "B2"
+    assert wb["Provenance"].freeze_panes is None
 
 
 def test_column_widths_are_bounded_and_content_driven(tmp_path, sample_manifest_path):
