@@ -38,28 +38,33 @@ def test_bare_list_has_no_scope_header(sample_trace_path):
     assert scope == ()
 
 
-def test_accepts_dict_form_with_scope_header(tmp_path):
-    p = tmp_path / "trace.json"
-    p.write_text(
-        json.dumps(
-            {
-                "scope": ["Scope: level PRD or GUI", "Scope selected 2 of 9"],
-                "requirements": [
-                    {
-                        "id": "SPN-PRD-a",
-                        "title": "A",
-                        "level": "PRD",
-                        "status": "Draft",
-                        "uat_verified": {"ratio": 0.0},
-                        "journeys": [],
-                    }
-                ],
-            }
-        )
-    )
-    reqs, scope = load_trace(p)
+def test_accepts_dict_form_with_scope_header(sample_trace_scoped_path):
+    # sample-trace-scoped.json is real `elspais trace --scope readiness
+    # --dimension uat --format json` output, captured against the readiness
+    # fixture -- not a hand-written approximation of the shape. A prior
+    # version of this test invented a `requirements` rows key that does not
+    # exist in real output (the real key is `nodes`), which is how a loader
+    # bug that silently emptied every scoped report passed review.
+    reqs, scope = load_trace(sample_trace_scoped_path)
     assert len(reqs) == 1
-    assert scope[0].startswith("Scope: level")
+    assert reqs[0].id == "SPN-PRD-fixture-obligation"
+    assert [j.id for j in reqs[0].journeys] == ["JNY-FIX-01"]
+    assert scope == (
+        "Scope: level PRD or GUI",
+        "Scope selected 1 of 1 requirements",
+    )
+
+
+def test_dict_form_with_unrecognised_rows_key_fails_loud(tmp_path):
+    p = tmp_path / "trace.json"
+    p.write_text(json.dumps({"scope": [], "requirements": []}))
+    try:
+        load_trace(p)
+        assert False, "should have raised ValueError"
+    except ValueError as e:
+        assert "nodes" in str(e)
+        assert "requirements" in str(e)
+        assert "scope" in str(e)
 
 
 def test_loads_journey_titles(sample_graph_path):

@@ -22,5 +22,10 @@ def sample_trace_path():
 
 
 @pytest.fixture
+def sample_trace_scoped_path():
+    return FIXTURES / "sample-trace-scoped.json"
+
+
+@pytest.fixture
 def sample_graph_path():
     return FIXTURES / "sample-graph.json"

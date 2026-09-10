@@ -57,14 +57,27 @@ def _dedupe(raw: list[dict[str, Any]]) -> tuple[JourneyRef, ...]:
 def load_trace(path: Path) -> tuple[tuple[Requirement, ...], tuple[str, ...]]:
     """Return the requirements and the scope header lines.
 
-    Accepts both shapes the trace exporter emits: a bare list of requirements,
-    and a mapping carrying a `scope` header alongside them. The header is
-    absent when no scope was named, so an empty tuple is a valid answer and
-    not a parse failure.
+    Accepts both shapes the trace exporter emits: a bare list of requirement
+    objects (no scope named), and a mapping carrying a `scope` header
+    alongside the requirement rows under `nodes` (scope named). Manifests
+    that declare a scope -- the normal production case -- always take the
+    dict path, so a wrong key there is not a corner case.
+
+    A dict that carries none of the recognised rows keys raises rather than
+    falling back to an empty list: this loader once treated `requirements`/
+    `rows` as the dict's rows key, which does not exist in real
+    `elspais trace` output (the real key is `nodes`), and silently rendered
+    a well-formed, empty compliance report under any scoped manifest. An
+    unrecognised shape must abort the run, not render nothing.
     """
     raw = json.loads(Path(path).read_text())
     if isinstance(raw, dict):
-        rows = raw.get("requirements") or raw.get("rows") or []
+        if "nodes" not in raw:
+            raise ValueError(
+                "trace file is a dict with no recognised rows key "
+                f"(expected 'nodes'); keys present: {sorted(raw.keys())}"
+            )
+        rows = raw["nodes"]
         scope = tuple(raw.get("scope") or ())
     else:
         rows = raw
