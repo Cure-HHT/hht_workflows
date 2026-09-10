@@ -51,7 +51,10 @@ def test_req_rows_have_variable_width(sample_trace_path, sample_manifest_path):
     rows = req_rows(reqs, m)
     by_id = {r[0]: r for r in rows}
     assert by_id["SPN-PRD-session-management"][3:] == ["UAT-JNY-AUTH-06"]
-    assert by_id["SPN-GUI-calendar-day-view"][3:] == ["UAT-JNY-EPIS-10", "UAT-JNY-EPIS-07"]
+    # Sorted by journey id, not by the order the trace happened to list them
+    # (the fixture lists EPIS-10 first). The extract is committed and diffed,
+    # so an upstream reordering must not read as an evidence change.
+    assert by_id["SPN-GUI-calendar-day-view"][3:] == ["UAT-JNY-EPIS-07", "UAT-JNY-EPIS-10"]
     assert by_id["SPN-PRD-audit-log"][3:] == []
 
 

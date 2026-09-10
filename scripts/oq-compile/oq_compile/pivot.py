@@ -48,13 +48,21 @@ def req_rows(reqs: tuple[Requirement, ...], manifest: Manifest) -> list[list[str
     Each journey column carries the same `UAT Test Case ID` header as the UAT
     sheet's identifier column, so it must hold the same value: the journey id
     under the manifest's configured case prefix, not the raw journey id.
+
+    The journey columns are sorted by journey id, as `uat_rows` sorts its
+    requirement columns. Upstream array order is not a documented guarantee,
+    and the CSV extract is committed and diffed: a reordering upstream would
+    otherwise show up as a spurious evidence change.
     """
     return [
         [
             r.id,
             r.title,
             requirement_verdict(r),
-            *[f"{manifest.uat_case_prefix}{j.id}" for j in r.journeys],
+            *[
+                f"{manifest.uat_case_prefix}{j.id}"
+                for j in sorted(r.journeys, key=lambda j: j.id)
+            ],
         ]
         for r in sorted(reqs, key=lambda r: r.id)
     ]

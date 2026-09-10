@@ -7,9 +7,14 @@
 # Example caller (in the consumer repo):
 #
 #   - uses: actions/checkout@v4
-#   - uses: Cure-HHT/hht_workflows/.github/actions/build-oq@main
+#   - uses: Cure-HHT/hht_workflows/.github/actions/build-oq@<40-char commit SHA>
 #     with:
 #       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
+#
+# Pin this action to a commit SHA, not to a moving ref. It refuses an
+# unpinned `elspais-version` because an unpinned report is not reproducible;
+# an unpinned generator is the same defect one layer out, and the resolved ref
+# is what the provenance sheet names as the generator.
 
 name: Build OQ traceability report
 description: >-
@@ -79,12 +84,27 @@ runs:
       env:
         ASSOCIATE_ROOTS: ${{ inputs.associate-roots }}
         MANIFEST: ${{ inputs.manifest }}
+        # The generator identity for the provenance sheet. A remote `uses:`
+        # unpacks this action as a tarball with no .git, so the script's own
+        # git derivation would resolve to "unknown" on every consumer run.
+        # Empty for a local `uses: ./`, where the script's git path is right.
+        TOOL_VERSION: ${{ github.action_ref }}
       run: |
         set -euo pipefail
         out="$("${{ github.action_path }}/../../../scripts/oq-compile/oq-compile.sh" \
           "${{ inputs.primary-root }}" "${{ inputs.associate-root }}" | tee /dev/stderr | tail -1)"
         reqs="$(echo "$out" | sed -n 's/^OQ report: \([0-9]*\) requirements.*/\1/p')"
         cases="$(echo "$out" | sed -n 's/.*, \([0-9]*\) UAT test cases$/\1/p')"
+        # The generator's stdout contract is the only channel these counts
+        # arrive on. A silent parse failure hands every downstream consumer an
+        # empty string where a count belongs, which reads as "nothing to
+        # report" rather than "the report was never measured".
+        if ! [[ "$reqs" =~ ^[0-9]+$ ]] || ! [[ "$cases" =~ ^[0-9]+$ ]]; then
+          echo "::error::could not parse the generator's counts from its final" \
+            "stdout line: '${out}'. Expected 'OQ report: <n> requirements, <n>" \
+            "UAT test cases'." >&2
+          exit 1
+        fi
         echo "requirement-count=${reqs}" >> "$GITHUB_OUTPUT"
         echo "uat-case-count=${cases}" >> "$GITHUB_OUTPUT"
 

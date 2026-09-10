@@ -18,6 +18,9 @@
 #                       PRIMARY_ROOT (default: promotion-evidence/_reports).
 #   BUILD_DIR           Run-bound artifact directory, relative to
 #                       PRIMARY_ROOT (default: promotion-evidence/_build).
+#   TOOL_VERSION        Generator identity for the provenance sheet. Set by
+#                       the composite action to the resolved action ref;
+#                       falls back to this checkout's commit SHA.
 #   PYTHON              Python interpreter (default: python3).
 #   ELSPAIS             elspais CLI (default: elspais).
 set -euo pipefail
@@ -80,13 +83,62 @@ ELSPAIS_VERSION="$("$ELSPAIS" --version | head -1)"
 # unlike the associate/federation steps above, where failure means the
 # report itself would be wrong.
 PRIMARY_COMMIT="$(git -C "$PRIMARY_ROOT" rev-parse HEAD 2>/dev/null)" || PRIMARY_COMMIT="unknown"
-TOOL_VERSION="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null)" || TOOL_VERSION="unknown"
+
+# TOOL_VERSION identifies the generator on the provenance sheet. A remote
+# `uses:` unpacks this action as a tarball with no .git, so the git derivation
+# below resolves to "unknown" for every consumer run — precisely the runs whose
+# provenance matters. The caller therefore passes the ref it resolved
+# (github.action_ref) in TOOL_VERSION, and `:-` treats the empty string a local
+# `uses: ./` yields as unset so a working tree still stamps its own commit.
+if [ -z "${TOOL_VERSION:-}" ]; then
+  TOOL_VERSION="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null)" || TOOL_VERSION="unknown"
+fi
+
+# Name an associate by something intrinsic to the repository, so a reader of
+# the provenance sheet can tell which repository a commit belongs to. The
+# checkout directory name is not that: it is whatever the caller cloned into
+# (a branch-named worktree, a runner temp path). Preference order: the elspais
+# project identity the associate declares, then its git remote, then — only
+# when the tree states neither — the directory name.
+associate_identity() {
+  local root="$1" ident=""
+  if [ -f "${root}/.elspais.toml" ]; then
+    # An associate whose config is unreadable or has no [project] table falls
+    # through to the git remote below; it is not a reason to abort the report.
+    if ! ident="$("$PYTHON" - "$root/.elspais.toml" <<'PYEOF' 2>/dev/null
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+with open(sys.argv[1], "rb") as handle:
+    project = tomllib.load(handle).get("project") or {}
+print(project.get("namespace") or project.get("name") or "")
+PYEOF
+)"; then
+      ident=""
+    fi
+  fi
+  if [ -z "$ident" ]; then
+    ident="$(git -C "$root" config --get remote.origin.url 2>/dev/null)" || ident=""
+    # Reduce a remote URL to owner/repo; both SSH and HTTPS forms end that way.
+    ident="${ident%.git}"
+    ident="${ident##*:}"
+    if [ -n "$ident" ]; then
+      ident="$(echo "$ident" | awk -F/ 'NF>1{print $(NF-1)"/"$NF; next}{print $NF}')"
+    fi
+  fi
+  if [ -z "$ident" ]; then
+    ident="$(basename "$root")"
+  fi
+  printf '%s' "$ident"
+}
 
 declare -a ASSOC_ARGS=()
 for root in "${ROOTS[@]:-}"; do
   [ -z "$root" ] && continue
   sha="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || sha="unknown"
-  ASSOC_ARGS+=(--associate-commit "$(basename "$root")@${sha}")
+  ASSOC_ARGS+=(--associate-commit "$(associate_identity "$root")@${sha}")
 done
 
 declare -a CMD=(

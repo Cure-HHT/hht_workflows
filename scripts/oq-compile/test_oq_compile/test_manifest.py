@@ -44,3 +44,31 @@ def test_scalar_columns_fails_loud(tmp_path):
     with pytest.raises(ValueError) as exc:
         Manifest.from_path(p)
     assert "columns" in str(exc.value)
+
+
+def test_require_namespaces_defaults_to_empty(sample_manifest_path):
+    """Optional by design: a manifest that declares nothing keeps the
+    generator agnostic about who is federated."""
+    assert Manifest.from_path(sample_manifest_path).require_namespaces == ()
+
+
+def test_require_namespaces_loads(tmp_path, sample_manifest_dict):
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["require_namespaces"] = ["SPN", "PLT"]
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    assert Manifest.from_path(path).require_namespaces == ("SPN", "PLT")
+
+
+def test_scalar_require_namespaces_fails_loud(tmp_path, sample_manifest_dict):
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw["require_namespaces"] = "SPN"
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError) as excinfo:
+        Manifest.from_path(path)
+    assert "require_namespaces" in str(excinfo.value)

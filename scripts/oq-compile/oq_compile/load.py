@@ -96,25 +96,41 @@ def load_trace(path: Path) -> tuple[tuple[Requirement, ...], tuple[str, ...]]:
                     f"requirement row {i}: uat_verified",
                 )
             ),
-            journeys=_dedupe(row.get("journeys") or []),
+            journeys=_dedupe(_require(row, "journeys", f"requirement row {i}")),
         )
         for i, row in enumerate(rows)
     )
     return requirements, scope
 
 
-def load_journeys(path: Path) -> dict[str, str]:
+def load_journeys(path: Path, cited_journeys: int = 0) -> dict[str, str]:
     """Map journey id to title from a graph export.
 
     The graph export carries every node kind; only USER_JOURNEY nodes are
     retained. `elspais graph` offers no filter flag, so the whole export is
     read and narrowed here.
+
+    ``cited_journeys`` is how many journey citations the trace carried. It is
+    known only to the caller, which has both inputs in hand, so it is threaded
+    in rather than inferred here. When the trace cites at least one journey and
+    the graph yields no journey node at all, the narrowing above matched
+    nothing — a changed export shape or a renamed node-kind string — and every
+    UAT row would render with a blank Description. That is a silent, plausible,
+    wrong report, so it aborts.
     """
     raw = json.loads(Path(path).read_text())
     nodes = raw.get("nodes") or {}
     entries = nodes.values() if isinstance(nodes, dict) else nodes
-    return {
+    titles = {
         node["id"]: node.get("label", "")
         for node in entries
         if node.get("kind") == _JOURNEY_KIND
     }
+    if cited_journeys and not titles:
+        kinds = sorted({str(node.get("kind")) for node in entries})
+        raise ValueError(
+            f"graph '{path}' yields no '{_JOURNEY_KIND}' node while the trace "
+            f"cites {cited_journeys} journey reference(s); every UAT row would "
+            f"carry a blank description. Node kinds present: {kinds}"
+        )
+    return titles

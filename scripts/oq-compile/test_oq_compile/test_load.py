@@ -169,3 +169,83 @@ def test_missing_journey_id_fails_loud(tmp_path):
     except ValueError as e:
         assert "journey entry 0" in str(e)
         assert "id" in str(e)
+
+
+def test_missing_journeys_key_fails_loud(tmp_path):
+    """`journeys` was the last required field read with a `.get(... ) or []`
+    default. An upstream rename would have yielded a full REQ sheet with every
+    journey column blank and an entirely empty UAT sheet, at exit 0."""
+    import pytest
+
+    path = tmp_path / "trace.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "SPN-PRD-session-management",
+                    "title": "Session Management",
+                    "level": "PRD",
+                    "status": "Active",
+                    "uat_verified": {"ratio": 1.0},
+                    "validating_journeys": [{"id": "JNY-AUTH-06"}],
+                }
+            ]
+        )
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_trace(path)
+    assert "journeys" in str(excinfo.value)
+
+
+def test_empty_journeys_list_is_accepted(tmp_path):
+    """A requirement with no validating journey is ordinary data; only an
+    absent key is a defect."""
+    path = tmp_path / "trace.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "SPN-PRD-audit-log",
+                    "title": "Audit Log",
+                    "level": "PRD",
+                    "status": "Active",
+                    "uat_verified": {"ratio": 0.0},
+                    "journeys": [],
+                }
+            ]
+        )
+    )
+    reqs, _ = load_trace(path)
+    assert reqs[0].journeys == ()
+
+
+def test_graph_with_no_journey_nodes_fails_loud_when_journeys_are_cited(tmp_path):
+    """A changed export shape or a renamed node-kind string narrows to nothing
+    and every UAT row renders with a blank Description."""
+    import pytest
+
+    path = tmp_path / "graph.json"
+    path.write_text(
+        json.dumps(
+            {
+                "nodes": {
+                    "JNY-AUTH-06": {
+                        "id": "JNY-AUTH-06",
+                        "kind": "UserJourney",
+                        "label": "Extending an Idle Session",
+                    }
+                }
+            }
+        )
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_journeys(path, cited_journeys=1)
+    message = str(excinfo.value)
+    assert "USER_JOURNEY" in message
+    assert "UserJourney" in message
+
+
+def test_graph_with_no_journey_nodes_is_fine_when_none_are_cited(tmp_path):
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps({"nodes": {}}))
+    assert load_journeys(path, cited_journeys=0) == {}

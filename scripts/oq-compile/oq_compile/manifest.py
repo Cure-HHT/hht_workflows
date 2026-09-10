@@ -19,6 +19,24 @@ def _require(mapping: dict[str, Any], key: str, ctx: str) -> Any:
     return mapping[key]
 
 
+def _coerce_namespaces(raw: Any, ctx: str) -> tuple[str, ...]:
+    """Validate a ``require_namespaces:`` value and return it as a tuple.
+
+    Optional: a manifest that declares nothing keeps the generator agnostic
+    about who is federated, which is what every consumer but this one wants.
+    A bare scalar would silently become a tuple of characters naming no
+    namespace, so require a list of strings and fail loud.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(x, str) and x for x in raw):
+        raise ValueError(
+            f"{ctx}: 'require_namespaces' must be a list of non-empty strings, "
+            f"got {raw!r}"
+        )
+    return tuple(raw)
+
+
 def _coerce_columns(raw: Any, ctx: str) -> tuple[str, ...]:
     """Validate a ``columns:`` value and return it as a tuple.
 
@@ -43,6 +61,7 @@ class Manifest:
     project: str
     scope: str
     uat_case_prefix: str
+    require_namespaces: tuple[str, ...]
     req_sheet: SheetSpec
     uat_sheet: SheetSpec
     provenance_sheet_name: str
@@ -72,6 +91,9 @@ class Manifest:
             project=str(_require(document, "project", f"{path}: document")),
             scope=str(_require(raw, "scope", str(path))),
             uat_case_prefix=str(raw.get("uat_case_prefix", _DEFAULT_UAT_PREFIX)),
+            require_namespaces=_coerce_namespaces(
+                raw.get("require_namespaces"), str(path)
+            ),
             req_sheet=sheet("req", "REQ"),
             uat_sheet=sheet("uat", "UAT Test Cases"),
             provenance_sheet_name=str(

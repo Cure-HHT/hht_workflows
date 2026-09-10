@@ -15,10 +15,46 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from oq_compile.load import load_journeys, load_trace  # noqa: E402
+from oq_compile.load import Requirement, load_journeys, load_trace  # noqa: E402
 from oq_compile.manifest import Manifest  # noqa: E402
 from oq_compile.pivot import req_rows, uat_rows  # noqa: E402
 from oq_compile.render import Provenance, write_csv, write_workbook  # noqa: E402
+
+
+def _namespace(req_id: str) -> str:
+    """The requirement-id namespace: everything before the first hyphen."""
+    return req_id.split("-", 1)[0]
+
+
+def check_required_namespaces(
+    requirements: tuple[Requirement, ...], manifest: Manifest
+) -> None:
+    """Refuse a selection missing a namespace the manifest declares.
+
+    A federated report draws its rows from the consuming repo plus its
+    associates. Nothing in the trace states which associates were meant to be
+    present, so a run with an associate unconfigured yields a well-formed,
+    correctly-provenanced report holding only the consumer's own requirements
+    -- a fraction of the evidence, at exit 0, with every other guard passing.
+
+    ``require_namespaces`` is the manifest's assertion about membership, so it
+    is not covered by ``--allow-empty``: an empty report may be honest, but a
+    report missing a namespace the sponsor declared never is. Declaring
+    nothing keeps today's behaviour, so consumers that do not federate are
+    unaffected.
+    """
+    if not manifest.require_namespaces:
+        return
+    found = sorted({_namespace(r.id) for r in requirements})
+    missing = [ns for ns in manifest.require_namespaces if ns not in found]
+    if missing:
+        raise ValueError(
+            "requirement namespace(s) declared by the manifest are absent "
+            f"from the selection: missing {missing}; found {found or ['(none)']}; "
+            f"expected {list(manifest.require_namespaces)}. Refusing to write a "
+            "partial report -- an associate repository is most likely not "
+            "federated for this run."
+        )
 
 
 def build(
@@ -32,8 +68,8 @@ def build(
 ) -> tuple[int, int]:
     """Produce both deliverables. Returns (requirement count, UAT case count).
 
-    Refuses to write anything when the trace selects zero requirements,
-    unless ``allow_empty`` is set: a well-formed, correctly-provenanced,
+    Refuses to write anything when the trace selects zero requirements or
+    yields zero UAT test cases, unless ``allow_empty`` is set: a well-formed, correctly-provenanced,
     entirely empty report is indistinguishable from a healthy report on a
     tiny scope, and is exactly the shape a loader bug or a manifest typo
     produces. Checked here rather than in the CLI entrypoint so no caller
@@ -42,7 +78,8 @@ def build(
     overrides = dict(provenance_overrides or {})
     manifest = Manifest.from_path(Path(manifest_path))
     requirements, scope_lines = load_trace(Path(trace_path))
-    journey_titles = load_journeys(Path(graph_path))
+
+    check_required_namespaces(requirements, manifest)
 
     if not requirements and not allow_empty:
         raise ValueError(
@@ -52,8 +89,21 @@ def build(
             "expected."
         )
 
+    cited_journeys = sum(len(r.journeys) for r in requirements)
+    journey_titles = load_journeys(Path(graph_path), cited_journeys)
+
     rows_req = req_rows(requirements, manifest)
     rows_uat = uat_rows(requirements, journey_titles, manifest)
+
+    if not rows_uat and not allow_empty:
+        raise ValueError(
+            f"scope '{manifest.scope}' selected {len(rows_req)} requirement(s) "
+            "but no UAT test case; refusing to write a report whose UAT sheet "
+            "is empty. Counting requirements alone does not catch this: a "
+            "dropped or renamed journeys key yields a full REQ sheet and an "
+            "empty UAT sheet. Pass --allow-empty (build(allow_empty=True) when "
+            "calling build() directly) if that is genuinely expected."
+        )
 
     provenance = Provenance(
         primary_commit=overrides.get("primary_commit", ""),
@@ -97,9 +147,9 @@ def main() -> int:
         "--allow-empty",
         action="store_true",
         help=(
-            "Permit writing a report with zero requirements. Refused by "
-            "default: a well-formed empty report is what a loader bug or a "
-            "wrong scope produces, silently."
+            "Permit writing a report with zero requirements or zero UAT "
+            "test cases. Refused by default: a well-formed empty report is "
+            "what a loader bug or a wrong scope produces, silently."
         ),
     )
     args = parser.parse_args()

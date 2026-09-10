@@ -181,3 +181,202 @@ def test_main_prints_the_stdout_contract(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == "OQ report: 3 requirements, 3 UAT test cases\n"
+
+
+def test_scoped_trace_fixture_drives_the_orchestrator(
+    compile_oq, tmp_path, sample_manifest_path, sample_trace_scoped_path, sample_graph_path
+):
+    """Every other test here feeds the bare-list trace shape, which no scoped
+    production run emits. A scoped manifest -- the normal case -- makes the
+    exporter emit a dict with the rows under `nodes`, and reading that key
+    wrongly is the exact defect that rendered an empty report at exit 0. Drive
+    the orchestrator end to end on the dict shape so the wiring, not just the
+    loader, is exercised against it.
+
+    `JNY-FIX-01` is deliberately absent from the graph fixture, so its
+    Description renders blank: one missing title is a gap in the graph, not the
+    total loader failure the zero-journey guard exists for.
+    """
+    counts = compile_oq.build(
+        manifest_path=sample_manifest_path,
+        trace_path=sample_trace_scoped_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=tmp_path / "build" / "oq.xlsx",
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+    )
+    assert counts == (1, 1)
+    req_csv = (tmp_path / "reports" / "oq-req.csv").read_text()
+    assert "SPN-PRD-fixture-obligation" in req_csv
+    assert "UAT-JNY-FIX-01" in req_csv
+    uat_csv = (tmp_path / "reports" / "oq-uat.csv").read_text()
+    assert "UAT-JNY-FIX-01" in uat_csv
+
+
+def _manifest_with(tmp_path, sample_manifest_dict, **extra):
+    import yaml
+
+    raw = dict(sample_manifest_dict)
+    raw.update(extra)
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    return path
+
+
+def test_declared_namespace_missing_is_refused(
+    compile_oq,
+    tmp_path,
+    sample_manifest_dict,
+    sample_trace_path,
+    sample_graph_path,
+):
+    """The 80%-incomplete report: a federated associate is simply not
+    configured, so its namespace contributes no row and everything else about
+    the run looks healthy."""
+    manifest = _manifest_with(
+        tmp_path, sample_manifest_dict, require_namespaces=["SPN", "PLT"]
+    )
+    with pytest.raises(ValueError) as excinfo:
+        compile_oq.build(
+            manifest_path=manifest,
+            trace_path=sample_trace_path,
+            graph_path=sample_graph_path,
+            out_csv_dir=tmp_path / "reports",
+            out_xlsx=tmp_path / "build" / "oq.xlsx",
+            provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        )
+    message = str(excinfo.value)
+    assert "PLT" in message      # what is missing
+    assert "SPN" in message      # what was found
+    # Refused before any deliverable is written.
+    assert not (tmp_path / "reports" / "oq-req.csv").exists()
+    assert not (tmp_path / "build" / "oq.xlsx").exists()
+
+
+def test_declared_namespace_missing_is_refused_even_with_allow_empty(
+    compile_oq,
+    tmp_path,
+    sample_manifest_dict,
+    sample_trace_path,
+    sample_graph_path,
+):
+    """--allow-empty says an empty report may be honest. It does not say a
+    report missing a namespace the manifest declares may be."""
+    manifest = _manifest_with(
+        tmp_path, sample_manifest_dict, require_namespaces=["PLT"]
+    )
+    with pytest.raises(ValueError):
+        compile_oq.build(
+            manifest_path=manifest,
+            trace_path=sample_trace_path,
+            graph_path=sample_graph_path,
+            out_csv_dir=tmp_path / "reports",
+            out_xlsx=tmp_path / "build" / "oq.xlsx",
+            allow_empty=True,
+        )
+
+
+def test_all_declared_namespaces_present_passes(
+    compile_oq,
+    tmp_path,
+    sample_manifest_dict,
+    sample_trace_path,
+    sample_graph_path,
+):
+    manifest = _manifest_with(
+        tmp_path, sample_manifest_dict, require_namespaces=["SPN"]
+    )
+    counts = compile_oq.build(
+        manifest_path=manifest,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=tmp_path / "build" / "oq.xlsx",
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+    )
+    assert counts == (3, 3)
+
+
+def test_no_namespace_declaration_behaves_as_before(
+    compile_oq, tmp_path, sample_manifest_path, sample_trace_path, sample_graph_path
+):
+    """The stock fixture manifest declares no require_namespaces, so the
+    generator stays agnostic about who is federated."""
+    manifest = compile_oq.Manifest.from_path(sample_manifest_path)
+    assert manifest.require_namespaces == ()
+    counts = compile_oq.build(
+        manifest_path=sample_manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=tmp_path / "build" / "oq.xlsx",
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+    )
+    assert counts == (3, 3)
+
+
+def test_zero_uat_rows_refused_by_default(
+    compile_oq, tmp_path, sample_manifest_path, sample_graph_path
+):
+    """A full REQ sheet with an empty UAT sheet: what a dropped or renamed
+    `journeys` key upstream produces. Counting requirements alone passes it."""
+    import json
+
+    trace = tmp_path / "trace.json"
+    trace.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "SPN-PRD-audit-log",
+                    "title": "Audit Log",
+                    "level": "PRD",
+                    "status": "Active",
+                    "uat_verified": {"ratio": 0.0},
+                    "journeys": [],
+                }
+            ]
+        )
+    )
+    with pytest.raises(ValueError) as excinfo:
+        compile_oq.build(
+            manifest_path=sample_manifest_path,
+            trace_path=trace,
+            graph_path=sample_graph_path,
+            out_csv_dir=tmp_path / "reports",
+            out_xlsx=tmp_path / "build" / "oq.xlsx",
+        )
+    assert "UAT" in str(excinfo.value)
+    assert "--allow-empty" in str(excinfo.value)
+    assert not (tmp_path / "reports" / "oq-req.csv").exists()
+    assert not (tmp_path / "build" / "oq.xlsx").exists()
+
+
+def test_zero_uat_rows_permitted_with_flag(
+    compile_oq, tmp_path, sample_manifest_path, sample_graph_path
+):
+    import json
+
+    trace = tmp_path / "trace.json"
+    trace.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "SPN-PRD-audit-log",
+                    "title": "Audit Log",
+                    "level": "PRD",
+                    "status": "Active",
+                    "uat_verified": {"ratio": 0.0},
+                    "journeys": [],
+                }
+            ]
+        )
+    )
+    counts = compile_oq.build(
+        manifest_path=sample_manifest_path,
+        trace_path=trace,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=tmp_path / "build" / "oq.xlsx",
+        allow_empty=True,
+    )
+    assert counts == (1, 0)
