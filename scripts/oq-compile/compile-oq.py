@@ -28,12 +28,29 @@ def build(
     out_csv_dir: Path,
     out_xlsx: Path,
     provenance_overrides: dict[str, Any] | None = None,
+    allow_empty: bool = False,
 ) -> tuple[int, int]:
-    """Produce both deliverables. Returns (requirement count, UAT case count)."""
+    """Produce both deliverables. Returns (requirement count, UAT case count).
+
+    Refuses to write anything when the trace selects zero requirements,
+    unless ``allow_empty`` is set: a well-formed, correctly-provenanced,
+    entirely empty report is indistinguishable from a healthy report on a
+    tiny scope, and is exactly the shape a loader bug or a manifest typo
+    produces. Checked here rather than in the CLI entrypoint so no caller
+    of ``build()`` -- including a future one -- can bypass it.
+    """
     overrides = dict(provenance_overrides or {})
     manifest = Manifest.from_path(Path(manifest_path))
     requirements, scope_lines = load_trace(Path(trace_path))
     journey_titles = load_journeys(Path(graph_path))
+
+    if not requirements and not allow_empty:
+        raise ValueError(
+            f"no requirements matched scope '{manifest.scope}'; refusing to "
+            "write an empty report. Pass --allow-empty (build(allow_empty=True) "
+            "when calling build() directly) if an empty report is genuinely "
+            "expected."
+        )
 
     rows_req = req_rows(requirements, manifest)
     rows_uat = uat_rows(requirements, journey_titles, manifest)
@@ -76,6 +93,15 @@ def main() -> int:
     parser.add_argument("--associate-commit", action="append", default=[])
     parser.add_argument("--elspais-version", default="")
     parser.add_argument("--tool-version", default="")
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help=(
+            "Permit writing a report with zero requirements. Refused by "
+            "default: a well-formed empty report is what a loader bug or a "
+            "wrong scope produces, silently."
+        ),
+    )
     args = parser.parse_args()
 
     reqs, cases = build(
@@ -90,6 +116,7 @@ def main() -> int:
             "elspais_version": args.elspais_version,
             "tool_version": args.tool_version,
         },
+        allow_empty=args.allow_empty,
     )
     print(f"OQ report: {reqs} requirements, {cases} UAT test cases")
     return 0

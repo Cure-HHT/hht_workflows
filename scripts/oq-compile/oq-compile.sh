@@ -74,7 +74,12 @@ echo "exporting graph"
 (cd "$PRIMARY_ROOT" && "$ELSPAIS" graph -o "${WORK}/graph.json")
 
 ELSPAIS_VERSION="$("$ELSPAIS" --version | head -1)"
-PRIMARY_COMMIT="$(git -C "$PRIMARY_ROOT" rev-parse HEAD)"
+# A fresh checkout (e.g. the readiness fixture, `git init`-ed but never
+# committed) has no HEAD. The report is still producible without a commit
+# SHA to stamp, so this states an explicit "unknown" rather than aborting —
+# unlike the associate/federation steps above, where failure means the
+# report itself would be wrong.
+PRIMARY_COMMIT="$(git -C "$PRIMARY_ROOT" rev-parse HEAD 2>/dev/null)" || PRIMARY_COMMIT="unknown"
 TOOL_VERSION="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null)" || TOOL_VERSION="unknown"
 
 declare -a ASSOC_ARGS=()

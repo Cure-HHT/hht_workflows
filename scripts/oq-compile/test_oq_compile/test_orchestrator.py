@@ -87,6 +87,67 @@ def test_generated_at_override_reaches_the_workbook(
     assert prov_rows["Generated at (UTC)"] == "2026-09-09T12:00:00Z"
 
 
+def test_empty_selection_refused_by_default(
+    compile_oq, tmp_path, sample_manifest_path, sample_graph_path
+):
+    # A trace file selecting zero requirements is exactly what the CUR-1925
+    # loader bug produced for every scoped run: a well-formed, correctly-
+    # provenanced, entirely empty report at exit 0. build() must refuse it.
+    empty_trace = tmp_path / "trace-empty.json"
+    empty_trace.write_text("[]")
+
+    with pytest.raises(ValueError) as excinfo:
+        compile_oq.build(
+            manifest_path=sample_manifest_path,
+            trace_path=empty_trace,
+            graph_path=sample_graph_path,
+            out_csv_dir=tmp_path / "reports",
+            out_xlsx=tmp_path / "build" / "oq.xlsx",
+            provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        )
+    assert "example-scope" in str(excinfo.value)
+    assert "--allow-empty" in str(excinfo.value)
+    # Refused before any deliverable is written.
+    assert not (tmp_path / "reports" / "oq-req.csv").exists()
+    assert not (tmp_path / "build" / "oq.xlsx").exists()
+
+
+def test_empty_selection_permitted_with_flag(
+    compile_oq, tmp_path, sample_manifest_path, sample_graph_path
+):
+    empty_trace = tmp_path / "trace-empty.json"
+    empty_trace.write_text("[]")
+
+    counts = compile_oq.build(
+        manifest_path=sample_manifest_path,
+        trace_path=empty_trace,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=tmp_path / "build" / "oq.xlsx",
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+        allow_empty=True,
+    )
+    assert counts == (0, 0)
+    assert (tmp_path / "reports" / "oq-req.csv").exists()
+    assert (tmp_path / "build" / "oq.xlsx").exists()
+
+
+def test_non_empty_selection_unaffected_by_the_empty_check(
+    compile_oq, tmp_path, sample_manifest_path, sample_trace_path, sample_graph_path
+):
+    # allow_empty defaults to False; a non-empty selection must not trip
+    # the new check.
+    counts = compile_oq.build(
+        manifest_path=sample_manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=tmp_path / "build" / "oq.xlsx",
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+    )
+    assert counts == (3, 3)
+
+
 def test_main_prints_the_stdout_contract(
     compile_oq,
     tmp_path,
