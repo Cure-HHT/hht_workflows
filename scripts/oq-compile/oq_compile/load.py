@@ -16,6 +16,13 @@ from typing import Any
 _JOURNEY_KIND = "USER_JOURNEY"
 
 
+def _require(mapping: dict[str, Any], key: str, ctx: str) -> Any:
+    """Return ``mapping[key]``, or fail loud naming ``ctx``."""
+    if key not in mapping or mapping[key] is None:
+        raise ValueError(f"{ctx}: required key '{key}' is missing")
+    return mapping[key]
+
+
 @dataclass(frozen=True)
 class JourneyRef:
     id: str
@@ -40,8 +47,8 @@ def _dedupe(raw: list[dict[str, Any]]) -> tuple[JourneyRef, ...]:
     a journey once per requirement, so the first entry wins.
     """
     seen: dict[str, JourneyRef] = {}
-    for entry in raw:
-        jid = entry["id"]
+    for i, entry in enumerate(raw):
+        jid = _require(entry, "id", f"journey entry {i}")
         if jid not in seen:
             seen[jid] = JourneyRef(id=jid, verdict=entry.get("verdict", "unverified"))
     return tuple(seen.values())
@@ -65,14 +72,20 @@ def load_trace(path: Path) -> tuple[tuple[Requirement, ...], tuple[str, ...]]:
 
     requirements = tuple(
         Requirement(
-            id=row["id"],
+            id=_require(row, "id", f"requirement row {i}"),
             title=row.get("title", ""),
             level=row.get("level", ""),
             status=row.get("status", ""),
-            uat_verified_ratio=float((row.get("uat_verified") or {}).get("ratio", 0.0)),
+            uat_verified_ratio=float(
+                _require(
+                    _require(row, "uat_verified", f"requirement row {i}"),
+                    "ratio",
+                    f"requirement row {i}: uat_verified",
+                )
+            ),
             journeys=_dedupe(row.get("journeys") or []),
         )
-        for row in rows
+        for i, row in enumerate(rows)
     )
     return requirements, scope
 
