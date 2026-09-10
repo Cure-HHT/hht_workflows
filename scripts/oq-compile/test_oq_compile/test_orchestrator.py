@@ -52,6 +52,71 @@ def test_csv_outputs_are_reproducible(
             provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
         )
         digests.append(
-            hashlib.sha256((target / "oq-req.csv").read_bytes()).hexdigest()
+            (
+                hashlib.sha256((target / "oq-req.csv").read_bytes()).hexdigest(),
+                hashlib.sha256((target / "oq-uat.csv").read_bytes()).hexdigest(),
+            )
         )
     assert digests[0] == digests[1]
+
+
+def test_generated_at_override_reaches_the_workbook(
+    compile_oq, tmp_path, sample_manifest_path, sample_trace_path, sample_graph_path
+):
+    """provenance_overrides is asserted as an input by every other test here;
+    this asserts it as an effect. If build() silently ignored the override
+    and stamped the real clock instead, every other test would still pass."""
+    import openpyxl
+
+    out_xlsx = tmp_path / "build" / "oq.xlsx"
+    compile_oq.build(
+        manifest_path=sample_manifest_path,
+        trace_path=sample_trace_path,
+        graph_path=sample_graph_path,
+        out_csv_dir=tmp_path / "reports",
+        out_xlsx=out_xlsx,
+        provenance_overrides={"generated_at": "2026-09-09T12:00:00Z"},
+    )
+    manifest = compile_oq.Manifest.from_path(sample_manifest_path)
+    wb = openpyxl.load_workbook(out_xlsx)
+    prov_rows = dict(
+        (row[0], row[1])
+        for row in wb[manifest.provenance_sheet_name].iter_rows(values_only=True)
+        if row and row[0]
+    )
+    assert prov_rows["Generated at (UTC)"] == "2026-09-09T12:00:00Z"
+
+
+def test_main_prints_the_stdout_contract(
+    compile_oq,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    sample_manifest_path,
+    sample_trace_path,
+    sample_graph_path,
+):
+    """Task 7's composite action parses this exact printed line with `sed`
+    to produce its two GitHub Actions outputs; a change to the format here
+    would pass every other test in this file and break that step silently."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "compile-oq.py",
+            "--manifest",
+            str(sample_manifest_path),
+            "--trace",
+            str(sample_trace_path),
+            "--graph",
+            str(sample_graph_path),
+            "--out-csv-dir",
+            str(tmp_path / "reports"),
+            "--out-xlsx",
+            str(tmp_path / "build" / "oq.xlsx"),
+        ],
+    )
+    exit_code = compile_oq.main()
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == "OQ report: 3 requirements, 3 UAT test cases\n"
