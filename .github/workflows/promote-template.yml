@@ -194,6 +194,19 @@ jobs:
               exit 1
             fi
 
+            # `unknown` is not a malformed value, it is the PRODUCER'S SENTINEL
+            # for the absent case: portal-final.Dockerfile writes it when the
+            # core image it was built FROM carries no revision marker, so that
+            # a pre-attestation base stays buildable and gets refused here
+            # instead. Classifying it as malformed sends the operator to look
+            # for a corrupt value; the fix is to roll the base image forward,
+            # which is what the absent branch above already says. Same remedy,
+            # so it is stated here rather than left to the generic message.
+            if [ "$value" = "unknown" ]; then
+              echo "::error::Refusing to promote out of '$SOURCE_ENV': its health manifest reports '$key=unknown', which is what the build writes when the core image it was built from carries no revision marker. Advance the sponsor's core image pin to a revision that records one, rebuild, and redeploy '$SOURCE_ENV'."
+              exit 1
+            fi
+
             # Anchored both ends, and matched against the whole STRING rather
             # than line by line. `grep -E '^...$'` anchors per line, so a value
             # containing a newline passes it whenever every line happens to

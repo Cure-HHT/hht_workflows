@@ -235,6 +235,22 @@ def test_absent_core_commit_refuses():
     assert "reports no 'core_commit'" in r.stdout
 
 
+def test_unknown_sentinel_refuses_with_the_rebuild_remedy():
+    """`unknown` is the producer's sentinel for "the core image I was built from
+    carried no marker", not a corrupt value. It must refuse -- but under a
+    reason that names the fix. Classifying it as malformed tells the operator
+    the value is garbage and leaves them looking for corruption, when what they
+    have to do is advance the base image pin and rebuild."""
+    r = revisions('{"status":"ok","versions":{"server_commit":"b3f21aa","core_commit":"unknown"}}')
+    assert r.returncode != 0, "an artifact that cannot state its source must be refused"
+    assert "core_commit=unknown" in r.stdout
+    assert "rebuild" in r.stdout.lower(), "the refusal must name the remedy"
+    assert "not a well-formed revision identifier" not in r.stdout, (
+        "the sentinel must not be reported as a malformed value -- that is the "
+        "wrong diagnosis and sends the operator somewhere useless"
+    )
+
+
 def test_absent_server_commit_refuses():
     r = revisions('{"status":"ok","versions":{"core_commit":"9e4c17d"}}')
     assert r.returncode != 0
