@@ -1,0 +1,31 @@
+{
+  "nodes": {
+    "JNY-AUTH-06": {
+      "id": "JNY-AUTH-06",
+      "kind": "USER_JOURNEY",
+      "label": "Extending an Idle Session"
+    },
+    "JNY-EPIS-10": {
+      "id": "JNY-EPIS-10",
+      "kind": "USER_JOURNEY",
+      "label": "Opening a Day From the Calendar"
+    },
+    "JNY-EPIS-07": {
+      "id": "JNY-EPIS-07",
+      "kind": "USER_JOURNEY",
+      "label": "Duration Reasonableness Check on Save"
+    },
+    "JNY-ORPHAN-01": {
+      "id": "JNY-ORPHAN-01",
+      "kind": "USER_JOURNEY",
+      "label": "Validates Nothing In Scope"
+    },
+    "SPN-PRD-session-management": {
+      "id": "SPN-PRD-session-management",
+      "kind": "REQUIREMENT",
+      "label": "Session Management"
+    }
+  },
+  "roots": [],
+  "metadata": {}
+}

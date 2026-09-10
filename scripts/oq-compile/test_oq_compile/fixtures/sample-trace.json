@@ -1,0 +1,33 @@
+[
+  {
+    "id": "SPN-PRD-session-management",
+    "title": "Session Management",
+    "level": "PRD",
+    "status": "Active",
+    "uat_coverage": {"count": 2.0, "total": 2.0, "ratio": 1.0},
+    "uat_verified": {"count": 2.0, "total": 2.0, "ratio": 1.0},
+    "journeys": [{"id": "JNY-AUTH-06", "verdict": "pass"}]
+  },
+  {
+    "id": "SPN-GUI-calendar-day-view",
+    "title": "Calendar Day View",
+    "level": "GUI",
+    "status": "Draft",
+    "uat_coverage": {"count": 1.0, "total": 3.0, "ratio": 0.33},
+    "uat_verified": {"count": 0.0, "total": 3.0, "ratio": 0.0},
+    "journeys": [
+      {"id": "JNY-EPIS-10", "verdict": "unverified"},
+      {"id": "JNY-EPIS-10", "verdict": "unverified"},
+      {"id": "JNY-EPIS-07", "verdict": "fail"}
+    ]
+  },
+  {
+    "id": "SPN-PRD-audit-log",
+    "title": "Audit Log",
+    "level": "PRD",
+    "status": "Draft",
+    "uat_coverage": {"count": 0.0, "total": 4.0, "ratio": 0.0},
+    "uat_verified": {"count": 0.0, "total": 4.0, "ratio": 0.0},
+    "journeys": []
+  }
+]
