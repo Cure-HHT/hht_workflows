@@ -62,3 +62,26 @@ source_version() {
 
   printf 'unidentified (no .upstream-commit stamp, no git description at %s)\n' "$root"
 }
+
+# The compile pipeline's own identity.
+#
+# Where the compile runs as a composite action, the action was downloaded as a
+# tarball and has no `.git` — so git identifies it as poorly as it identifies an
+# obtained tree. GitHub supplies the two values a reviewer actually reads in the
+# caller's `uses:` line, and they are more truthful than a description of the
+# working tree even where both answer: the reference is what the caller pinned.
+tool_slug() {
+  if [ -n "${GITHUB_ACTION_REPOSITORY:-}" ]; then
+    printf '%s\n' "$GITHUB_ACTION_REPOSITORY"
+    return 0
+  fi
+  source_slug "$1"
+}
+
+tool_version() {
+  if [ -n "${GITHUB_ACTION_REF:-}" ]; then
+    printf '%s\n' "$GITHUB_ACTION_REF"
+    return 0
+  fi
+  source_version "$1"
+}

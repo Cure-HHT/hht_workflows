@@ -159,6 +159,13 @@ Each identity is read from the source tree itself, by `source-identity.sh`:
 | a working tree | the origin remote, and `git describe` |
 | neither | a row saying which of the two is missing, and where |
 
+The pipeline's own row is read the same way, with one addition: where the
+compile runs as a composite action, the action's repository and the reference
+the caller pinned it at name it instead. A remotely-`uses:`d action is a
+downloaded tarball with no `.git`, so git identifies it no better than it
+identifies an obtained tree — and the reference is what the caller actually
+chose, which a description of the working tree is not.
+
 The stamp wins where both exist. A stamped tree that someone also ran `git init`
 in holds the artifact's content whatever its working history says, and only the
 stamp names what the compile actually read.

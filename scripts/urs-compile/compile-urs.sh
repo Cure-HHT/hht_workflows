@@ -211,8 +211,8 @@ pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
 #    the committed deliverables. Versions are derived from git so the script
 #    stays sponsor-agnostic (no repo names baked in).
 PROVENANCE="${PRIMARY_ROOT}/docs/${NAME}-build-provenance.md"
-WF_SLUG="$(source_slug "${SCRIPT_DIR}")"
-WF_VERSION="$(source_version "${SCRIPT_DIR}")"
+WF_SLUG="$(tool_slug "${SCRIPT_DIR}")"
+WF_VERSION="$(tool_version "${SCRIPT_DIR}")"
 # The build date is a property of the inputs, not of when the compile ran. A
 # provenance file stamped from the clock changes every day from identical
 # sources, so nothing can compare a committed deliverable against a rebuilt one
