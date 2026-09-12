@@ -3,12 +3,16 @@
 # Guards the two ways a sponsor final-image build can embed the wrong core
 # base image (CUR-1668):
 #
-#   1. PINS — every base image declared in the sponsor's
-#      deployment/base-config.json is a content digest, never a mutable tag.
-#      A floating `:main-latest` lets two builds of the same sponsor commit
-#      resolve different base content, and lets a build started inside the
-#      core publish window ship the sponsor half of a two-repo change without
-#      the core half. Realizes HSI-OPS-image-promotion/G.
+#   1. PINS — every base image reference this build will consume is a content
+#      digest, never a mutable tag. A floating `:main-latest` lets two builds
+#      of the same sponsor commit resolve different base content, and lets a
+#      build started inside the core publish window ship the sponsor half of a
+#      two-repo change without the core half. Realizes HSI-OPS-image-promotion/G.
+#
+#      The references are supplied by the caller rather than read from the
+#      sponsor's configuration, because the configuration no longer holds them:
+#      a sponsor names the upstream commit and the build resolves it to a
+#      digest. Reading the file would check a value nothing consumes.
 #
 #   2. CAPABILITIES — the pinned portal-server base declares every permission
 #      the sponsor's role-permissions.yaml grants. A base that predates a
@@ -27,10 +31,12 @@ name: 'Sponsor Base Preflight'
 description: 'Verify sponsor base images are digest-pinned and capability-compatible with the sponsor config.'
 
 inputs:
-  base-config:
-    description: 'Path to the sponsor deployment/base-config.json'
-    required: false
-    default: 'deployment/base-config.json'
+  base-images:
+    description: >
+      Newline-delimited list of every base image reference this build will be
+      built FROM. Each must be `<name>@sha256:<digest>`. Supplying none is a
+      failure: a build whose bases nothing examined has not passed this check.
+    required: true
   portal-server-image:
     description: 'Digest-pinned portal-server reference to check capabilities against'
     required: true
@@ -52,11 +58,20 @@ runs:
     - name: Verify base images are digest-pinned
       shell: bash
       env:
-        BASE_CONFIG: ${{ inputs.base-config }}
+        BASE_IMAGES: ${{ inputs.base-images }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        python3 "${ACTION_PATH}/preflight.py" pins --base-config "${BASE_CONFIG}"
+        args=()
+        while IFS= read -r reference; do
+          reference="$(printf '%s' "$reference" | tr -d '[:space:]')"
+          [ -z "$reference" ] && continue
+          args+=(--image "$reference")
+        done <<< "$BASE_IMAGES"
+        # `${args[@]+...}` not `"${args[@]}"`: under `set -u` an empty array
+        # is an unbound variable on older bash, and the empty case is the one
+        # that must reach the checker rather than abort before it.
+        python3 "${ACTION_PATH}/preflight.py" pins ${args[@]+"${args[@]}"}
 
     - name: Extract the declared-permission manifest from the pinned base
       id: extract
@@ -95,7 +110,7 @@ runs:
           echo "declared permissions: $(grep -c . "${MANIFEST}")"
         elif printf '%s' "$cp_out" | grep -qiE 'no such file or directory|not found in|could not find'; then
           echo "present=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::${IMAGE} carries no /app/PORTAL_ACTIONS manifest (tolerated: base predates the manifest); the capability check is skipped for this build. Advance base_images.portal_server to a core build that publishes it."
+          echo "::warning::${IMAGE} carries no /app/PORTAL_ACTIONS manifest (tolerated: base predates the manifest); the capability check is skipped for this build. Advance the upstream pin to a build that publishes it."
         else
           echo "::error::could not read /app/PORTAL_ACTIONS from ${IMAGE}: ${cp_out}"
           exit "$rc"

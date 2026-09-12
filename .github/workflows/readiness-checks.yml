@@ -559,17 +559,6 @@ jobs:
           echo "image=readiness-portal-server:local" >> "$GITHUB_OUTPUT"
           echo "seeded base image $(docker image inspect readiness-portal-server:local --format '{{ .Id }}')"
 
-          # A syntactically valid digest pin; the capability half of the check
-          # runs against the locally-seeded stand-in image passed as an input,
-          # so this value only has to satisfy the pin format.
-          cat > deployment/base-config.json <<EOF
-          {
-            "base_images": {
-              "portal_server": "ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-            }
-          }
-          EOF
-
           cat > deployment/sponsor/role-permissions.yaml <<'EOF'
           roles:
             - CRA
@@ -579,9 +568,15 @@ jobs:
               - portal.site.view_list
           EOF
 
-      - name: Preflight passes on a compatible, digest-pinned config
+      - name: Preflight passes on compatible, digest-pinned references
         uses: ./.github/actions/sponsor-base-preflight
         with:
+          # A syntactically valid digest pin; the capability half runs against
+          # the locally-seeded stand-in passed below, so these only have to
+          # satisfy the pin format.
+          base-images: |
+            ghcr.io/cure-hht/sponsor-ci@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
           portal-server-image: ${{ steps.seed.outputs.image }}
 
       - name: Preflight rejects a mutable tag and an undeclared grant
@@ -593,10 +588,15 @@ jobs:
           preflight=.github/actions/sponsor-base-preflight/preflight.py
 
           # A mutable tag must be rejected (HSI-OPS-image-promotion/G).
-          printf '{"base_images":{"portal_server":"ghcr.io/cure-hht/portal-server:main-latest"}}\n' > /tmp/floating.json
-          rc=0; python3 "$preflight" pins --base-config /tmp/floating.json > /tmp/pins.out 2>&1 || rc=$?
+          rc=0; python3 "$preflight" pins --image ghcr.io/cure-hht/portal-server:main-latest > /tmp/pins.out 2>&1 || rc=$?
           if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a mutable base tag"; cat /tmp/pins.out; exit 1; fi
           grep -q 'main-latest' /tmp/pins.out || { echo "::error::pin failure did not name the offending reference"; exit 1; }
+
+          # Supplying nothing must be rejected too. That is how this check stops
+          # checking: a caller that quietly stops passing its references would
+          # otherwise get a green preflight for a build nothing examined.
+          rc=0; python3 "$preflight" pins > /tmp/none.out 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "::error::preflight passed with no base references at all"; cat /tmp/none.out; exit 1; fi
 
           # A grant the base does not declare must be rejected by name
           # (HSI-OPS-image-promotion/H).

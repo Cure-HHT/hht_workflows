@@ -5,8 +5,10 @@ image. Two checks, run before the image is built.
 
 ## 1. Pins — `HSI-OPS-image-promotion/G`
 
-Every entry under `base_images` in the sponsor's `deployment/base-config.json`
-must be a content digest:
+Every base image reference the build will consume must be a content digest.
+The caller supplies them, because they are what the build is about to build
+FROM: a sponsor names the upstream commit and the build resolves it to a
+digest, so no configuration file holds the value being checked.
 
 ```text
 ghcr.io/cure-hht/portal-server@sha256:<64 hex>      accepted
@@ -14,6 +16,10 @@ ghcr.io/cure-hht/portal-server:main-latest          rejected
 ghcr.io/cure-hht/portal-server:main-latest@sha256:… rejected (tag + digest)
 ghcr.io/cure-hht/portal-server                      rejected (no reference)
 ```
+
+Supplying no references at all is rejected too. That is how a check like this
+stops checking: a caller that quietly stops passing them would otherwise get a
+pass for a build whose bases nothing examined.
 
 A mutable tag makes the sponsor image non-reproducible: two builds of the same
 sponsor commit can embed different base content. It also opens a publish-latency
@@ -52,28 +58,29 @@ The caller checks out the sponsor repo and authenticates to the registry first.
     password: ${{ secrets.GITHUB_TOKEN }}
 - uses: Cure-HHT/hht_workflows/.github/actions/sponsor-base-preflight@<sha>
   with:
+    base-images: |
+      ${{ steps.config.outputs.sponsor_ci_image }}
+      ${{ steps.config.outputs.portal_server_image }}
     portal-server-image: ${{ steps.config.outputs.portal_server_image }}
 ```
 
 | Input | Default | Meaning |
 | ----- | ------- | ------- |
-| `base-config` | `deployment/base-config.json` | sponsor build config to check pins in |
+| `base-images` | *(required)* | newline-delimited references this build is built FROM |
 | `portal-server-image` | *(required)* | digest-pinned base to check capabilities against |
 | `role-permissions` | `deployment/sponsor/role-permissions.yaml` | sponsor authorization overlay |
 
 ## Advancing a pin
 
-Until the core -> sponsor cascade lands (CUR-872), pins are advanced by hand:
+A sponsor pins the upstream **commit**, under `upstream_pins` in its
+`deployment/base-config.json`, and the build resolves that commit to the digest
+of each base image published for it. One value to advance, and the two images
+cannot disagree about which upstream revision they came from — which they had,
+before this arrangement.
 
-```sh
-docker manifest inspect -v ghcr.io/cure-hht/portal-server:main-latest \
-  | jq -r '.[0].Descriptor.digest // .Descriptor.digest'
-```
-
-Put the digest in `base_images.portal_server` and open a sponsor PR. Do the same
-for `base_images.sponsor_ci`. Advance both from the *same* core commit — they are
-published by one core workflow run, and mixing them reintroduces the skew this
-action exists to prevent.
+Advance it to a commit whose publish run succeeded; a commit that published
+nothing cannot be resolved, and the build refuses it rather than reaching for a
+nearby revision.
 
 ## Tests
 
