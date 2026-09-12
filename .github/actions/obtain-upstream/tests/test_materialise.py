@@ -1,10 +1,12 @@
-"""Offline tests for the obtain-upstream action's materialise step.
+"""Offline tests for obtain.sh, run against a stub ``docker``.
 
-The step is extracted straight out of ``action.yml`` and run against a stub
-``docker``, so the test cannot drift from the action the way a reimplementation
-would. The stub records every call, which is how the no-op case is proved: not
-by the exit code, which would be zero either way, but by the absence of a
-``cp`` in the record.
+This is the script both entry points run -- the composite action and any caller
+obtaining several upstreams in a loop -- so testing it directly tests what
+actually executes, with no extraction step to drift.
+
+The stub records every call, which is how the no-op case is proved: not by the
+exit code, which would be zero either way, but by the absence of a ``cp`` in
+the record.
 
 Three behaviours matter here and none of them is observable from a green CI run
 of the real thing:
@@ -24,22 +26,11 @@ import pathlib
 import subprocess
 import textwrap
 
-import yaml
-
-ACTION = pathlib.Path(__file__).resolve().parents[1] / "action.yml"
-ACTION_DIR = ACTION.parent
+OBTAIN = pathlib.Path(__file__).resolve().parents[1] / "obtain.sh"
 
 GOOD = "cbbbf10438edc6c2d83e8d0efbee4b32ced4feae"
 OTHER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 DIGEST = "ghcr.io/cure-hht/hht_diary@sha256:" + "b" * 64
-
-
-def _script() -> str:
-    """The materialise step's shell, read out of the action itself."""
-    doc = yaml.safe_load(ACTION.read_text())
-    steps = doc["runs"]["steps"]
-    step = next(s for s in steps if s.get("id") == "materialise")
-    return step["run"]
 
 
 def _stub_docker(bin_dir: pathlib.Path, payload: pathlib.Path, *, pull_ok: bool) -> None:
@@ -89,19 +80,14 @@ def _run(tmp_path: pathlib.Path, commit: str, *, pull_ok: bool = True):
 
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
-        "REPOSITORY": "cure-hht/hht_diary",
-        "COMMIT": commit,
-        "REGISTRY": "ghcr.io",
-        "DEST_INPUT": str(dest),
-        "TOKEN": "unused-by-the-stub",
-        "ACTOR": "someone",
-        "ACTION_PATH": str(ACTION_DIR),
+        "GITHUB_ACTOR": "someone",
         "RUNNER_TEMP": str(tmp_path / "runner-temp"),
-        "GITHUB_OUTPUT": str(outputs),
         "DOCKER_CALLS": str(calls),
     }
     proc = subprocess.run(
-        ["bash", "-c", _script()], env=env, capture_output=True, text=True
+        [str(OBTAIN), "cure-hht/hht_diary", commit, str(dest),
+         "unused-by-the-stub", "ghcr.io"],
+        env=env, capture_output=True, text=True,
     )
     call_log = calls.read_text() if calls.exists() else ""
     return proc, dest, outputs.read_text(), call_log
@@ -112,8 +98,7 @@ def test_first_call_materialises_the_whole_tree(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert (dest / "spec" / "a-requirement.md").is_file()
     assert (dest / ".hidden-file").is_file(), "dotfiles must travel; nothing curates a subset"
-    assert f"path={dest}" in outputs
-    assert f"digest={DIGEST}" in outputs
+    assert (dest / ".upstream-digest").read_text().strip() == DIGEST
 
 
 def test_second_call_for_the_same_commit_copies_nothing(tmp_path):
@@ -124,8 +109,8 @@ def test_second_call_for_the_same_commit_copies_nothing(tmp_path):
     assert "already materialised" in proc.stdout
     assert " cp " not in f" {calls} ", f"a second copy was made: {calls!r}"
     assert "pull" not in calls, f"the registry was contacted again: {calls!r}"
-    assert f"path={dest}" in outputs
-    assert f"digest={DIGEST}" in outputs, "the recorded digest survives a no-op"
+    assert (dest / ".upstream-digest").read_text().strip() == DIGEST, \
+        "the recorded digest survives a no-op"
 
 
 def test_a_different_commit_re_materialises(tmp_path):
