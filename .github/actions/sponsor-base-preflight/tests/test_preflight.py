@@ -8,7 +8,6 @@ The two checks are independent obligations:
            the sponsor's role-permissions overlay grants.
 """
 
-import json
 import textwrap
 
 import pytest
@@ -16,6 +15,7 @@ import pytest
 from preflight import (
     check_capabilities,
     check_pins,
+    references_from,
     granted_permission_names,
     main,
     parse_declared_permissions,
@@ -28,69 +28,98 @@ DIGEST = "sha256:" + "a" * 64
 
 
 class TestCheckPins:
-    """Verifies: HSI-OPS-image-promotion/G"""
+    """Verifies: HSI-OPS-image-promotion/G
 
-    def test_accepts_digest_pinned_bases(self):
-        config = {
-            "base_images": {
-                "sponsor_ci": f"ghcr.io/cure-hht/sponsor-ci@{DIGEST}",
-                "portal_server": f"ghcr.io/cure-hht/portal-server@{DIGEST}",
-            }
-        }
-        assert check_pins(config) == []
+    The references checked here are the ones the build is about to consume. The
+    sponsor names a commit and the build resolves it to a digest, so the value
+    being checked exists only at the point the build consumes it.
+    """
+
+    def test_accepts_digest_pinned_references(self):
+        assert check_pins([f"ghcr.io/cure-hht/sponsor-ci@{DIGEST}",
+                           f"ghcr.io/cure-hht/portal-server@{DIGEST}"]) == []
 
     def test_rejects_the_mutable_tag_that_caused_cur_1668(self):
-        config = {
-            "base_images": {"portal_server": "ghcr.io/cure-hht/portal-server:main-latest"}
-        }
-        errors = check_pins(config)
+        errors = check_pins(["ghcr.io/cure-hht/portal-server:main-latest"])
         assert len(errors) == 1
-        assert "portal_server" in errors[0]
         assert "main-latest" in errors[0]
 
     def test_rejects_a_bare_name_with_no_reference_at_all(self):
-        config = {"base_images": {"sponsor_ci": "ghcr.io/cure-hht/sponsor-ci"}}
-        assert len(check_pins(config)) == 1
+        assert len(check_pins(["ghcr.io/cure-hht/sponsor-ci"])) == 1
 
     def test_rejects_a_short_or_malformed_digest(self):
-        config = {
-            "base_images": {
-                "a": "ghcr.io/x/y@sha256:abc123",
-                "b": "ghcr.io/x/y@md5:" + "a" * 32,
-                "c": "ghcr.io/x/y@sha256:" + "A" * 64,  # uppercase is not a digest
-            }
-        }
-        assert len(check_pins(config)) == 3
+        errors = check_pins([
+            "ghcr.io/x/y@sha256:abc",
+            "ghcr.io/x/y@sha512:" + "a" * 128,
+            "ghcr.io/x/y@" + "a" * 64,
+        ])
+        assert len(errors) == 3
+
+    def test_rejects_an_uppercase_digest(self):
+        """A digest is lowercase hex; the registry will not resolve this one."""
+        errors = check_pins(["ghcr.io/x/y@sha256:" + "A" * 64])
+        assert len(errors) == 1
+        assert "lowercase" in errors[0]
 
     def test_rejects_a_tag_and_digest_together(self):
-        # `name:tag@sha256:...` resolves by digest, but the tag is dead weight
-        # that reads as if it were the pin. One unambiguous form only.
-        config = {"base_images": {"a": f"ghcr.io/x/y:main-latest@{DIGEST}"}}
-        assert len(check_pins(config)) == 1
+        """Docker resolves the digest and ignores the tag, so the tag is a lie."""
+        assert len(check_pins([f"ghcr.io/x/y:main-latest@{DIGEST}"])) == 1
 
     def test_accepts_a_registry_host_carrying_a_port(self):
-        config = {"base_images": {"a": f"localhost:5000/x/y@{DIGEST}"}}
-        assert check_pins(config) == []
+        assert check_pins([f"localhost:5000/x/y@{DIGEST}"]) == []
 
     def test_reports_every_offender_not_just_the_first(self):
-        config = {
-            "base_images": {
-                "sponsor_ci": "ghcr.io/cure-hht/sponsor-ci:main-latest",
-                "portal_server": "ghcr.io/cure-hht/portal-server:main-latest",
-            }
-        }
-        errors = check_pins(config)
+        errors = check_pins([
+            "ghcr.io/x/a:latest",
+            "ghcr.io/x/b:main",
+            f"ghcr.io/x/c@{DIGEST}",
+        ])
         assert len(errors) == 2
 
-    def test_missing_base_images_section_is_an_error_not_a_pass(self):
-        # A config that names no base images must not silently succeed: the
-        # sponsor image is built FROM something, so an empty section means the
-        # pins moved somewhere unchecked.
-        assert len(check_pins({})) == 1
-        assert len(check_pins({"base_images": {}})) == 1
+    def test_no_references_at_all_is_an_error_not_a_pass(self):
+        """A build consuming no checked base is not a build that passed.
 
-    def test_non_string_value_is_an_error(self):
-        assert len(check_pins({"base_images": {"a": None}})) == 1
+        The empty case is how this check silently stops checking: a caller that
+        stops passing its references gets a green preflight for a build whose
+        bases nothing examined.
+        """
+        assert len(check_pins([])) == 1
+
+    def test_an_empty_reference_is_named_rather_than_skipped(self):
+        """An unset workflow input arrives as an empty string, not as absence."""
+        errors = check_pins(["", f"ghcr.io/x/y@{DIGEST}"])
+        assert len(errors) == 1
+        assert "line 1" in errors[0]
+
+
+class TestSplittingTheCallersList:
+    """Verifies: HSI-OPS-image-promotion/G
+
+    The composite hands over one newline-delimited string and the split happens
+    here, not in shell. A shell loop skipping blank lines would drop exactly the
+    input the empty-reference check exists to catch: an interpolation that
+    resolved to nothing leaves a blank line, and the build would pass with a
+    base nothing examined.
+    """
+
+    def test_a_blank_line_from_an_unset_interpolation_is_not_dropped(self):
+        errors = check_pins(references_from(f"\nghcr.io/cure-hht/portal-server@{DIGEST}\n"))
+        assert len(errors) == 1
+        assert "line 1" in errors[0]
+
+    def test_the_trailing_newline_of_a_yaml_block_is_not_a_reference(self):
+        blob = f"ghcr.io/x/a@{DIGEST}\nghcr.io/x/b@{DIGEST}\n"
+        assert check_pins(references_from(blob)) == []
+
+    def test_an_entirely_empty_input_yields_no_references(self):
+        """`required: true` is not enforced for a composite action's inputs."""
+        assert references_from("") == []
+        assert len(check_pins(references_from(""))) == 1
+
+    def test_a_whitespace_only_line_is_an_empty_reference(self):
+        errors = check_pins(references_from(f"   \nghcr.io/x/y@{DIGEST}\n"))
+        assert len(errors) == 1
+        assert "line 1" in errors[0]
 
 
 # -------------------------------------------------------- capabilities (H)
@@ -219,25 +248,21 @@ class TestMainReportsFailuresAsAnnotations:
         code = main(argv)
         return code, capsys.readouterr().out
 
-    def test_missing_base_config_file(self, capsys, tmp_path):
-        code, out = self._run(capsys, ["pins", "--base-config", str(tmp_path / "nope.json")])
+    def test_a_reference_that_is_not_a_pin_is_an_annotation(self, capsys):
+        code, out = self._run(capsys, ["pins", "--images", "ghcr.io/x/y:main-latest"])
         assert code == 1
         assert "::error::" in out
 
-    def test_malformed_base_config_json(self, capsys, tmp_path):
-        config = tmp_path / "base-config.json"
-        config.write_text("{ not json", encoding="utf-8")
-        code, out = self._run(capsys, ["pins", "--base-config", str(config)])
+    def test_no_images_supplied_is_an_annotation(self, capsys):
+        """The way this check stops checking is a caller that passes nothing."""
+        code, out = self._run(capsys, ["pins", "--images", ""])
         assert code == 1
         assert "::error::" in out
-        assert str(config) in out
 
-    def test_valid_config_still_reports_normally(self, capsys, tmp_path):
-        config = tmp_path / "base-config.json"
-        config.write_text(
-            json.dumps({"base_images": {"a": f"ghcr.io/x/y@{DIGEST}"}}), encoding="utf-8"
+    def test_pinned_references_still_report_normally(self, capsys):
+        code, out = self._run(
+            capsys, ["pins", "--images", f"ghcr.io/x/y@{DIGEST}\nghcr.io/x/z@{DIGEST}\n"]
         )
-        code, out = self._run(capsys, ["pins", "--base-config", str(config)])
         assert code == 0
         assert out.startswith("ok - ")
 

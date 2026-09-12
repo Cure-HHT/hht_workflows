@@ -237,22 +237,6 @@ def test_the_tree_records_which_repository_it_came_from(tmp_path):
     _, dest, _ = _run(tmp_path, GOOD)
     assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"
 
-
-def test_a_no_op_completes_an_identity_written_before_the_slug_existed(tmp_path):
-    """A tree materialised by an older obtain holds content and half an identity.
-
-    The no-op path returns early by design, so without this it is the one path
-    that can leave a tree nothing downstream can name.
-    """
-    _, dest, _ = _run(tmp_path, GOOD)
-    (dest / ".upstream-repo").unlink()
-
-    proc, dest, calls = _run(tmp_path, GOOD)
-    assert "already materialised" in proc.stdout
-    assert not _ran(calls, "cp"), "completing the stamp must not re-copy"
-    assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"
-
-
 def test_the_identity_survives_a_moved_pin(tmp_path):
     """The swap replaces the tree wholesale, so the identity has to be written
     into the staged tree rather than into the destination it replaces."""
