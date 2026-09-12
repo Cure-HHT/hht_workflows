@@ -4,9 +4,12 @@
 Two independent checks, run before the sponsor image is built:
 
 ``pins``
-    Every base image the sponsor final image is built FROM, as declared in the
-    sponsor's ``deployment/base-config.json``, is a content digest. A mutable
-    tag is rejected. Realizes HSI-OPS-image-promotion/G.
+    Every base image reference the sponsor final image is built FROM is a
+    content digest. A mutable tag is rejected, and so is an empty reference or
+    an empty list: a build whose bases nothing examined has not passed this
+    check. The caller supplies the references because they are what the build
+    consumes — the sponsor names an upstream commit and the build resolves it
+    to a digest. Realizes HSI-OPS-image-promotion/G.
 
 ``capabilities``
     The pinned portal-server base declares every permission the sponsor's
@@ -22,7 +25,6 @@ permissions instead.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from typing import Iterable
@@ -33,47 +35,79 @@ from typing import Iterable
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def _pin_error(key: str, value: object) -> str | None:
-    """Return an error message for one base_images entry, or None if it is a pin."""
-    if not isinstance(value, str) or not value:
+def references_from(blob: str) -> list[str]:
+    """Split the caller's input verbatim, blank lines included.
+
+    Blank lines are kept because a blank line is a finding: it is what an
+    interpolation that resolved to nothing leaves behind. Splitting in the
+    composite's shell would drop them, and a base nothing examined would pass.
+
+    A block scalar's trailing newline yields no entry, so a well-formed list
+    splits to exactly its references.
+    """
+    return blob.splitlines()
+
+
+def _pin_error(reference: str, position: int) -> str | None:
+    """Return an error message for one base reference, or None if it is a pin.
+
+    `reference` is one line as `references_from` produced it, so it carries no
+    newline, and `position` is its 1-based line number. Neither is checked: the
+    only caller is directly below, and a malformed call here fails visibly
+    rather than passing quietly, which is the case worth spending a guard on.
+
+    An empty `reference` is not a malformed call — it is the finding this
+    reports, and the one that would otherwise go unnoticed.
+    """
+    where = f"line {position}"
+
+    if not reference.strip():
         return (
-            f"base_images.{key}: expected a digest-pinned image reference, "
-            f"got {value!r}"
+            f"{where}: empty. An unset input resolves to a blank line rather "
+            "than to absence, so this base would go unchecked."
         )
-    if "@" not in value:
+
+    if "@" not in reference:
         return (
-            f"base_images.{key}: '{value}' is not pinned to a content digest. "
-            f"Use '<image>@sha256:<digest>'; a mutable tag lets two builds of "
-            f"the same commit embed different base content (CUR-1668)."
+            f"{where}: '{reference}' is not pinned to a content digest. A "
+            "mutable tag lets two builds of the same sponsor commit resolve "
+            "different base content."
         )
-    name, _, digest = value.partition("@")
+
+    name, _, digest = reference.partition("@")
     if not _DIGEST_RE.match(digest):
         return (
-            f"base_images.{key}: '{value}' does not end in a sha256 content "
-            f"digest (expected '@sha256:' followed by 64 lowercase hex chars)."
+            f"{where}: '{reference}' does not end in a content digest "
+            "(expected '@sha256:' followed by 64 lowercase hex characters)."
         )
+
     if ":" in name.rsplit("/", 1)[-1]:
         return (
-            f"base_images.{key}: '{value}' carries both a tag and a digest. "
-            f"The tag is ignored at resolution and misreads as the pin — "
-            f"give the digest alone."
+            f"{where}: '{reference}' carries both a tag and a digest. The "
+            "digest decides what is pulled, so the tag states something that "
+            "is not checked."
         )
+
     return None
 
 
 # Implements: HSI-OPS-image-promotion/G
-def check_pins(config: dict) -> list[str]:
-    """Errors for every non-digest base image reference in a base-config document."""
-    base_images = config.get("base_images")
-    if not isinstance(base_images, dict) or not base_images:
+def check_pins(references: list[str]) -> list[str]:
+    """Every base reference the build will consume is a content digest.
+
+    The references are what the build is about to build FROM. The sponsor names
+    an upstream commit and the build resolves it to a digest, so the sponsor's
+    configuration does not hold the value being checked.
+    """
+    if not references:
         return [
-            "base_images: section is missing or empty. The sponsor final image "
-            "is built FROM at least one base image; every one of them must be "
-            "declared here so it can be pinned and checked."
+            "no base image references were supplied. The sponsor final image is "
+            "built FROM at least one base, and every one of them must be checked."
         ]
+
     errors = []
-    for key in sorted(base_images):
-        error = _pin_error(key, base_images[key])
+    for position, reference in enumerate(references, start=1):
+        error = _pin_error(reference, position)
         if error is not None:
             errors.append(error)
     return errors
@@ -149,7 +183,7 @@ def check_capabilities(declared: Iterable[str], grants_yaml: str) -> list[str]:
         "the pinned portal-server base does not declare "
         f"{len(missing)} granted permission(s): {', '.join(missing)}. "
         "The base predates the Actions this sponsor configuration grants; "
-        "advance base_images.portal_server to a core build that declares them. "
+        "advance the upstream pin to a build that declares them. "
         "Shipping this image would fail closed at portal boot."
     ]
 
@@ -170,14 +204,6 @@ def _with_path(path: str, fn, *args):
         raise ValueError(f"{path}: {exc}") from exc
 
 
-def _load_json(path: str) -> dict:
-    text = _read_text(path)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
-
-
 def _report(errors: list[str], ok_message: str) -> int:
     if not errors:
         print(f"ok - {ok_message}")
@@ -191,8 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    pins = sub.add_parser("pins", help="check base_images are digest-pinned")
-    pins.add_argument("--base-config", required=True)
+    pins = sub.add_parser("pins", help="check base references are digest-pinned")
+    pins.add_argument(
+        "--images",
+        required=True,
+        help="newline-delimited base image references the build will consume",
+    )
 
     caps = sub.add_parser("capabilities", help="check base declares granted permissions")
     caps.add_argument(
@@ -211,10 +241,9 @@ def main(argv: list[str] | None = None) -> int:
     # buries the actionable line in a stack.
     try:
         if args.command == "pins":
-            config = _load_json(args.base_config)
             return _report(
-                check_pins(config),
-                f"every base image in {args.base_config} is pinned to a content digest",
+                check_pins(references_from(args.images)),
+                "every base image this build consumes is pinned to a content digest",
             )
 
         declared = _with_path(args.declared, parse_declared_permissions, _read_text(args.declared))

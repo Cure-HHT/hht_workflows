@@ -28,10 +28,6 @@ fi
 
 if [ "$existing" = "$COMMIT" ]; then
   echo "already materialised at $dest ($COMMIT); not copying again"
-  # A tree materialised before the slug was recorded holds the right content and
-  # a half-written identity. Completing it costs nothing and keeps the no-op
-  # path from being the one that yields an unidentifiable provenance row.
-  [ -f "$dest/.upstream-repo" ] || printf '%s\n' "$REPOSITORY" > "$dest/.upstream-repo"
   exit 0
 fi
 
