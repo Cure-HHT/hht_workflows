@@ -37,9 +37,10 @@ fi
 # halfway through would otherwise leave earlier upstreams materialised and the
 # run failing, which reads as a registry problem rather than as the typo it is.
 #
-# What makes a repository name acceptable is obtain.sh's answer, not a second
-# one here: `--dest-for` refuses the name and yields the destination in one
-# step, so the name that passes is exactly the name that resolves.
+# What makes a pin acceptable is obtain.sh's answer, not a second one here:
+# `--dest-for` refuses the pin and yields the destination in one step, so the
+# pin that passes is exactly the pin that resolves. A repository named twice is
+# refused here, because one destination cannot hold two commits.
 repos=()
 commits=()
 dests=()
@@ -55,15 +56,19 @@ while IFS= read -r entry; do
     echo "::error::associate-commits entry is not owner/repo@<commit>: '$entry'"
     exit 1
   fi
-  # The pin's shape is checked here rather than only where it resolves. Left to
-  # the resolver, a typo in the fifth entry surfaces after the first four are
-  # already on disk.
-  if ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then
-    echo "::error::associate-commits pin must be 40 hex characters, lowercase:"
-    echo "::error::  '$entry'"
-    exit 1
-  fi
-  dest="$("$OBTAIN" --dest-for "$repo")"
+  # obtain.sh decides what a pin may be and where it lands. A shape rule here
+  # would be a second answer to the question resolve_pin.py already answers,
+  # and the two would drift apart silently. Asking in the parse pass is what
+  # keeps a typo in the fifth entry from surfacing with four trees on disk.
+  dest="$("$OBTAIN" --dest-for "$repo" "$commit")"
+  for seen in ${dests[@]+"${dests[@]}"}; do
+    if [ "$seen" = "$dest" ]; then
+      echo "::error::associate-commits names '$repo' more than once."
+      echo "::error::One repository cannot be at two commits in one compile,"
+      echo "::error::and obtaining both into one place leaves the union of them."
+      exit 1
+    fi
+  done
   repos+=("$repo")
   commits+=("$commit")
   dests+=("$dest")

@@ -69,7 +69,7 @@ pytest hooks/confidential-terms-scan/tests/
 # path derived from its own location, so it runs the same from any directory.
 ( cd .github/actions/build-urs && pytest tests/ )
 
-pytest .github/actions/cosign-verify/tests/ \
-       .github/actions/cloud-run-resolve-serving-digest/tests/ \
-       tests/test_promote_template.py \
-       bootstrap/tests/
+pytest .github/actions/cosign-verify/tests/
+pytest .github/actions/cloud-run-resolve-serving-digest/tests/
+pytest tests/test_promote_template.py
+pytest bootstrap/tests/

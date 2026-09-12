@@ -37,12 +37,18 @@ require_owner_and_name() {
 # Owner and name both, because two owners may publish the same repository name
 # and a destination keyed on the name alone would land one tree on the other's.
 default_dest() {
-  require_owner_and_name "$1"
   printf '%s/upstream/%s\n' "${RUNNER_TEMP:?RUNNER_TEMP must be set}" "$1"
 }
 
+# `--dest-for <owner/repo> <commit>` answers "where does this pin land", and
+# refuses a pin that cannot name an artifact. Validating the commit here rather
+# than in a caller means the shape a caller checks is the shape that resolves:
+# resolve_pin.py is the rule, and this asks it rather than restating it.
 if [ "${1:-}" = "--dest-for" ]; then
-  default_dest "${2:?owner/repo required}"
+  require_owner_and_name "${2:?owner/repo required}"
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/resolve_pin.py" \
+    "ghcr.io" "$2" "${3:?commit required}" > /dev/null
+  default_dest "$2"
   exit 0
 fi
 
@@ -88,12 +94,29 @@ fi
 
 digest="$(docker image inspect "$ref" --format '{{index .RepoDigests 0}}')"
 
-mkdir -p "$dest"
+# The tree is assembled beside the destination and swapped in, because copying
+# over whatever is already there makes the result the union of every pin the
+# destination has held. A file that outlives its deletion upstream is a
+# requirement the deliverable enumerates and the commit it names does not
+# contain -- the divergence this action exists to make inexpressible.
+#
+# The old tree is moved into a directory this script created and that directory
+# is removed, so no recursive delete is ever aimed at the path a caller named.
+mkdir -p "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
+staging="$(mktemp -d "${RUNNER_TEMP}/obtain.XXXXXX")"
 cid="$(docker create "$ref")"
-docker cp "$cid:/upstream/." "$dest"
+docker cp "$cid:/upstream/." "$staging"
 docker rm "$cid" > /dev/null
 
-printf '%s\n' "$digest" > "$dest/.upstream-digest"
-python3 "${HERE}/stamp.py" --write "$dest" "$COMMIT"
+printf '%s\n' "$digest" > "$staging/.upstream-digest"
+python3 "${HERE}/stamp.py" --write "$staging" "$COMMIT"
+
+mkdir -p "$(dirname "$dest")"
+if [ -e "$dest" ]; then
+  superseded="$(mktemp -d "${RUNNER_TEMP}/obtain-superseded.XXXXXX")"
+  mv "$dest" "$superseded/tree"
+  rm -rf "$superseded"
+fi
+mv "$staging" "$dest"
 
 echo "materialised $REPOSITORY at $COMMIT -> $dest"

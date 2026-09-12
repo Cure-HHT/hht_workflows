@@ -108,6 +108,29 @@ def test_the_owner_survives_in_the_destination(tmp_path):
     assert len(set(roots)) == 2, f"two upstreams collided on one path: {roots!r}"
 
 
+def test_two_pins_for_one_repository_refuse(tmp_path):
+    """One repository cannot be at two commits in one compile. Obtaining both
+    into one destination leaves the union of the two trees, stamped with
+    whichever was second, and federates it twice."""
+    proc, outputs, calls = _run(
+        tmp_path, f"cure-hht/hht_diary@{GOOD}\ncure-hht/hht_diary@{OTHER}\n"
+    )
+    assert proc.returncode == 1
+    assert "cure-hht/hht_diary" in proc.stdout + proc.stderr
+    assert calls == "", "a contradiction must refuse before anything is obtained"
+    assert "roots" not in outputs
+
+
+def test_the_same_pin_twice_refuses(tmp_path):
+    """Naming one repository twice at the same commit is still two entries for
+    one root; the compile would federate that root twice."""
+    proc, _, calls = _run(
+        tmp_path, f"cure-hht/hht_diary@{GOOD}\ncure-hht/hht_diary@{GOOD}\n"
+    )
+    assert proc.returncode == 1
+    assert calls == ""
+
+
 def test_blank_lines_are_not_roots(tmp_path):
     proc, outputs, _ = _run(tmp_path, f"\n  \ncure-hht/hht_diary@{GOOD}\n\n")
     assert proc.returncode == 0, proc.stderr
@@ -166,7 +189,7 @@ def test_a_malformed_pin_refuses_before_anything_is_materialised(tmp_path):
         tmp_path, f"cure-hht/hht_diary@{GOOD}\ncure-hht/hht_admin@NOTAHEX\n"
     )
     assert proc.returncode == 1
-    assert "40 hex characters" in proc.stdout
+    assert "40 hex characters" in proc.stdout + proc.stderr
     assert calls == "", "an entry was materialised before the list was checked"
     assert "roots" not in outputs
 
@@ -177,7 +200,7 @@ def test_a_malformed_pin_refuses_before_anything_is_materialised(tmp_path):
 def test_an_uppercase_pin_refuses(tmp_path):
     proc, _, calls = _run(tmp_path, f"cure-hht/hht_diary@{GOOD.upper()}\n")
     assert proc.returncode == 1
-    assert "lowercase" in proc.stdout
+    assert "lowercase" in proc.stdout + proc.stderr
     assert calls == ""
 
 

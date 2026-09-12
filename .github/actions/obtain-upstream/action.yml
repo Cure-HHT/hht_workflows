@@ -73,7 +73,7 @@ runs:
         #
         # TOKEN reaches the script in the environment. On a command line it
         # would be readable from /proc by every process on the runner.
-        dest="${DEST_INPUT:-$("${ACTION_PATH}/obtain.sh" --dest-for "$REPOSITORY")}"
+        dest="${DEST_INPUT:-$("${ACTION_PATH}/obtain.sh" --dest-for "$REPOSITORY" "$COMMIT")}"
         "${ACTION_PATH}/obtain.sh" "$REPOSITORY" "$COMMIT" "$dest" "$REGISTRY"
 
         echo "path=$dest" >> "$GITHUB_OUTPUT"

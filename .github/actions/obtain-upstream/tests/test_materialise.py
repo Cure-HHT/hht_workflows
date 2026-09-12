@@ -109,6 +109,47 @@ def test_a_different_commit_re_materialises(tmp_path):
     assert "pull" in calls, "a moved pin must fetch, not reuse the old tree"
 
 
+def test_a_file_deleted_upstream_does_not_survive_a_moved_pin(tmp_path):
+    """The tree must be what the pin holds, not the union of every pin it has
+    held. A file that outlives its deletion is a requirement the deliverable
+    enumerates and the commit it names does not contain."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    dest = tmp_path / "dest"
+    calls = tmp_path / "calls.log"
+    calls.write_text("")
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "GITHUB_ACTOR": "someone",
+        "RUNNER_TEMP": str(tmp_path / "runner-temp"),
+        "DOCKER_CALLS": str(calls),
+        "TOKEN": TOKEN,
+    }
+
+    def obtain(commit: str, payload: pathlib.Path):
+        write_stub(bin_dir, payload)
+        return subprocess.run(
+            [str(OBTAIN), "cure-hht/hht_diary", commit, str(dest)],
+            env=env, capture_output=True, text=True,
+        )
+
+    at_good = tmp_path / "at-good"
+    (at_good / "spec").mkdir(parents=True)
+    (at_good / "spec" / "withdrawn.md").write_text("withdrawn before OTHER\n")
+    assert obtain(GOOD, at_good).returncode == 0
+
+    at_other = tmp_path / "at-other"
+    (at_other / "spec").mkdir(parents=True)
+    (at_other / "spec" / "current.md").write_text("the only requirement\n")
+    proc = obtain(OTHER, at_other)
+
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "spec" / "current.md").is_file()
+    assert not (dest / "spec" / "withdrawn.md").exists(), \
+        "a file deleted upstream survived; the tree is the union of two pins"
+    assert (dest / ".upstream-commit").read_text().strip() == OTHER
+
+
 def test_a_commit_that_published_nothing_refuses_and_says_why(tmp_path):
     proc, _, calls = _run(tmp_path, GOOD, pull_ok=False)
 
@@ -158,10 +199,24 @@ def test_the_default_destination_keeps_the_owner(tmp_path):
     """Two owners may publish the same repository name; the destination must
     separate them, and both entry points must derive it the same way."""
     proc = subprocess.run(
-        [str(OBTAIN), "--dest-for", "cure-hht/hht_diary"],
+        [str(OBTAIN), "--dest-for", "cure-hht/hht_diary", GOOD],
         env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path)},
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == f"{tmp_path}/upstream/cure-hht/hht_diary"
+
+
+def test_the_destination_is_not_answered_for_a_pin_that_cannot_resolve(tmp_path):
+    """A caller asking where a pin lands is asking about a pin. Answering for
+    one that names no artifact would hand back a path to fill from nothing."""
+    for bad in ("NOTAHEX", GOOD.upper(), ""):
+        proc = subprocess.run(
+            [str(OBTAIN), "--dest-for", "cure-hht/hht_diary", bad],
+            env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path)},
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0, f"{bad!r} was answered for"
+        assert proc.stdout.strip() == "", "a refusal must not also print a path"
