@@ -12,7 +12,7 @@
 #     with:
 #       primary-root: primary
 #       associate-commits: |
-#         Cure-HHT/hht_diary@<40-hex commit>
+#         cure-hht/hht_diary@<40-hex commit>
 #       registry-token: ${{ secrets.GITHUB_TOKEN }}
 #       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
 #

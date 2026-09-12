@@ -44,7 +44,7 @@ takes. It reaches `docker login` on stdin from there.
 | `repository` | yes | — | Upstream as `owner/name`. |
 | `commit` | yes | — | The pinned commit: 40 lowercase hex characters. |
 | `registry` | no | `ghcr.io` | Registry holding the upstream artifacts. |
-| `dest` | no | `${RUNNER_TEMP}/upstream/<registry>/<owner>/<name>` | Where to materialise the tree. **Whatever is at this path is replaced**, so the tree holds one commit's content rather than a merge with what was there. The default carries the registry and the owner as well as the name, so no two upstreams collide. |
+| `dest` | no | `${RUNNER_TEMP}/upstream/<owner>/<name>` | Where to materialise the tree. **Whatever is at this path is replaced**, so the tree holds one commit's content rather than a merge with what was there. The default carries the owner as well as the name, so no two upstreams collide. One destination holds one repository; two registries serving the same `owner/name` in one job would collide, which nothing in this estate does. |
 | `token` | yes | — | Token with read access to the upstream artifact. |
 
 ## Outputs

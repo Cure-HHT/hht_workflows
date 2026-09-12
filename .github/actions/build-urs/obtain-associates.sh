@@ -33,9 +33,8 @@ if [ -z "${TOKEN:-}" ]; then
   exit 1
 fi
 
-# Resolve every entry before obtaining any of them. A malformed pin found
-# halfway through would otherwise leave earlier upstreams materialised and the
-# run failing, which reads as a registry problem rather than as the typo it is.
+# Resolve every entry before obtaining any of them, so a bad pin at the end of
+# the list costs nothing that was already fetched for the entries before it.
 #
 # What makes a pin acceptable is obtain.sh's answer, not a second one here:
 # `--dest-for` refuses the pin and yields the destination in one step, so the
@@ -44,11 +43,12 @@ fi
 repos=()
 commits=()
 dests=()
-while IFS= read -r entry; do
-  # Trim the ends only. Deleting whitespace throughout would turn a typo into a
-  # different repository and accept it.
-  entry="${entry#"${entry%%[![:space:]]*}"}"
-  entry="${entry%"${entry##*[![:space:]]}"}"
+declare -A seen_dest=()
+while read -r entry; do
+  # The default IFS trims the ends; a CRLF input would otherwise carry its
+  # return into the repository name. Whitespace inside an entry is left alone,
+  # so a typo is refused rather than closed up into a different repository.
+  entry="${entry%$'\r'}"
   [ -z "$entry" ] && continue
   repo="${entry%@*}"
   commit="${entry#*@}"
@@ -61,14 +61,13 @@ while IFS= read -r entry; do
   # and the two would drift apart silently. Asking in the parse pass is what
   # keeps a typo in the fifth entry from surfacing with four trees on disk.
   dest="$("$OBTAIN" --dest-for "$repo" "$commit")"
-  for seen in ${dests[@]+"${dests[@]}"}; do
-    if [ "$seen" = "$dest" ]; then
-      echo "::error::associate-commits names '$repo' more than once."
-      echo "::error::One repository cannot be at two commits in one compile,"
-      echo "::error::and obtaining both into one place leaves the union of them."
-      exit 1
-    fi
-  done
+  if [ -n "${seen_dest[$dest]:-}" ]; then
+    echo "::error::associate-commits names '$repo' more than once."
+    echo "::error::One repository cannot be at two commits in one compile: one"
+    echo "::error::destination holds one of them, and roots would list it twice."
+    exit 1
+  fi
+  seen_dest[$dest]=1
   repos+=("$repo")
   commits+=("$commit")
   dests+=("$dest")

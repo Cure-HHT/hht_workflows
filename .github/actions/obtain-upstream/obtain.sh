@@ -16,15 +16,14 @@
 # call.
 #
 # Usage: obtain.sh <owner/repo> <40-hex commit> <dest> [registry]
-#        obtain.sh --dest-for <owner/repo> <40-hex commit> [registry]
+#        obtain.sh --dest-for <owner/repo> <40-hex commit>
 # Environment: TOKEN (required, except for --dest-for)
 set -euo pipefail
 
 # Owner and name both, because two owners may publish the same repository name
 # and a destination keyed on the name alone would land one tree on the other's.
 default_dest() {
-  printf '%s/upstream/%s/%s\n' \
-    "${RUNNER_TEMP:?RUNNER_TEMP must be set}" "${2:-ghcr.io}" "$1"
+  printf '%s/upstream/%s\n' "${RUNNER_TEMP:?RUNNER_TEMP must be set}" "$1"
 }
 
 # `--dest-for <owner/repo> <commit>` answers "where does this pin land", and
@@ -33,8 +32,8 @@ default_dest() {
 # resolve_pin.py is the rule, and this asks it rather than restating it.
 if [ "${1:-}" = "--dest-for" ]; then
   python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/resolve_pin.py" \
-    "${4:-ghcr.io}" "${2:?owner/repo required}" "${3:?commit required}" > /dev/null
-  default_dest "$2" "${4:-ghcr.io}"
+    "ghcr.io" "${2:?owner/repo required}" "${3:?commit required}" > /dev/null
+  default_dest "$2"
   exit 0
 fi
 
@@ -88,8 +87,9 @@ digest="$(docker image inspect "$ref" --format '{{index .RepoDigests 0}}')"
 # requirement the deliverable enumerates and the commit it names does not
 # contain -- the divergence this action exists to make inexpressible.
 #
-# The old tree is moved into a directory this script created and that directory
-# is removed, so no recursive delete is ever aimed at the path a caller named.
+# The destination is replaced, which the `dest` input says. mktemp is 0700 and
+# the swap would make that the tree's mode, so it is widened to match what a
+# plain mkdir would have produced.
 mkdir -p "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
 staging="$(mktemp -d "${RUNNER_TEMP}/obtain.XXXXXX")"
 cid="$(docker create "$ref")"
@@ -103,12 +103,9 @@ printf '%s\n' "$digest" > "$staging/.upstream-digest"
 printf '%s\n' "$REPOSITORY" > "$staging/.upstream-repo"
 python3 "${HERE}/stamp.py" --write "$staging" "$COMMIT"
 
+chmod 755 "$staging"
 mkdir -p "$(dirname "$dest")"
-if [ -e "$dest" ]; then
-  superseded="$(mktemp -d "${RUNNER_TEMP}/obtain-superseded.XXXXXX")"
-  mv "$dest" "$superseded/tree"
-  rm -rf "$superseded"
-fi
+rm -rf "$dest"
 mv "$staging" "$dest"
 
 echo "materialised $REPOSITORY at $COMMIT -> $dest"

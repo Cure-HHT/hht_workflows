@@ -47,31 +47,24 @@ fi
 # suite needs on top.
 python3 -m pip install --quiet -e '.[test]'
 
-# One pytest per suite, exactly as release-notes-tests.yml runs them. Several
-# hooks name their test package `tests`, so a single invocation spanning them
-# fails collection on the duplicate module name and runs none of them.
-pytest hooks/release-notes-update/tests/
-pytest hooks/no-or-true-guard/tests/
-pytest hooks/confidential-terms-scan/tests/
-
-( cd .github/actions/release-notes-publish && \
-  PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ )
-
-( cd .github/actions/sponsor-base-preflight && \
-  PYTHONPATH=. pytest tests/ )
-
-( cd .github/actions/elspais-federate && \
-  PYTHONPATH=. pytest tests/ )
-
-( cd .github/actions/obtain-upstream && \
-  PYTHONPATH=. pytest tests/ )
-
-# build-urs needs no PYTHONPATH: its suite reaches the shared docker stub by a
-# path derived from its own location, so it runs the same from any directory.
-( cd .github/actions/build-urs && pytest tests/ )
-
-pytest .github/actions/cosign-verify/tests/
-pytest scripts/publish/tests/
-pytest .github/actions/cloud-run-resolve-serving-digest/tests/
-pytest tests/test_promote_template.py
-pytest bootstrap/tests/
+# One pytest per target, driven from the list above so the two cannot disagree:
+# a target named there is a target that runs. Several hooks name their test
+# package `tests`, so a single invocation spanning them fails collection on the
+# duplicate module name and runs none of them.
+#
+# Two suites import a module from their own directory and so run from it, with
+# that directory on the path. Anything else runs from the repository root.
+echo "$TARGETS" | while IFS= read -r target; do
+  [ -z "$target" ] && continue
+  case "$target" in
+    .github/actions/release-notes-publish/tests)
+      ( cd .github/actions/release-notes-publish && \
+        PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ ) ;;
+    .github/actions/sponsor-base-preflight/tests|\
+    .github/actions/elspais-federate/tests|\
+    .github/actions/obtain-upstream/tests)
+      ( cd "$(dirname "$target")" && PYTHONPATH=. pytest tests/ ) ;;
+    *)
+      pytest "$target" ;;
+  esac
+done
