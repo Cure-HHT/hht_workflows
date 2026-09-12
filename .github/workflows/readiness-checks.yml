@@ -392,6 +392,23 @@ jobs:
           grep -q "FIX-PRD-sponsor-config" "$d"/build/urs-assembled*.md
           grep -q "DIARY-DEV-sample-internal" "$d"/build/urs-assembled*.md
           echo "build-urs readiness OK: urs.pdf + urs.docx produced with expected content."
+      - name: Assert the provenance record identifies what was compiled
+        run: |
+          set -euo pipefail
+          d=scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          record="$d/docs/urs-build-provenance.md"
+          test -s "$record"
+          # A compile that exits zero having recorded nothing is the failure
+          # this guards: every other check here would still be green. The
+          # fixture associate carries the stamps an obtained tree carries, so
+          # this exercises the path a pinned source takes.
+          if grep -qi "unknown\|unidentified" "$record"; then
+            echo "::error::the provenance record does not identify its inputs:"
+            cat "$record"
+            exit 1
+          fi
+          grep -q "fedcba9876543210fedcba9876543210fedcba98" "$record"
+          echo "provenance names the stamped source commit."
 
   confidential-terms-scan:
     # Implements: HHT-OPS-confidential-keywords-scrubbing/F,G,I
