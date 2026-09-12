@@ -20,12 +20,21 @@ hht_hooks_guard "$REPO_ROOT" ".githooks" "tools/setup-repo.sh" "tools/setup-repo
 hht_associates_guard "$REPO_ROOT"
 
 # The test target directories, listed once.
+#
+# scripts/urs-compile/test_compile_urs is deliberately absent: it needs the
+# pinned pandoc and a LaTeX engine, which CI installs for that job and a clone
+# does not have. Every other suite CI runs belongs here.
 TARGETS='hooks/release-notes-update/tests
 hooks/no-or-true-guard/tests
 hooks/confidential-terms-scan/tests
 .github/actions/release-notes-publish/tests
 .github/actions/sponsor-base-preflight/tests
 .github/actions/elspais-federate/tests
+.github/actions/obtain-upstream/tests
+.github/actions/build-urs/tests
+.github/actions/cosign-verify/tests
+.github/actions/cloud-run-resolve-serving-digest/tests
+tests/test_promote_template.py
 bootstrap/tests'
 
 if [ "${1:-}" = "--list" ]; then
@@ -37,11 +46,12 @@ fi
 # suite needs on top.
 python3 -m pip install --quiet -e '.[test]'
 
-# The three hook suites share the default path; the two action suites each need
-# their own PYTHONPATH, exactly as release-notes-tests.yml runs them.
-pytest hooks/release-notes-update/tests/ \
-       hooks/no-or-true-guard/tests/ \
-       hooks/confidential-terms-scan/tests/
+# One pytest per suite, exactly as release-notes-tests.yml runs them. Several
+# hooks name their test package `tests`, so a single invocation spanning them
+# fails collection on the duplicate module name and runs none of them.
+pytest hooks/release-notes-update/tests/
+pytest hooks/no-or-true-guard/tests/
+pytest hooks/confidential-terms-scan/tests/
 
 ( cd .github/actions/release-notes-publish && \
   PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ )
@@ -52,4 +62,14 @@ pytest hooks/release-notes-update/tests/ \
 ( cd .github/actions/elspais-federate && \
   PYTHONPATH=. pytest tests/ )
 
-pytest bootstrap/tests/
+( cd .github/actions/obtain-upstream && \
+  PYTHONPATH=. pytest tests/ )
+
+# build-urs needs no PYTHONPATH: its suite reaches the shared docker stub by a
+# path derived from its own location, so it runs the same from any directory.
+( cd .github/actions/build-urs && pytest tests/ )
+
+pytest .github/actions/cosign-verify/tests/ \
+       .github/actions/cloud-run-resolve-serving-digest/tests/ \
+       tests/test_promote_template.py \
+       bootstrap/tests/

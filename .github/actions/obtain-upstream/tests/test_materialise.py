@@ -18,42 +18,34 @@ of the real thing:
 - A pin naming a commit that published no artifact refuses, and says why. It
   must not fall back to a nearby revision -- that is the silent substitution the
   whole arrangement exists to remove.
+- The token arrives in the environment. A command line is readable from /proc
+  by every process on the runner, for as long as the call takes.
 """
 
 from __future__ import annotations
 
 import pathlib
 import subprocess
-import textwrap
+
+from stub_docker import DIGEST, write_payload, write_stub
 
 OBTAIN = pathlib.Path(__file__).resolve().parents[1] / "obtain.sh"
 
 GOOD = "cbbbf10438edc6c2d83e8d0efbee4b32ced4feae"
 OTHER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-DIGEST = "ghcr.io/cure-hht/hht_diary@sha256:" + "b" * 64
+TOKEN = "a-token-no-argv-may-carry"
 
 
-def _stub_docker(bin_dir: pathlib.Path, payload: pathlib.Path, *, pull_ok: bool) -> None:
-    """A docker that records its calls and needs no daemon."""
-    pull_exit = "0" if pull_ok else "1"
-    (bin_dir / "docker").write_text(
-        textwrap.dedent(
-            f"""\
-            #!/usr/bin/env bash
-            echo "$@" >> "$DOCKER_CALLS"
-            case "$1" in
-              login) exit 0 ;;
-              pull) exit {pull_exit} ;;
-              image) echo '{DIGEST}' ; exit 0 ;;
-              create) echo 'stub-container-id' ; exit 0 ;;
-              cp) cp -a '{payload}/.' "${{3}}" ; exit 0 ;;
-              rm) exit 0 ;;
-              *) echo "unexpected docker $1" >&2 ; exit 2 ;;
-            esac
-            """
-        )
+def _ran(calls: str, subcommand: str) -> bool:
+    """Whether the stub was asked to run `docker <subcommand>`.
+
+    Matched as the first word of a recorded line. A substring test cannot
+    distinguish the command from a path that contains it, and one written as
+    `" cp "` never matches at all, because the subcommand opens the line.
+    """
+    return any(
+        line.split(" ")[0] == subcommand for line in calls.splitlines() if line
     )
-    (bin_dir / "docker").chmod(0o755)
 
 
 def _run(tmp_path: pathlib.Path, commit: str, *, pull_ok: bool = True):
@@ -62,39 +54,35 @@ def _run(tmp_path: pathlib.Path, commit: str, *, pull_ok: bool = True):
 
     payload = tmp_path / "payload"
     payload.mkdir(exist_ok=True)
-    (payload / "spec").mkdir(exist_ok=True)
-    (payload / "spec" / "a-requirement.md").write_text("# a requirement\n")
-    (payload / ".hidden-file").write_text("dotfiles travel too\n")
+    write_payload(payload)
 
-    _stub_docker(bin_dir, payload, pull_ok=pull_ok)
+    write_stub(bin_dir, payload, pull_ok=pull_ok)
 
     dest = tmp_path / "dest"
 
-    # Reset both records per invocation. Two calls share a tmp_path on purpose
+    # Reset the record per invocation. Two calls share a tmp_path on purpose
     # -- that is how the no-op case is set up -- so an accumulating log would
     # let the first call's `pull` and `cp` satisfy assertions about the second.
     calls = tmp_path / "calls.log"
     calls.write_text("")
-    outputs = tmp_path / "gh-output"
-    outputs.write_text("")
 
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "GITHUB_ACTOR": "someone",
         "RUNNER_TEMP": str(tmp_path / "runner-temp"),
         "DOCKER_CALLS": str(calls),
+        "TOKEN": TOKEN,
     }
     proc = subprocess.run(
-        [str(OBTAIN), "cure-hht/hht_diary", commit, str(dest),
-         "unused-by-the-stub", "ghcr.io"],
+        [str(OBTAIN), "cure-hht/hht_diary", commit, str(dest), "ghcr.io"],
         env=env, capture_output=True, text=True,
     )
     call_log = calls.read_text() if calls.exists() else ""
-    return proc, dest, outputs.read_text(), call_log
+    return proc, dest, call_log
 
 
 def test_first_call_materialises_the_whole_tree(tmp_path):
-    proc, dest, outputs, _ = _run(tmp_path, GOOD)
+    proc, dest, _ = _run(tmp_path, GOOD)
     assert proc.returncode == 0, proc.stderr
     assert (dest / "spec" / "a-requirement.md").is_file()
     assert (dest / ".hidden-file").is_file(), "dotfiles must travel; nothing curates a subset"
@@ -103,11 +91,11 @@ def test_first_call_materialises_the_whole_tree(tmp_path):
 
 def test_second_call_for_the_same_commit_copies_nothing(tmp_path):
     _run(tmp_path, GOOD)
-    proc, dest, outputs, calls = _run(tmp_path, GOOD)
+    proc, dest, calls = _run(tmp_path, GOOD)
 
     assert proc.returncode == 0, proc.stderr
     assert "already materialised" in proc.stdout
-    assert " cp " not in f" {calls} ", f"a second copy was made: {calls!r}"
+    assert not _ran(calls, "cp"), f"a second copy was made: {calls!r}"
     assert "pull" not in calls, f"the registry was contacted again: {calls!r}"
     assert (dest / ".upstream-digest").read_text().strip() == DIGEST, \
         "the recorded digest survives a no-op"
@@ -115,17 +103,65 @@ def test_second_call_for_the_same_commit_copies_nothing(tmp_path):
 
 def test_a_different_commit_re_materialises(tmp_path):
     _run(tmp_path, GOOD)
-    proc, _, _, calls = _run(tmp_path, OTHER)
+    proc, _, calls = _run(tmp_path, OTHER)
 
     assert proc.returncode == 0, proc.stderr
     assert "pull" in calls, "a moved pin must fetch, not reuse the old tree"
 
 
 def test_a_commit_that_published_nothing_refuses_and_says_why(tmp_path):
-    proc, _, _, calls = _run(tmp_path, GOOD, pull_ok=False)
+    proc, _, calls = _run(tmp_path, GOOD, pull_ok=False)
 
     assert proc.returncode == 1
     assert "no artifact published" in proc.stdout
     assert "one artifact per commit" in proc.stdout
     assert "will not fall back" in proc.stdout
-    assert " cp " not in f" {calls} ", "a refusal must not leave a partial tree"
+    assert not _ran(calls, "cp"), "a refusal must not leave a partial tree"
+
+
+def test_the_token_never_travels_as_an_argument(tmp_path):
+    """docker login reads the token on stdin. Anything that put it in an argv
+    would put it in /proc/<pid>/cmdline for every process on the runner."""
+    proc, _, calls = _run(tmp_path, GOOD)
+    assert proc.returncode == 0, proc.stderr
+    assert "obtain.sh" in calls, \
+        "the caller's argv was not recorded, so this test cannot discriminate"
+    assert TOKEN not in calls, f"the token reached a command line: {calls!r}"
+
+
+def test_a_missing_token_refuses_before_the_registry(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    payload = tmp_path / "payload"
+    payload.mkdir(exist_ok=True)
+    write_payload(payload)
+    write_stub(bin_dir, payload)
+    calls = tmp_path / "calls.log"
+    calls.write_text("")
+
+    proc = subprocess.run(
+        [str(OBTAIN), "cure-hht/hht_diary", GOOD, str(tmp_path / "dest")],
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "RUNNER_TEMP": str(tmp_path / "runner-temp"),
+            "DOCKER_CALLS": str(calls),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert "TOKEN must be set in the environment" in proc.stdout
+    assert calls.read_text() == "", "a refusal must not reach the registry"
+
+
+def test_the_default_destination_keeps_the_owner(tmp_path):
+    """Two owners may publish the same repository name; the destination must
+    separate them, and both entry points must derive it the same way."""
+    proc = subprocess.run(
+        [str(OBTAIN), "--dest-for", "cure-hht/hht_diary"],
+        env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == f"{tmp_path}/upstream/cure-hht/hht_diary"

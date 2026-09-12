@@ -149,8 +149,10 @@ runs:
 
     # A deliverable enumerates obligations; the build it describes is pinned.
     # Obtaining the spec source from the artifact published for that same pin
-    # is what stops the two being different revisions. Paths are the old way in
-    # and are refused alongside pins rather than silently losing to them.
+    # is what stops the two being different revisions. The decisions live in
+    # obtain-associates.sh rather than here so a suite can run what executes:
+    # this route is skipped whenever a caller supplies paths, which is every
+    # caller until the first consumer pins.
     - name: Obtain the pinned associates
       id: associates
       if: inputs.associate-commits != ''
@@ -160,41 +162,8 @@ runs:
         TOKEN: ${{ inputs.registry-token }}
         PATH_ROOT: ${{ inputs.associate-root }}
         PATH_ROOTS: ${{ inputs.associate-roots }}
-        ACTION_PATH: ${{ github.action_path }}
       run: |
-        set -euo pipefail
-
-        if [ -n "$PATH_ROOT" ] || [ -n "$PATH_ROOTS" ]; then
-          echo "::error::associate-commits was given together with a path input."
-          echo "::error::A run supplying both could compile from two revisions"
-          echo "::error::while reporting one. Supply the pins alone."
-          exit 1
-        fi
-        if [ -z "$TOKEN" ]; then
-          echo "::error::registry-token is required when associate-commits is set."
-          exit 1
-        fi
-
-        roots=""
-        while IFS= read -r entry; do
-          entry="$(printf '%s' "$entry" | tr -d '[:space:]')"
-          [ -z "$entry" ] && continue
-          repo="${entry%@*}"
-          commit="${entry#*@}"
-          if [ "$repo" = "$entry" ] || [ -z "$commit" ]; then
-            echo "::error::associate-commits entry is not owner/repo@<commit>: '$entry'"
-            exit 1
-          fi
-          dest="${RUNNER_TEMP}/upstream/${repo##*/}"
-          "${ACTION_PATH}/../obtain-upstream/obtain.sh" "$repo" "$commit" "$dest" "$TOKEN"
-          roots="${roots}${dest}"$'\n'
-        done <<< "$COMMITS"
-
-        {
-          echo "roots<<EOF"
-          printf '%s' "$roots"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+        "${{ github.action_path }}/obtain-associates.sh"
 
     - name: Run URS compile
       shell: bash

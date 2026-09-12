@@ -31,8 +31,10 @@ inputs:
     default: 'ghcr.io'
   dest:
     description: >
-      Where to materialise the tree. Defaults to a per-repository path under
-      the runner temp directory, so two upstreams in one run do not collide.
+      Where to materialise the tree. Defaults to a path under the runner temp
+      directory carrying the owner as well as the repository name, so neither
+      two upstreams in one run nor two owners of the same repository name
+      collide.
     required: false
     default: ''
   token:
@@ -59,16 +61,20 @@ runs:
         REGISTRY: ${{ inputs.registry }}
         DEST_INPUT: ${{ inputs.dest }}
         TOKEN: ${{ inputs.token }}
-        ACTOR: ${{ github.actor }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        dest="${DEST_INPUT:-${RUNNER_TEMP}/upstream/${REPOSITORY##*/}}"
 
         # One implementation, two entry points. The script is what a caller
         # obtaining several upstreams in a loop runs too; duplicating it here
-        # would be two answers to what obtaining means.
-        "${ACTION_PATH}/obtain.sh" "$REPOSITORY" "$COMMIT" "$dest" "$TOKEN" "$REGISTRY"
+        # would be two answers to what obtaining means. That covers the default
+        # destination as well: the stamp only makes a repeat request a no-op if
+        # both entry points land the same pin in the same place.
+        #
+        # TOKEN reaches the script in the environment. On a command line it
+        # would be readable from /proc by every process on the runner.
+        dest="${DEST_INPUT:-$("${ACTION_PATH}/obtain.sh" --dest-for "$REPOSITORY")}"
+        "${ACTION_PATH}/obtain.sh" "$REPOSITORY" "$COMMIT" "$dest" "$REGISTRY"
 
         echo "path=$dest" >> "$GITHUB_OUTPUT"
         echo "digest=$(cat "$dest/.upstream-digest")" >> "$GITHUB_OUTPUT"
