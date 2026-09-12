@@ -90,6 +90,10 @@ jobs:
           set -euo pipefail
           cd .github/actions/obtain-upstream
           PYTHONPATH=. pytest tests/ -v
+      - name: Run published-tree completeness tests
+        run: |
+          set -euo pipefail
+          pytest scripts/publish/tests/ -v
       - name: Run bootstrap guard tests
         run: |
           set -euo pipefail
