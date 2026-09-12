@@ -31,8 +31,11 @@ inputs:
     default: 'ghcr.io'
   dest:
     description: >
-      Where to materialise the tree. Defaults to a per-repository path under
-      the runner temp directory, so two upstreams in one run do not collide.
+      Where to materialise the tree. Whatever is at this path is REPLACED:
+      the tree holds the pinned commit's content, not a merge of it with what
+      was there. Defaults to a path under the runner temp directory carrying
+      the owner as well as the repository name, so no two upstreams in one run
+      collide.
     required: false
     default: ''
   token:
@@ -59,16 +62,18 @@ runs:
         REGISTRY: ${{ inputs.registry }}
         DEST_INPUT: ${{ inputs.dest }}
         TOKEN: ${{ inputs.token }}
-        ACTOR: ${{ github.actor }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        dest="${DEST_INPUT:-${RUNNER_TEMP}/upstream/${REPOSITORY##*/}}"
 
         # One implementation, two entry points. The script is what a caller
         # obtaining several upstreams in a loop runs too; duplicating it here
-        # would be two answers to what obtaining means.
-        "${ACTION_PATH}/obtain.sh" "$REPOSITORY" "$COMMIT" "$dest" "$TOKEN" "$REGISTRY"
+        # would be two answers to what obtaining means. That covers the default
+        # destination as well: the stamp only makes a repeat request a no-op if
+        # both entry points land the same pin in the same place.
+        #
+        dest="${DEST_INPUT:-$("${ACTION_PATH}/obtain.sh" --dest-for "$REPOSITORY" "$COMMIT")}"
+        "${ACTION_PATH}/obtain.sh" "$REPOSITORY" "$COMMIT" "$dest" "$REGISTRY"
 
         echo "path=$dest" >> "$GITHUB_OUTPUT"
         echo "digest=$(cat "$dest/.upstream-digest")" >> "$GITHUB_OUTPUT"

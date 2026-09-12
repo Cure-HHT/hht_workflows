@@ -24,6 +24,18 @@ and deliverables describing code it did not use.
 Uppercase hex is refused rather than lowercased, so the pin a reviewer reads is
 the pin that resolved.
 
+**One implementation, two entry points.** The work lives in `obtain.sh`, which
+this action calls and which any step obtaining several upstreams in a loop calls
+too -- a composite action cannot be invoked in a loop, and a second copy of the
+logic would be a second answer to what obtaining means. That covers the default
+destination as well, reachable as `obtain.sh --dest-for <owner/repo> <commit>`: the stamp
+only makes a repeat request a no-op if both entry points land the same pin in
+the same place.
+
+**The token arrives in the environment.** `obtain.sh` reads `TOKEN` from its
+environment and passes it to `docker login` on stdin, rather than taking it as
+an argument, where `set -x` and `ps` would print it.
+
 ## Inputs
 
 | Input | Required | Default | Meaning |
@@ -31,7 +43,7 @@ the pin that resolved.
 | `repository` | yes | — | Upstream as `owner/name`. |
 | `commit` | yes | — | The pinned commit: 40 lowercase hex characters. |
 | `registry` | no | `ghcr.io` | Registry holding the upstream artifacts. |
-| `dest` | no | `${RUNNER_TEMP}/upstream/<name>` | Where to materialise the tree. The default is per-repository, so two upstreams in one run do not collide. |
+| `dest` | no | `${RUNNER_TEMP}/upstream/<owner>/<name>` | Where to materialise the tree. **Whatever is at this path is replaced**, so the tree holds one commit's content rather than a merge with what was there. The default carries the owner as well as the name, so no two upstreams collide. One destination holds one repository; two registries serving the same `owner/name` in one job would collide, which nothing in this estate does. |
 | `token` | yes | — | Token with read access to the upstream artifact. |
 
 ## Outputs
