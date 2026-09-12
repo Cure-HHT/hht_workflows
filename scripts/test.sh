@@ -33,6 +33,7 @@ hooks/confidential-terms-scan/tests
 .github/actions/obtain-upstream/tests
 .github/actions/build-urs/tests
 .github/actions/cosign-verify/tests
+scripts/publish/tests
 .github/actions/cloud-run-resolve-serving-digest/tests
 tests/test_promote_template.py
 bootstrap/tests'
@@ -70,6 +71,7 @@ pytest hooks/confidential-terms-scan/tests/
 ( cd .github/actions/build-urs && pytest tests/ )
 
 pytest .github/actions/cosign-verify/tests/
+pytest scripts/publish/tests/
 pytest .github/actions/cloud-run-resolve-serving-digest/tests/
 pytest tests/test_promote_template.py
 pytest bootstrap/tests/

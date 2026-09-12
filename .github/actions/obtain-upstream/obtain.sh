@@ -9,35 +9,22 @@
 #
 # That includes where a tree lands. The stamp only makes a second request a
 # no-op if both entry points derive the same destination for the same pin, so
-# the derivation is here too, reachable as `obtain.sh --dest-for <owner/repo>`.
+# the derivation is here too, reachable as `obtain.sh --dest-for`.
 #
 # The token arrives in the environment, never as an argument: a command line is
 # readable from /proc by every process on the runner, for the lifetime of the
 # call.
 #
 # Usage: obtain.sh <owner/repo> <40-hex commit> <dest> [registry]
-#        obtain.sh --dest-for <owner/repo>
+#        obtain.sh --dest-for <owner/repo> <40-hex commit> [registry]
 # Environment: TOKEN (required, except for --dest-for)
 set -euo pipefail
-
-# The repository name becomes a path, so it is checked here, where the
-# destination is derived, rather than in a caller. A check in one entry point
-# leaves the other able to write outside the runner's temporary directory,
-# which is the shape of defect this script exists as one copy to prevent.
-require_owner_and_name() {
-  if ! printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$' \
-     || printf '%s' "$1" | grep -q '\(^\|/\)\.\.\?\(/\|$\)'; then
-    # stderr, not stdout: --dest-for's caller reads the destination through a
-    # command substitution, which would swallow a refusal written beside it.
-    echo "::error::'$1' is not owner/repo." >&2
-    exit 1
-  fi
-}
 
 # Owner and name both, because two owners may publish the same repository name
 # and a destination keyed on the name alone would land one tree on the other's.
 default_dest() {
-  printf '%s/upstream/%s\n' "${RUNNER_TEMP:?RUNNER_TEMP must be set}" "$1"
+  printf '%s/upstream/%s/%s\n' \
+    "${RUNNER_TEMP:?RUNNER_TEMP must be set}" "${2:-ghcr.io}" "$1"
 }
 
 # `--dest-for <owner/repo> <commit>` answers "where does this pin land", and
@@ -45,10 +32,9 @@ default_dest() {
 # than in a caller means the shape a caller checks is the shape that resolves:
 # resolve_pin.py is the rule, and this asks it rather than restating it.
 if [ "${1:-}" = "--dest-for" ]; then
-  require_owner_and_name "${2:?owner/repo required}"
   python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/resolve_pin.py" \
-    "ghcr.io" "$2" "${3:?commit required}" > /dev/null
-  default_dest "$2"
+    "${4:-ghcr.io}" "${2:?owner/repo required}" "${3:?commit required}" > /dev/null
+  default_dest "$2" "${4:-ghcr.io}"
   exit 0
 fi
 
@@ -58,8 +44,6 @@ dest="${3:?dest required}"
 REGISTRY="${4:-ghcr.io}"
 ACTOR="${GITHUB_ACTOR:-token}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-require_owner_and_name "$REPOSITORY"
 
 if [ -z "${TOKEN:-}" ]; then
   echo "::error::TOKEN must be set in the environment to obtain $REPOSITORY."
@@ -76,6 +60,10 @@ fi
 
 if [ "$existing" = "$COMMIT" ]; then
   echo "already materialised at $dest ($COMMIT); not copying again"
+  # A tree materialised before the slug was recorded holds the right content and
+  # a half-written identity. Completing it costs nothing and keeps the no-op
+  # path from being the one that yields an unidentifiable provenance row.
+  [ -f "$dest/.upstream-repo" ] || printf '%s\n' "$REPOSITORY" > "$dest/.upstream-repo"
   exit 0
 fi
 
@@ -109,6 +97,10 @@ docker cp "$cid:/upstream/." "$staging"
 docker rm "$cid" > /dev/null
 
 printf '%s\n' "$digest" > "$staging/.upstream-digest"
+# The repository this tree came from, recorded here because this is the only
+# step that knows it. A consumer reading the extracted tree can otherwise infer
+# no more than its directory name, which names a destination rather than a repo.
+printf '%s\n' "$REPOSITORY" > "$staging/.upstream-repo"
 python3 "${HERE}/stamp.py" --write "$staging" "$COMMIT"
 
 mkdir -p "$(dirname "$dest")"

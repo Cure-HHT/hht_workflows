@@ -171,14 +171,14 @@ def test_a_name_without_an_owner_refuses(tmp_path):
     that omits it reaches the collision by a route that looks like a pin."""
     proc, _, calls = _run(tmp_path, f"hht_diary@{GOOD}\n")
     assert proc.returncode == 1
-    assert "is not owner/repo" in proc.stdout + proc.stderr
+    assert "owner/name" in proc.stdout + proc.stderr
     assert calls == ""
 
 
 def test_an_entry_cannot_steer_the_destination_out_of_the_workspace(tmp_path):
     proc, _, calls = _run(tmp_path, f"../../../../tmp/pwned@{GOOD}\n")
     assert proc.returncode == 1
-    assert "is not owner/repo" in proc.stdout + proc.stderr
+    assert "owner/name" in proc.stdout + proc.stderr
     assert calls == ""
 
 

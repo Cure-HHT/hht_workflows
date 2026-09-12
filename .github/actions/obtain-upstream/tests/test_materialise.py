@@ -205,7 +205,36 @@ def test_the_default_destination_keeps_the_owner(tmp_path):
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == f"{tmp_path}/upstream/cure-hht/hht_diary"
+    assert proc.stdout.strip() == f"{tmp_path}/upstream/ghcr.io/cure-hht/hht_diary"
+
+
+def test_two_registries_do_not_share_a_destination(tmp_path):
+    """The stamp keys on the commit alone, so two registries sharing a
+    destination would have the second call return the first registry's tree."""
+    dests = set()
+    for registry in ("ghcr.io", "example.registry.test"):
+        proc = subprocess.run(
+            [str(OBTAIN), "--dest-for", "cure-hht/hht_diary", GOOD, registry],
+            env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path)},
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        dests.add(proc.stdout.strip())
+    assert len(dests) == 2, f"two registries landed on one path: {dests!r}"
+
+
+def test_an_uppercase_repository_refuses_rather_than_failing_at_the_registry(tmp_path):
+    """A registry reference is lowercase. An uppercase owner passes every check
+    that reads it as text, then dies at `docker pull` reported as an artifact
+    the upstream never published -- which sends the reader to the wrong place."""
+    proc = subprocess.run(
+        [str(OBTAIN), "--dest-for", "Cure-HHT/hht_diary", GOOD],
+        env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path)},
+        capture_output=True, text=True,
+    )
+    assert proc.returncode != 0
+    assert "lowercase" in proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "", "a refusal must not also print a path"
 
 
 def test_the_destination_is_not_answered_for_a_pin_that_cannot_resolve(tmp_path):
@@ -220,3 +249,37 @@ def test_the_destination_is_not_answered_for_a_pin_that_cannot_resolve(tmp_path)
         )
         assert proc.returncode != 0, f"{bad!r} was answered for"
         assert proc.stdout.strip() == "", "a refusal must not also print a path"
+
+
+def test_the_tree_records_which_repository_it_came_from(tmp_path):
+    """An extracted tree is otherwise identified only by its directory name.
+
+    The provenance record beside a compiled deliverable has to name `owner/repo`
+    at a commit. `basename` of the destination yields neither, so the obtain
+    step -- the only step that knows -- writes it down.
+    """
+    _, dest, _ = _run(tmp_path, GOOD)
+    assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"
+
+
+def test_a_no_op_completes_an_identity_written_before_the_slug_existed(tmp_path):
+    """A tree materialised by an older obtain holds content and half an identity.
+
+    The no-op path returns early by design, so without this it is the one path
+    that can leave a tree nothing downstream can name.
+    """
+    _, dest, _ = _run(tmp_path, GOOD)
+    (dest / ".upstream-repo").unlink()
+
+    proc, dest, calls = _run(tmp_path, GOOD)
+    assert "already materialised" in proc.stdout
+    assert not _ran(calls, "cp"), "completing the stamp must not re-copy"
+    assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"
+
+
+def test_the_identity_survives_a_moved_pin(tmp_path):
+    """The swap replaces the tree wholesale, so the identity has to be written
+    into the staged tree rather than into the destination it replaces."""
+    _run(tmp_path, GOOD)
+    _, dest, _ = _run(tmp_path, OTHER)
+    assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"

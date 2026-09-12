@@ -17,6 +17,12 @@ import re
 import sys
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+# Lowercase, because a registry reference is lowercase and nothing here may
+# quietly change what the pin said. An uppercase owner passes every check that
+# reads it as text and then fails at the registry, reported as an artifact that
+# was never published -- which sends the reader to the upstream's publish run
+# rather than to the pin in front of them.
+_REPOSITORY = re.compile(r"^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$")
 
 
 class PinError(Exception):
@@ -30,6 +36,10 @@ def image_reference(registry: str, repository: str, commit: str) -> str:
     """
     if not repository:
         raise PinError("repository must be given as owner/name")
+    if not _REPOSITORY.match(repository):
+        raise PinError(
+            f"repository must be lowercase owner/name; got {repository!r}"
+        )
     if not _SHA.match(commit):
         raise PinError(
             f"pin must be 40 hex characters, lowercase; got {commit!r}"
