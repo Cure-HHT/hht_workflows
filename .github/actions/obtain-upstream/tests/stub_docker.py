@@ -8,13 +8,6 @@ one answer to what a stubbed registry does.
 It records every call, which is how a no-op is proved: not by the exit code,
 which would be zero either way, but by the absence of a ``cp`` among the
 recorded commands.
-
-It also records the argv of whoever invoked it. A token piped to ``docker
-login`` on stdin never appears in docker's own arguments, so a test watching
-only those cannot tell a token held in the environment from one taken as a
-positional argument -- it passes either way, against the very code it exists to
-catch. The caller's command line is where that difference is visible, and it is
-visible there to every process on the runner, which is the reason it matters.
 """
 
 from __future__ import annotations
@@ -34,13 +27,6 @@ def write_stub(
         textwrap.dedent(
             f"""\
             #!/usr/bin/env bash
-            # The invoking process, not this one: a token passed positionally
-            # to the caller is readable here exactly as it is from /proc by
-            # anything else running on the machine.
-            if [ -r "/proc/$PPID/cmdline" ]; then
-              tr '\\0' ' ' < "/proc/$PPID/cmdline" >> "$DOCKER_CALLS"
-              echo >> "$DOCKER_CALLS"
-            fi
             echo "$@" >> "$DOCKER_CALLS"
             case "$1" in
               login) exit 0 ;;

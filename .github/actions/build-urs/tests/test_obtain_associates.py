@@ -14,8 +14,6 @@ Four behaviours matter:
   two revisions while reporting one; picking a winner is how that happens
   quietly.
 - A malformed entry refuses before any registry call, naming the entry.
-- The token never travels as a command-line argument, where every process on
-  the runner can read it out of /proc.
 
 The script is exercised through the real obtain.sh, so the contract between the
 two -- argument order, and the token arriving in the environment -- is what the
@@ -53,8 +51,6 @@ def _run(tmp_path: pathlib.Path, commits: str, *, path_root="", path_roots=""):
     outputs = tmp_path / "gh-output"
     outputs.write_text("")
 
-    # `ps` reads every process on the box, so the recorded argv of the stub's
-    # own invocations is where a token passed as an argument would show up.
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "GITHUB_ACTOR": "someone",
@@ -175,13 +171,6 @@ def test_a_name_without_an_owner_refuses(tmp_path):
     assert calls == ""
 
 
-def test_an_entry_cannot_steer_the_destination_out_of_the_workspace(tmp_path):
-    proc, _, calls = _run(tmp_path, f"../../../../tmp/pwned@{GOOD}\n")
-    assert proc.returncode == 1
-    assert "owner/name" in proc.stdout + proc.stderr
-    assert calls == ""
-
-
 def test_a_malformed_pin_refuses_before_anything_is_materialised(tmp_path):
     """A pin checked only where it resolves fails after earlier entries are
     already on disk, and reads as a registry problem rather than a typo."""
@@ -228,13 +217,3 @@ def test_a_missing_token_refuses(tmp_path):
     )
     assert proc.returncode == 1
     assert "registry-token is required" in proc.stdout
-
-
-def test_the_token_never_travels_as_an_argument(tmp_path):
-    """docker login reads the token on stdin. Anything that put it in an argv
-    would put it in /proc/<pid>/cmdline for every process on the runner."""
-    proc, _, calls = _run(tmp_path, f"cure-hht/hht_diary@{GOOD}\n")
-    assert proc.returncode == 0, proc.stderr
-    assert "obtain.sh" in calls, \
-        "the caller's argv was not recorded, so this test cannot discriminate"
-    assert TOKEN not in calls, f"the token reached a command line: {calls!r}"

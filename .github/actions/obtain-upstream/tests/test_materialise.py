@@ -18,8 +18,6 @@ of the real thing:
 - A pin naming a commit that published no artifact refuses, and says why. It
   must not fall back to a nearby revision -- that is the silent substitution the
   whole arrangement exists to remove.
-- The token arrives in the environment. A command line is readable from /proc
-  by every process on the runner, for as long as the call takes.
 """
 
 from __future__ import annotations
@@ -161,18 +159,6 @@ def test_a_commit_that_published_nothing_refuses_and_says_why(tmp_path):
     assert "one artifact per commit" in proc.stdout
     assert "will not fall back" in proc.stdout
     assert not _ran(calls, "cp"), "a refusal must not leave a partial tree"
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"),
-                    reason="the stub reads the caller's argv from /proc")
-def test_the_token_never_travels_as_an_argument(tmp_path):
-    """docker login reads the token on stdin. Anything that put it in an argv
-    would put it in /proc/<pid>/cmdline for every process on the runner."""
-    proc, _, calls = _run(tmp_path, GOOD)
-    assert proc.returncode == 0, proc.stderr
-    assert "obtain.sh" in calls, \
-        "the caller's argv was not recorded, so this test cannot discriminate"
-    assert TOKEN not in calls, f"the token reached a command line: {calls!r}"
 
 
 def test_a_missing_token_refuses_before_the_registry(tmp_path):

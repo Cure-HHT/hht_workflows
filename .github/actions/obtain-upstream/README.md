@@ -33,9 +33,8 @@ only makes a repeat request a no-op if both entry points land the same pin in
 the same place.
 
 **The token arrives in the environment.** `obtain.sh` reads `TOKEN` from its
-environment rather than taking it as an argument, because a command line is
-readable from `/proc` by every process on the runner for as long as the call
-takes. It reaches `docker login` on stdin from there.
+environment and passes it to `docker login` on stdin, rather than taking it as
+an argument, where `set -x` and `ps` would print it.
 
 ## Inputs
 

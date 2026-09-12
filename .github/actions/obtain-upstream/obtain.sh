@@ -11,9 +11,8 @@
 # no-op if both entry points derive the same destination for the same pin, so
 # the derivation is here too, reachable as `obtain.sh --dest-for`.
 #
-# The token arrives in the environment, never as an argument: a command line is
-# readable from /proc by every process on the runner, for the lifetime of the
-# call.
+# The token arrives in the environment, which is where a secret goes: an
+# argument is printed by `set -x` and shown by `ps`.
 #
 # Usage: obtain.sh <owner/repo> <40-hex commit> <dest> [registry]
 #        obtain.sh --dest-for <owner/repo> <40-hex commit>

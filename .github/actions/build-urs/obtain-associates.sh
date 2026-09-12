@@ -83,8 +83,6 @@ fi
 
 roots=()
 for i in "${!repos[@]}"; do
-  # TOKEN travels in the environment it is already in; naming it on the command
-  # line would publish it to every process on the runner via /proc.
   "$OBTAIN" "${repos[$i]}" "${commits[$i]}" "${dests[$i]}"
   roots+=("${dests[$i]}")
 done
