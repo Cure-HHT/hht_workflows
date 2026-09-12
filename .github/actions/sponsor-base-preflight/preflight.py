@@ -36,12 +36,11 @@ _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def references_from(blob: str) -> list[str]:
-    """Split the caller's newline-delimited list, keeping the blank lines.
+    """Split the caller's input verbatim, blank lines included.
 
-    Splitting here rather than in the composite's shell is deliberate. A shell
-    loop skipping blank lines would drop exactly the input the empty-reference
-    check exists to catch: a workflow interpolation that resolved to nothing
-    leaves a blank line, and a build whose base nothing examined would pass.
+    Blank lines are kept because a blank line is a finding: it is what an
+    interpolation that resolved to nothing leaves behind. Splitting in the
+    composite's shell would drop them, and a base nothing examined would pass.
 
     A block scalar's trailing newline yields no entry, so a well-formed list
     splits to exactly its references.
@@ -50,7 +49,16 @@ def references_from(blob: str) -> list[str]:
 
 
 def _pin_error(reference: str, position: int) -> str | None:
-    """Return an error message for one base reference, or None if it is a pin."""
+    """Return an error message for one base reference, or None if it is a pin.
+
+    `reference` is one line as `references_from` produced it, so it carries no
+    newline, and `position` is its 1-based line number. Neither is checked: the
+    only caller is directly below, and a malformed call here fails visibly
+    rather than passing quietly, which is the case worth spending a guard on.
+
+    An empty `reference` is not a malformed call — it is the finding this
+    reports, and the one that would otherwise go unnoticed.
+    """
     where = f"line {position}"
 
     if not reference.strip():
