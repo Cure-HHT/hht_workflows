@@ -70,17 +70,23 @@ source_version() {
 # obtained tree. GitHub supplies the two values a reviewer actually reads in the
 # caller's `uses:` line, and they are more truthful than a description of the
 # working tree even where both answer: the reference is what the caller pinned.
+# URS_TOOL_* is what the action passes explicitly, so the value is visible where
+# the compile is configured. GITHUB_ACTION_* is the runner's own, read as the
+# fallback rather than being overridden by it: a caller passing an empty context
+# must not blank a variable the runner filled in correctly.
 tool_slug() {
-  if [ -n "${GITHUB_ACTION_REPOSITORY:-}" ]; then
-    printf '%s\n' "$GITHUB_ACTION_REPOSITORY"
+  local named="${URS_TOOL_REPOSITORY:-${GITHUB_ACTION_REPOSITORY:-}}"
+  if [ -n "$named" ]; then
+    printf '%s\n' "$named"
     return 0
   fi
   source_slug "$1"
 }
 
 tool_version() {
-  if [ -n "${GITHUB_ACTION_REF:-}" ]; then
-    printf '%s\n' "$GITHUB_ACTION_REF"
+  local named="${URS_TOOL_REF:-${GITHUB_ACTION_REF:-}}"
+  if [ -n "$named" ]; then
+    printf '%s\n' "$named"
     return 0
   fi
   source_version "$1"

@@ -180,3 +180,35 @@ def test_without_an_invoking_reference_the_tool_falls_back_to_git(tmp_path):
     slug, version = _tool_identity({}, root)
     assert slug == "cure-hht/hht_diary"  # the fixture checkout's origin
     assert version == "v9.9.9"
+
+
+def test_the_action_passed_value_wins_over_the_runners(tmp_path):
+    """The action names the two values under its own keys, not the runner's."""
+    env = {
+        "URS_TOOL_REPOSITORY": "Cure-HHT/hht_workflows",
+        "URS_TOOL_REF": "4177c5d00000000000000000000000000000abcd",
+        "GITHUB_ACTION_REPOSITORY": "someone/else",
+        "GITHUB_ACTION_REF": "main",
+    }
+    slug, version = _tool_identity(env, tmp_path)
+    assert slug == "Cure-HHT/hht_workflows"
+    assert version == "4177c5d00000000000000000000000000000abcd"
+
+
+def test_an_empty_action_context_does_not_blank_the_runners_value(tmp_path):
+    """A locally-`uses:`d action supplies empty contexts.
+
+    The action passes them through regardless, so an override would replace a
+    value the runner had filled in correctly with nothing -- and the record
+    would report the tool as unidentified while the runner knew exactly what it
+    was running.
+    """
+    env = {
+        "URS_TOOL_REPOSITORY": "",
+        "URS_TOOL_REF": "",
+        "GITHUB_ACTION_REPOSITORY": "Cure-HHT/hht_workflows",
+        "GITHUB_ACTION_REF": "ec2de47775ad86d146b79c5f80f6bdda2e181064",
+    }
+    slug, version = _tool_identity(env, tmp_path)
+    assert slug == "Cure-HHT/hht_workflows"
+    assert version == "ec2de47775ad86d146b79c5f80f6bdda2e181064"

@@ -19,7 +19,10 @@ REPO_ROOT="${1:?repository root required}"
 PUBLISHED_ROOT="${2:?extracted artifact root required}"
 
 tracked="$(git -C "$REPO_ROOT" ls-files | wc -l)"
-published="$(find "$PUBLISHED_ROOT" -type f | wc -l)"
+# `-type l` as well as `-type f`: git tracks a symlink as an entry, so one
+# would be counted on the left and not on the right, and the refusal would name
+# a pruning that never happened.
+published="$(find "$PUBLISHED_ROOT" \( -type f -o -type l \) | wc -l)"
 
 if [ "$tracked" -ne "$published" ]; then
   echo "::error::artifact carries $published files, but $tracked are tracked at this commit"

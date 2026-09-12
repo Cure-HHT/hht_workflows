@@ -82,3 +82,24 @@ def test_a_pruned_dotfile_is_caught_like_any_other(tmp_path):
 def test_the_refusal_points_at_the_cause(tmp_path):
     proc = _run(_repo(tmp_path), _published(tmp_path, omit="README.md"))
     assert "dockerignore" in (proc.stdout + proc.stderr).lower()
+
+
+def test_a_symlink_counts_as_published_content(tmp_path):
+    """git tracks a symlink as an entry, so the two sides must agree on it.
+
+    Counted on the left and not on the right, a symlink would produce a refusal
+    naming a pruning that never happened -- and the next person would learn to
+    distrust the check rather than the tree.
+    """
+    repo = _repo(tmp_path)
+    (repo / "link").symlink_to("README.md")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], env=_GIT_ENV, check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "link"], env=_GIT_ENV, check=True
+    )
+
+    published = _published(tmp_path)
+    (published / "link").symlink_to("README.md")
+
+    proc = _run(repo, published)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
