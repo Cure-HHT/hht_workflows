@@ -588,15 +588,23 @@ jobs:
           preflight=.github/actions/sponsor-base-preflight/preflight.py
 
           # A mutable tag must be rejected (HSI-OPS-image-promotion/G).
-          rc=0; python3 "$preflight" pins --image ghcr.io/cure-hht/portal-server:main-latest > /tmp/pins.out 2>&1 || rc=$?
+          rc=0; python3 "$preflight" pins --images ghcr.io/cure-hht/portal-server:main-latest > /tmp/pins.out 2>&1 || rc=$?
           if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a mutable base tag"; cat /tmp/pins.out; exit 1; fi
           grep -q 'main-latest' /tmp/pins.out || { echo "::error::pin failure did not name the offending reference"; exit 1; }
 
           # Supplying nothing must be rejected too. That is how this check stops
           # checking: a caller that quietly stops passing its references would
           # otherwise get a green preflight for a build nothing examined.
-          rc=0; python3 "$preflight" pins > /tmp/none.out 2>&1 || rc=$?
+          rc=0; python3 "$preflight" pins --images "" > /tmp/none.out 2>&1 || rc=$?
           if [ "$rc" -eq 0 ]; then echo "::error::preflight passed with no base references at all"; cat /tmp/none.out; exit 1; fi
+
+          # A blank line among real references must be refused too, naming it.
+          # That is what an interpolation resolving to nothing looks like, and
+          # it is the case a shell-side split would have silently dropped.
+          rc=0; printf -v blob '%s\n%s\n' "" "ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          python3 "$preflight" pins --images "$blob" > /tmp/blank.out 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a blank reference"; cat /tmp/blank.out; exit 1; fi
+          grep -q 'line 1' /tmp/blank.out || { echo "::error::blank-reference failure did not name the line"; cat /tmp/blank.out; exit 1; }
 
           # A grant the base does not declare must be rejected by name
           # (HSI-OPS-image-promotion/H).

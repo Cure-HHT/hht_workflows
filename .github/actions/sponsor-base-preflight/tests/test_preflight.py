@@ -15,6 +15,7 @@ import pytest
 from preflight import (
     check_capabilities,
     check_pins,
+    references_from,
     granted_permission_names,
     main,
     parse_declared_permissions,
@@ -29,10 +30,9 @@ DIGEST = "sha256:" + "a" * 64
 class TestCheckPins:
     """Verifies: HSI-OPS-image-promotion/G
 
-    The references checked here are the ones the build is about to consume, not
-    a section of the sponsor's configuration. The sponsor names a commit; the
-    build resolves it to a digest. Checking the file would check something the
-    build no longer reads, and would pass while the build consumed anything.
+    The references checked here are the ones the build is about to consume. The
+    sponsor names a commit and the build resolves it to a digest, so the value
+    being checked exists only at the point the build consumes it.
     """
 
     def test_accepts_digest_pinned_references(self):
@@ -54,6 +54,12 @@ class TestCheckPins:
             "ghcr.io/x/y@" + "a" * 64,
         ])
         assert len(errors) == 3
+
+    def test_rejects_an_uppercase_digest(self):
+        """A digest is lowercase hex; the registry will not resolve this one."""
+        errors = check_pins(["ghcr.io/x/y@sha256:" + "A" * 64])
+        assert len(errors) == 1
+        assert "lowercase" in errors[0]
 
     def test_rejects_a_tag_and_digest_together(self):
         """Docker resolves the digest and ignores the tag, so the tag is a lie."""
@@ -83,6 +89,37 @@ class TestCheckPins:
         """An unset workflow input arrives as an empty string, not as absence."""
         errors = check_pins(["", f"ghcr.io/x/y@{DIGEST}"])
         assert len(errors) == 1
+        assert "line 1" in errors[0]
+
+
+class TestSplittingTheCallersList:
+    """Verifies: HSI-OPS-image-promotion/G
+
+    The composite hands over one newline-delimited string and the split happens
+    here, not in shell. A shell loop skipping blank lines would drop exactly the
+    input the empty-reference check exists to catch: an interpolation that
+    resolved to nothing leaves a blank line, and the build would pass with a
+    base nothing examined.
+    """
+
+    def test_a_blank_line_from_an_unset_interpolation_is_not_dropped(self):
+        errors = check_pins(references_from(f"\nghcr.io/cure-hht/portal-server@{DIGEST}\n"))
+        assert len(errors) == 1
+        assert "line 1" in errors[0]
+
+    def test_the_trailing_newline_of_a_yaml_block_is_not_a_reference(self):
+        blob = f"ghcr.io/x/a@{DIGEST}\nghcr.io/x/b@{DIGEST}\n"
+        assert check_pins(references_from(blob)) == []
+
+    def test_an_entirely_empty_input_yields_no_references(self):
+        """`required: true` is not enforced for a composite action's inputs."""
+        assert references_from("") == []
+        assert len(check_pins(references_from(""))) == 1
+
+    def test_a_whitespace_only_line_is_an_empty_reference(self):
+        errors = check_pins(references_from(f"   \nghcr.io/x/y@{DIGEST}\n"))
+        assert len(errors) == 1
+        assert "line 1" in errors[0]
 
 
 # -------------------------------------------------------- capabilities (H)
@@ -212,19 +249,19 @@ class TestMainReportsFailuresAsAnnotations:
         return code, capsys.readouterr().out
 
     def test_a_reference_that_is_not_a_pin_is_an_annotation(self, capsys):
-        code, out = self._run(capsys, ["pins", "--image", "ghcr.io/x/y:main-latest"])
+        code, out = self._run(capsys, ["pins", "--images", "ghcr.io/x/y:main-latest"])
         assert code == 1
         assert "::error::" in out
 
     def test_no_images_supplied_is_an_annotation(self, capsys):
         """The way this check stops checking is a caller that passes nothing."""
-        code, out = self._run(capsys, ["pins"])
+        code, out = self._run(capsys, ["pins", "--images", ""])
         assert code == 1
         assert "::error::" in out
 
     def test_pinned_references_still_report_normally(self, capsys):
         code, out = self._run(
-            capsys, ["pins", "--image", f"ghcr.io/x/y@{DIGEST}", "--image", f"ghcr.io/x/z@{DIGEST}"]
+            capsys, ["pins", "--images", f"ghcr.io/x/y@{DIGEST}\nghcr.io/x/z@{DIGEST}\n"]
         )
         assert code == 0
         assert out.startswith("ok - ")

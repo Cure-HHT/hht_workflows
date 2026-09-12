@@ -5,10 +5,11 @@ Two independent checks, run before the sponsor image is built:
 
 ``pins``
     Every base image reference the sponsor final image is built FROM is a
-    content digest. A mutable tag is rejected. The references are supplied by
-    the caller, because they are what the build consumes: the sponsor names an
-    upstream commit and the build resolves it, so a configuration file no
-    longer holds the value being checked. Realizes HSI-OPS-image-promotion/G.
+    content digest. A mutable tag is rejected, and so is an empty reference or
+    an empty list: a build whose bases nothing examined has not passed this
+    check. The caller supplies the references because they are what the build
+    consumes — the sponsor names an upstream commit and the build resolves it
+    to a digest. Realizes HSI-OPS-image-promotion/G.
 
 ``capabilities``
     The pinned portal-server base declares every permission the sponsor's
@@ -34,47 +35,62 @@ from typing import Iterable
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def _pin_error(reference: object) -> str | None:
+def references_from(blob: str) -> list[str]:
+    """Split the caller's newline-delimited list, keeping the blank lines.
+
+    Splitting here rather than in the composite's shell is deliberate. A shell
+    loop skipping blank lines would drop exactly the input the empty-reference
+    check exists to catch: a workflow interpolation that resolved to nothing
+    leaves a blank line, and a build whose base nothing examined would pass.
+
+    A block scalar's trailing newline yields no entry, so a well-formed list
+    splits to exactly its references.
+    """
+    return blob.splitlines()
+
+
+def _pin_error(reference: str, position: int) -> str | None:
     """Return an error message for one base reference, or None if it is a pin."""
-    if not isinstance(reference, str) or not reference.strip():
+    where = f"line {position}"
+
+    if not reference.strip():
         return (
-            "a base image reference is empty. An unset workflow input arrives "
-            "as an empty string rather than as absence, so a caller that stops "
-            "supplying a reference would otherwise get a pass for a base "
-            "nothing examined."
+            f"{where}: empty. An unset input resolves to a blank line rather "
+            "than to absence, so this base would go unchecked."
         )
 
     if "@" not in reference:
         return (
-            f"'{reference}' is not pinned to a content digest. A mutable tag "
-            "lets two builds of the same sponsor commit resolve different base "
-            "content."
+            f"{where}: '{reference}' is not pinned to a content digest. A "
+            "mutable tag lets two builds of the same sponsor commit resolve "
+            "different base content."
         )
 
     name, _, digest = reference.partition("@")
     if not _DIGEST_RE.match(digest):
         return (
-            f"'{reference}' does not end in a sha256 content digest."
+            f"{where}: '{reference}' does not end in a content digest "
+            "(expected '@sha256:' followed by 64 lowercase hex characters)."
         )
 
     if ":" in name.rsplit("/", 1)[-1]:
         return (
-            f"'{reference}' carries both a tag and a digest. The digest decides "
-            "what is pulled, so the tag states something that is not checked."
+            f"{where}: '{reference}' carries both a tag and a digest. The "
+            "digest decides what is pulled, so the tag states something that "
+            "is not checked."
         )
 
     return None
 
 
-def check_pins(references: Iterable[str]) -> list[str]:
+# Implements: HSI-OPS-image-promotion/G
+def check_pins(references: list[str]) -> list[str]:
     """Every base reference the build will consume is a content digest.
 
-    The references are what the build is about to build FROM. Earlier this read
-    the sponsor's configuration instead, which stopped being the same thing when
-    the sponsor began naming an upstream commit and the build began resolving it
-    to a digest: checking the file would check a value the build does not read.
+    The references are what the build is about to build FROM. The sponsor names
+    an upstream commit and the build resolves it to a digest, so the sponsor's
+    configuration does not hold the value being checked.
     """
-    references = list(references)
     if not references:
         return [
             "no base image references were supplied. The sponsor final image is "
@@ -82,8 +98,8 @@ def check_pins(references: Iterable[str]) -> list[str]:
         ]
 
     errors = []
-    for reference in references:
-        error = _pin_error(reference)
+    for position, reference in enumerate(references, start=1):
+        error = _pin_error(reference, position)
         if error is not None:
             errors.append(error)
     return errors
@@ -195,10 +211,9 @@ def main(argv: list[str] | None = None) -> int:
 
     pins = sub.add_parser("pins", help="check base references are digest-pinned")
     pins.add_argument(
-        "--image",
-        action="append",
-        default=[],
-        help="a base image reference the build will consume; repeatable",
+        "--images",
+        required=True,
+        help="newline-delimited base image references the build will consume",
     )
 
     caps = sub.add_parser("capabilities", help="check base declares granted permissions")
@@ -219,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "pins":
             return _report(
-                check_pins(args.image),
+                check_pins(references_from(args.images)),
                 "every base image this build consumes is pinned to a content digest",
             )
 

@@ -6,9 +6,9 @@ image. Two checks, run before the image is built.
 ## 1. Pins — `HSI-OPS-image-promotion/G`
 
 Every base image reference the build will consume must be a content digest.
-The caller supplies them, because they are what the build is about to build
-FROM: a sponsor names the upstream commit and the build resolves it to a
-digest, so no configuration file holds the value being checked.
+The caller supplies them as a newline-delimited list, because they are what the
+build is about to build FROM: a sponsor names the upstream commit and the build
+resolves it to a digest, so no configuration file holds the value being checked.
 
 ```text
 ghcr.io/cure-hht/portal-server@sha256:<64 hex>      accepted
@@ -17,9 +17,9 @@ ghcr.io/cure-hht/portal-server:main-latest@sha256:… rejected (tag + digest)
 ghcr.io/cure-hht/portal-server                      rejected (no reference)
 ```
 
-Supplying no references at all is rejected too. That is how a check like this
-stops checking: a caller that quietly stops passing them would otherwise get a
-pass for a build whose bases nothing examined.
+An empty list is rejected, and so is a blank line within one. Both are what an
+input that resolved to nothing looks like, and either would otherwise leave a
+base unexamined while the build went green. The failure names the line.
 
 A mutable tag makes the sponsor image non-reproducible: two builds of the same
 sponsor commit can embed different base content. It also opens a publish-latency
@@ -75,8 +75,7 @@ The caller checks out the sponsor repo and authenticates to the registry first.
 A sponsor pins the upstream **commit**, under `upstream_pins` in its
 `deployment/base-config.json`, and the build resolves that commit to the digest
 of each base image published for it. One value to advance, and the two images
-cannot disagree about which upstream revision they came from — which they had,
-before this arrangement.
+cannot disagree about which upstream revision they came from.
 
 Advance it to a commit whose publish run succeeded; a commit that published
 nothing cannot be resolved, and the build refuses it rather than reaching for a
