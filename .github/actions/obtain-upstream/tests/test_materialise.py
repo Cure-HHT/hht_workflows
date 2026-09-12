@@ -129,3 +129,29 @@ def test_a_commit_that_published_nothing_refuses_and_says_why(tmp_path):
     assert "one artifact per commit" in proc.stdout
     assert "will not fall back" in proc.stdout
     assert " cp " not in f" {calls} ", "a refusal must not leave a partial tree"
+
+
+def test_the_tree_records_which_repository_it_came_from(tmp_path):
+    """An extracted tree is otherwise identified only by its directory name.
+
+    The provenance record beside a compiled deliverable has to name `owner/repo`
+    at a commit. `basename` of the destination yields neither, so the obtain
+    step -- the only step that knows -- writes it down.
+    """
+    _, dest, _, _ = _run(tmp_path, GOOD)
+    assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"
+
+
+def test_a_no_op_completes_an_identity_written_before_the_slug_existed(tmp_path):
+    """A tree materialised by an older obtain holds content and half an identity.
+
+    The no-op path returns early by design, so without this it is the one path
+    that can leave a tree nothing downstream can name.
+    """
+    _, dest, _, _ = _run(tmp_path, GOOD)
+    (dest / ".upstream-repo").unlink()
+
+    proc, dest, _, calls = _run(tmp_path, GOOD)
+    assert "already materialised" in proc.stdout
+    assert " cp " not in f" {calls} ", "completing the stamp must not re-copy"
+    assert (dest / ".upstream-repo").read_text().strip() == "cure-hht/hht_diary"

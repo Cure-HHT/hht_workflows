@@ -28,6 +28,10 @@ fi
 
 if [ "$existing" = "$COMMIT" ]; then
   echo "already materialised at $dest ($COMMIT); not copying again"
+  # A tree materialised before the slug was recorded holds the right content and
+  # a half-written identity. Completing it costs nothing and keeps the no-op
+  # path from being the one that yields an unidentifiable provenance row.
+  [ -f "$dest/.upstream-repo" ] || printf '%s\n' "$REPOSITORY" > "$dest/.upstream-repo"
   exit 0
 fi
 
@@ -52,6 +56,10 @@ docker cp "$cid:/upstream/." "$dest"
 docker rm "$cid" > /dev/null
 
 printf '%s\n' "$digest" > "$dest/.upstream-digest"
+# The repository this tree came from, recorded here because this is the only
+# step that knows it. A consumer reading the extracted tree can otherwise infer
+# no more than its directory name, which names a destination rather than a repo.
+printf '%s\n' "$REPOSITORY" > "$dest/.upstream-repo"
 python3 "${HERE}/stamp.py" --write "$dest" "$COMMIT"
 
 echo "materialised $REPOSITORY at $COMMIT -> $dest"

@@ -8,16 +8,18 @@
 #
 #   - uses: actions/checkout@v4
 #     with: { path: primary }
-#   - uses: actions/checkout@v4
-#     with:
-#       repository: Cure-HHT/hht_diary
-#       path: associate
-#       token: ${{ secrets.ASSOCIATE_REPO_TOKEN }}
-#   - uses: Cure-HHT/hht_workflows/.github/actions/build-urs@main
+#   - uses: Cure-HHT/hht_workflows/.github/actions/build-urs@<commit>
 #     with:
 #       primary-root: primary
-#       associate-root: associate
+#       associate-commits: |
+#         Cure-HHT/hht_diary@<40-hex commit>
+#       registry-token: ${{ secrets.GITHUB_TOKEN }}
 #       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
+#
+# Each associate is obtained from the artifact it published for that commit, so
+# the deliverable and the build it describes name one revision. The action is
+# itself pinned by the reference above, and records that reference in the
+# provenance file beside the deliverables.
 
 name: Build URS
 description: |
@@ -202,6 +204,14 @@ runs:
         MANIFEST: ${{ inputs.manifest }}
         ASSOCIATE_ROOTS: ${{ steps.associates.outputs.roots || inputs.associate-roots }}
         OUTPUT_BASENAME: ${{ inputs.output-basename }}
+        # The provenance record names the tool by the reference that invoked it.
+        # Named here so the value a reviewer reads in the caller's `uses:` line
+        # is visible where the compile is configured. Under its own name rather
+        # than the runner's: these contexts are empty for a locally-`uses:`d
+        # action, and overriding GITHUB_ACTION_* with an empty string would
+        # discard the value the runner had filled in correctly.
+        URS_TOOL_REPOSITORY: ${{ github.action_repository }}
+        URS_TOOL_REF: ${{ github.action_ref }}
       run: |
         "${{ github.action_path }}/../../../scripts/urs-compile/compile-urs.sh" \
           "${{ inputs.primary-root }}" \
@@ -214,4 +224,5 @@ runs:
         path: |
           ${{ inputs.primary-root }}/docs/*.pdf
           ${{ inputs.primary-root }}/docs/*.docx
+          ${{ inputs.primary-root }}/docs/*-build-provenance.md
         retention-days: 30
