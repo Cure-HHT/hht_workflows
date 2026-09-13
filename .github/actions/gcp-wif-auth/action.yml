@@ -47,15 +47,68 @@ outputs:
 runs:
   using: composite
   steps:
+    # The credentials file must not land in the workspace.
+    #
+    # google-github-actions/auth writes `gha-creds-<random>.json` into
+    # $GITHUB_WORKSPACE and offers no input to move it: the path is
+    # `join(process.env.GITHUB_WORKSPACE, generateCredentialsFilename())`,
+    # and `credentials_file_path` is an output, not an input. The file is
+    # untracked, no .gitignore in this organisation names `gha-creds`, and it
+    # is removed only by the action's post step at the end of the job.
+    #
+    # Anything that captures the workspace between those two moments captures
+    # a live credential. That is not hypothetical here: a step's output is
+    # about to be defined as everything git reports as untracked or ignored,
+    # precisely so that no list decides what counts. A credential inside the
+    # workspace would be captured by construction and published.
+    #
+    # So the credential is kept somewhere a capture will not look, rather than
+    # taught to every future capture as an exception. An exclusion list would
+    # reinstate the thing being designed out -- a list somebody has to remember
+    # to maintain, whose omissions are silent and, in this case, disclose a
+    # credential.
+    #
+    # Overriding GITHUB_WORKSPACE for this step only is what relocates it: the
+    # action reads that variable for this purpose alone. The runner temp
+    # directory is outside the workspace, on the same filesystem, and is
+    # discarded with the runner.
+    - name: Hold the credential outside the workspace
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/gcp-wif-auth"
+        mkdir -p "$dir"
+        # The action warns that the caller forgot actions/checkout when the
+        # directory it is about to write into is empty. It is not the
+        # workspace and that advice would be wrong, so keep it non-empty.
+        printf '%s\n' \
+          'Holds the credentials file google-github-actions/auth writes.' \
+          'Outside the workspace so that capturing the workspace cannot' \
+          'capture a credential. Not the repository checkout.' \
+          > "$dir/README"
+
     # Implements: HHT-OPS-identity-over-keys/A
     #   Cloud authentication via WIF; no SA JSON keys anywhere.
     - name: Authenticate to Google Cloud
       id: gcp
       uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+      env:
+        # Scoped to this step. Later steps see the real workspace; only the
+        # credentials file is relocated. Cleanup is unaffected -- the post
+        # step removes the path in GOOGLE_GHA_CREDS_PATH, which the main step
+        # exports from wherever it actually wrote, not from this variable.
+        GITHUB_WORKSPACE: ${{ runner.temp }}/gcp-wif-auth
       with:
         workload_identity_provider: ${{ inputs.workload_identity_provider }}
         service_account: ${{ inputs.service_account }}
         token_format: ${{ inputs.token_format }}
         audience: ${{ inputs.audience }}
         create_credentials_file: true
+        # Exports GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_GHA_CREDS_PATH, so
+        # consumers and the cleanup step both find the relocated file without
+        # knowing it moved. Turning this off would strand the credential.
         export_environment_variables: true
+
+    - name: Refuse if a credential reached the workspace
+      shell: bash
+      run: ${{ github.action_path }}/no-credential-in-workspace.sh
