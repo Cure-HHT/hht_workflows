@@ -21,6 +21,12 @@
 #   RUNNER_TEMP            outside the workspace, same filesystem, discarded
 #                          with the runner
 #   GITHUB_ENV             where the corrected paths are exported
+# A published artifact is immutable and outlives the job. The credentials file
+# carries the Actions ID-token request token, so a capture that published it
+# would give the boundary's credential a lifetime set by the artifact's
+# retention rather than by the job -- which is the ceiling this assertion puts
+# on it.
+# Implements: HHT-OPS-identity-over-keys/D
 set -euo pipefail
 
 : "${RUNNER_TEMP:?RUNNER_TEMP is not set}"

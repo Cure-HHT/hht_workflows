@@ -16,6 +16,7 @@ What has to hold, and none of it is observable from the auth step exiting zero:
   would leave the credential on the runner.
 """
 
+# Verifies: HHT-OPS-identity-over-keys/D
 from __future__ import annotations
 
 import pathlib

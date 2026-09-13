@@ -16,6 +16,7 @@
 # Exit 0 only when a credential was created AND it is outside the workspace.
 # "No credential anywhere" is a failure, not a pass: it would mean the auth
 # step silently produced nothing while every consumer expects a file.
+# Implements: HHT-OPS-identity-over-keys/D
 set -euo pipefail
 
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"

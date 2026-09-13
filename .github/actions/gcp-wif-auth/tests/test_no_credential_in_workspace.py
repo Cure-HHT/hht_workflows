@@ -11,6 +11,7 @@ Each case below is one way the arrangement can break, and every one of them is
 green under a guard that merely checks the auth step exited zero.
 """
 
+# Verifies: HHT-OPS-identity-over-keys/D
 from __future__ import annotations
 
 import pathlib
