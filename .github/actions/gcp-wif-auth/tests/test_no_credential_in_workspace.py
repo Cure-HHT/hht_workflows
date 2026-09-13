@@ -89,6 +89,39 @@ def test_refuses_when_no_credential_was_created_at_all(workspace):
     assert "no credentials file was created" in result.stderr
 
 
+def test_two_stray_files_still_refuse_with_a_reason(workspace, outside):
+    """More than one match still refuses cleanly, naming a reason.
+
+    This does NOT prove the `-quit` in the script. The SIGPIPE it avoids needs
+    the reader to exit while the writer still has output buffered, and two
+    small files do not reliably produce that -- this case passes against the
+    piped form as well. It is here because the multi-match path is worth
+    covering at all, not as evidence for that change, which stands on reading
+    the script rather than on a race this suite cannot stage deterministically.
+    """
+    (workspace / "gha-creds-aaaa1111.json").write_text("{}")
+    (workspace / "gha-creds-bbbb2222.json").write_text("{}")
+    result = run(workspace, outside / "gha-creds-deadbeef.json")
+    assert result.returncode == 1, "expected a clean refusal, got %s" % result.returncode
+    assert "written into the workspace" in result.stderr
+
+
+def test_a_credential_in_a_subdirectory_is_caught_by_the_reported_path(workspace):
+    """The scan looks at the workspace root, where this version writes.
+
+    A version writing into a subdirectory instead is caught by the other
+    check -- the reported path is under the workspace wherever it points --
+    so the two together cover a relocation that moved rather than vanished.
+    """
+    nested = workspace / "nested" / "deeper"
+    nested.mkdir(parents=True)
+    creds = nested / "gha-creds-deadbeef.json"
+    creds.write_text("{}")
+    result = run(workspace, creds)
+    assert result.returncode == 1
+    assert "inside the workspace" in result.stderr
+
+
 def test_a_sibling_directory_sharing_the_prefix_is_not_the_workspace(tmp_path):
     """`/w/workspace-2` must not count as being inside `/w/workspace`.
 
