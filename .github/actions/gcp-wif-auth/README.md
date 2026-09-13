@@ -40,18 +40,29 @@ and the action's post step removes it only at the end of the job.
 That matters because a step's output is defined as everything git reports as
 untracked or ignored, on purpose: no list decides what counts, so the file
 nobody thought to list is still captured. A credential inside the workspace
-would therefore be captured and published by construction. So this action
-overrides `GITHUB_WORKSPACE` for the auth step alone, which is the only thing
-that variable decides there, and the credential lands somewhere a capture will
-not look.
+would therefore be captured and published by construction. So this action moves
+the file to `$RUNNER_TEMP/gcp-wif-auth/` immediately afterwards and rewrites the
+variables that name it.
+
+Overriding `GITHUB_WORKSPACE` for the auth step would be tidier and would leave
+no window at all, but GitHub documents the default `GITHUB_*` variables as not
+overwritable, so whether it works is a property of the runner rather than of
+this repository. Moving the file depends on nothing but the filesystem.
+
+The file does exist in the workspace between the two steps. That window is
+closed by construction: they are consecutive steps of one composite action, and
+a consumer's own steps — including anything that captures the workspace —
+cannot interleave with them.
 
 The alternative — teaching every capture to exclude `gha-creds-*.json` —
 reinstates the maintained list the arrangement exists to remove, and its
 omissions would disclose a credential rather than merely lose a file.
 
-Consumers need to know nothing about this: `GOOGLE_APPLICATION_CREDENTIALS`
-and `GOOGLE_GHA_CREDS_PATH` point at the relocated file, and the upstream
-cleanup step removes the path it actually wrote.
+Consumers need to know nothing about this. `GOOGLE_APPLICATION_CREDENTIALS`,
+`CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` and `GOOGLE_GHA_CREDS_PATH` are all
+rewritten to the new location. The last of those is what the upstream post step
+removes at job end, read from the environment at cleanup time, so the cleanup
+follows the move.
 
 `no-credential-in-workspace.sh` runs afterwards and fails the job if a
 credential is in the workspace anyway, if none was created at all, or if the
