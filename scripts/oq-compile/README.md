@@ -1,133 +1,130 @@
 # oq-compile
 
-Generates the OQ traceability deliverables from the elspais graph:
+The generator makes the OQ traceability report from the elspais graph.
 
-- `promotion-evidence/_reports/oq-req.csv` and `oq-uat.csv` — deterministic
-  extracts, committed and diffed.
-- `promotion-evidence/_build/oq-report.xlsx` — the three-sheet workbook,
-  uploaded as a run-bound artifact rather than committed.
+It writes two kinds of file:
+
+- `promotion-evidence/_reports/oq-req.csv` and `oq-uat.csv`. These files are
+  deterministic. Commit them. CI makes them again and compares them.
+- `promotion-evidence/_build/oq-report.xlsx`. This workbook has three sheets.
+  Do not commit it. Upload it as an artifact of the run that made it.
 
 ## Layout
 
-| Path | Role |
+| Path | Function |
 | --- | --- |
-| `oq-compile.sh` | Entrypoint: federates associates, runs elspais, invokes the orchestrator. |
-| `compile-oq.py` | Orchestrator: loader to pivot to render. |
-| `oq_compile/manifest.py` | Manifest loading and validation. |
-| `oq_compile/urs_sections.py` | Section lookup, delegated to `urs-compile`. |
-| `oq_compile/load.py` | Trace and graph parsing. |
-| `oq_compile/pivot.py` | Both sheets and the verdict rollup. |
-| `oq_compile/render.py` | CSV and workbook writers. |
+| `oq-compile.sh` | Start here. It federates the associates, runs elspais, and calls the orchestrator. |
+| `compile-oq.py` | The orchestrator. It calls the loader, then the pivot, then the writers. |
+| `oq_compile/manifest.py` | It reads the manifest and validates it. |
+| `oq_compile/urs_sections.py` | It gets each URS section number from `urs-compile`. |
+| `oq_compile/load.py` | It reads the trace and the graph. |
+| `oq_compile/pivot.py` | It makes the two sheets and calculates the verdicts. |
+| `oq_compile/render.py` | It writes the CSV files and the workbook. |
 
-## Local run
+## Run the generator
 
 ```sh
 pip install -r scripts/oq-compile/requirements-oq.txt
 scripts/oq-compile/oq-compile.sh /path/to/primary /path/to/associate
 ```
 
-## The two kinds of evidence
+## The two verdicts
 
-The requirement sheet reports two verdicts per requirement, in two columns,
-and never combines them:
+The requirement sheet shows two verdicts for each requirement. Each verdict has
+its own column. The generator does not combine them.
 
-| Column | Question it answers |
+| Column | Question |
 | --- | --- |
-| test result | Did this requirement's own tests (unit, integration, end-to-end) pass? |
-| UAT result | Did a user journey validating this requirement pass? |
+| test result | Did the tests of this requirement pass? |
+| UAT result | Did a user journey that validates this requirement pass? |
 
-Both use the same three labels and the same asymmetry. FAIL when something
-actually failed; PASS only on complete verification, never on partial; NOT RUN
-for every remaining state. A test that exists but whose result has not been
-ingested reports NOT RUN, never FAIL — absence of evidence is not evidence of
-failure.
+Both columns use the same three values:
 
-They are kept apart so a reader can see which kind of evidence is missing or
-failing, which a single rolled-up verdict hides. A test result whose
-verification was carried forward from a baseline rather than produced by a
-fresh run is marked `(carried)` on the cell, and the provenance sheet's legend
-explains both columns, both meanings of NOT RUN, and the marker.
+- `FAIL`. Something failed.
+- `PASS`. The verification is complete. Partial verification is not a `PASS`.
+- `NOT RUN`. All other conditions.
 
-The trace export therefore names its values explicitly rather than selecting
-`--dimension uat`: that dimension suppresses the `verified` and `tested`
-figures the test-result column is computed from.
+A test can exist before a result exists. The generator shows `NOT RUN` for that
+test. It does not show `FAIL`. No result is not the same as a failed result.
+
+Two columns show the reader which kind of evidence is absent. One combined
+verdict hides this. If a result comes from a baseline, and not from a new run,
+the cell also shows `(carried)`. The legend on the provenance sheet gives all of
+these values.
+
+The generator asks elspais for each value by name. It does not use
+`--dimension uat`. That dimension removes the `verified` and `tested` values.
+The test-result column needs them.
 
 ## Configuration
 
-The consuming repo supplies `spec/OQ-manifest/oq.yaml` (document title and
-project, the elspais scope name, the UAT case prefix, sheet and column titles)
-and declares that scope in its `.elspais.toml`. This tool holds no
-consumer-specific values.
+The consuming repository supplies `spec/OQ-manifest/oq.yaml`. This file gives
+the document title, the project, and the elspais scope name. It also gives the
+prefix for UAT case identifiers, and the titles of the sheets and the columns.
+The same repository declares the scope in its `.elspais.toml`. The generator holds no
+values of any consumer.
 
-### Declaring the namespaces the report must contain
+### Namespaces
 
-A federated report draws its rows from the consuming repo plus the associate
-repos it federates. Nothing in the trace states which associates were meant to
-be present, so a run with an associate unconfigured produces a well-formed,
-correctly-provenanced report holding only the consumer's own requirements — a
-fraction of the evidence, at exit 0.
+A federated report gets rows from the consuming repository and from each
+associate. The trace does not show which associates must be present. If an
+associate is absent, the generator can make a correct report that has only the
+rows of the consumer. Such a report has a small part of the evidence, and the
+command exits 0.
 
-An optional `require_namespaces` in the manifest names the requirement-id
-namespaces the report must contain. The generator refuses to write when any
-declared namespace contributes no row, naming what is missing, what was found
-and what was expected:
+`require_namespaces` gives the namespaces that the report must contain:
 
 ```yaml
 require_namespaces: ["SPN", "PLT"]
 ```
 
-Declaring nothing keeps the generator agnostic about who is federated, so
-consumers that do not federate are unaffected. The check is not covered by
-`--allow-empty`: an empty report can be honest, but a report missing a
-namespace the manifest declares never is.
+If a namespace in this list has no rows, the generator writes nothing. The
+error message gives the namespace that is absent, the namespaces that are
+present, and the namespaces that the manifest declares.
 
-### Stating each requirement's URS section
+If the manifest has no `require_namespaces`, the generator does not do this
+test. `--allow-empty` does not stop this test.
 
-An optional `urs_manifest` names the consuming repo's URS manifest, relative to
-that repo:
+### URS sections
+
+`urs_manifest` gives the URS manifest of the consuming repository:
 
 ```yaml
 urs_manifest: spec/URS-manifest/urs.yaml
 ```
 
-Declared, the requirement sheet carries one further column holding the number
-of the URS section each requirement appears in — the number only, so it sorts
-under the sheet's autofilter and stays narrow. It sits second, next to the
-requirement id and the frozen first column, ahead of the wide description.
+If the manifest has `urs_manifest`, the requirement sheet gets one more column.
+This column shows the number of the URS section of each requirement. It shows
+the number only. A number is narrow, and it sorts correctly in the filter. The
+column is the second column. It is adjacent to the requirement identifier.
 
-Which section a requirement belongs to is not a property of its source file:
-a sponsor-scoped chapter lists the same files the core chapters do and
-collects the other namespace's requirements from them. That routing rule
-belongs to the URS generator, so this one does not restate it — it hands the
-manifest to `urs-compile`'s own loader and asks `urs_compile.ordering`'s
-section index for the answer. This tool holds no part of any consumer's
-chapter structure.
+The source file of a requirement does not give its section. A sponsor chapter
+can list the same files as a core chapter. The two chapters then collect
+requirements of different namespaces from those files. This rule belongs to the
+URS generator. This generator does not repeat the rule. It gives the manifest to
+the loader of `urs-compile`, and asks `urs_compile.ordering` for the section.
 
-A requirement the URS places in no section — one in a file no section lists,
-or at a level the URS excludes — gets an empty cell. An empty cell states an
-absence honestly; a guessed number in a regulatory column does not.
+If the URS gives no section to a requirement, the cell is empty. An empty cell
+shows that the section is not known.
 
-Declaring nothing omits the column, so a consumer that publishes no URS still
-gets a report.
+If the manifest has no `urs_manifest`, the sheet does not get this column.
 
-## Refusals
+## Conditions that stop the generator
 
-The generator writes nothing and exits non-zero when:
+The generator writes nothing, and exits with an error, if:
 
-- the trace selects zero requirements;
-- the selection yields zero UAT test cases (a full REQ sheet with an empty UAT
-  sheet is what a dropped or renamed `journeys` key produces);
-- a namespace declared in `require_namespaces` contributes no row;
-- the manifest's REQ sheet does not declare exactly five columns — six with a
-  `urs_manifest` declared — (requirement id, the URS section, description, test
-  result, UAT result, and the journey column that repeats);
-- a `urs_manifest` is declared but no such file exists;
-- the URS manifest places one requirement in two different sections;
-- the trace is a dict carrying no recognised rows key;
-- a required field is absent from a trace row;
-- the graph yields no journey node while the trace cites at least one.
+- the trace selects no requirements;
+- the selection gives no UAT test cases;
+- a namespace in `require_namespaces` has no rows;
+- the REQ sheet in the manifest does not declare five columns, or six columns
+  with `urs_manifest`;
+- the manifest declares a `urs_manifest`, but that file is absent;
+- the URS manifest puts one requirement in two sections;
+- the trace is a mapping, and the generator does not recognise its rows key;
+- a row of the trace does not have a necessary field;
+- the trace names a journey, but the graph has no journey node.
 
-`--allow-empty` covers the first two only.
+`--allow-empty` applies only to the first two conditions.
 
 ## Tests
 
