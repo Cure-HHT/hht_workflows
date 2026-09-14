@@ -251,13 +251,6 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
             "No validating journey has been run, or journey coverage is "
             "partial. Not a failure.",
         ],
-        [],
-        [
-            "",
-            f"The two {NOT_RUN} entries are different absences: the first "
-            "means no test result has been ingested, the second means no "
-            "validating journey has been run. Neither is a failure.",
-        ],
     ]
 
 
