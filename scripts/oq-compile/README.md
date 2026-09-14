@@ -45,16 +45,14 @@ Both columns use the same three values:
 - `NOT RUN`. All other conditions.
 
 A test can exist before a result exists. The generator shows `NOT RUN` for that
-test. It does not show `FAIL`. No result is not the same as a failed result.
+test. It does not show `FAIL`.
 
-Two columns show the reader which kind of evidence is absent. One combined
-verdict hides this. If a result comes from a baseline, and not from a new run,
-the cell also shows `(carried)`. The legend on the provenance sheet gives all of
-these values.
+Two columns show the reader which kind of evidence is absent. If a result comes
+from a baseline, and not from a new run, the cell also shows `(carried)`. The
+legend on the provenance sheet gives all of these values.
 
 The generator asks elspais for each value by name. It does not use
 `--dimension uat`. That dimension removes the `verified` and `tested` values.
-The test-result column needs them.
 
 ## Configuration
 
@@ -68,9 +66,8 @@ values of any consumer.
 
 A federated report gets rows from the consuming repository and from each
 associate. The trace does not show which associates must be present. If an
-associate is absent, the generator can make a correct report that has only the
-rows of the consumer. Such a report has a small part of the evidence, and the
-command exits 0.
+associate is absent, the generator makes a report that has only the rows of the
+consumer, and the command exits 0.
 
 `require_namespaces` gives the namespaces that the report must contain:
 
@@ -95,17 +92,16 @@ urs_manifest: spec/URS-manifest/urs.yaml
 
 If the manifest has `urs_manifest`, the requirement sheet gets one more column.
 This column shows the number of the URS section of each requirement. It shows
-the number only. A number is narrow, and it sorts correctly in the filter. The
-column is the second column. It is adjacent to the requirement identifier.
+the number only. The column is the second column. It is adjacent to the
+requirement identifier.
 
 The source file of a requirement does not give its section. A sponsor chapter
 can list the same files as a core chapter. The two chapters then collect
-requirements of different namespaces from those files. This rule belongs to the
-URS generator. This generator does not repeat the rule. It gives the manifest to
-the loader of `urs-compile`, and asks `urs_compile.ordering` for the section.
+requirements of different namespaces from those files. The generator gives the
+manifest to the loader of `urs-compile`, and asks `urs_compile.ordering` for the
+section.
 
-If the URS gives no section to a requirement, the cell is empty. An empty cell
-shows that the section is not known.
+If the URS gives no section to a requirement, the cell is empty.
 
 If the manifest has no `urs_manifest`, the sheet does not get this column.
 
