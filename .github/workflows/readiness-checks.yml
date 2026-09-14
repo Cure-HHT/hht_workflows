@@ -392,6 +392,23 @@ jobs:
           grep -q "FIX-PRD-sponsor-config" "$d"/build/urs-assembled*.md
           grep -q "DIARY-DEV-sample-internal" "$d"/build/urs-assembled*.md
           echo "build-urs readiness OK: urs.pdf + urs.docx produced with expected content."
+      - name: Assert the provenance record identifies what was compiled
+        run: |
+          set -euo pipefail
+          d=scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          record="$d/docs/urs-build-provenance.md"
+          test -s "$record"
+          # A compile that exits zero having recorded nothing is the failure
+          # this guards: every other check here would still be green. The
+          # fixture associate carries the stamps an obtained tree carries, so
+          # this exercises the path a pinned source takes.
+          if grep -qi "unknown\|unidentified" "$record"; then
+            echo "::error::the provenance record does not identify its inputs:"
+            cat "$record"
+            exit 1
+          fi
+          grep -q "fedcba9876543210fedcba9876543210fedcba98" "$record"
+          echo "provenance names the stamped source commit."
 
   build-oq:
     # End-to-end readiness check for the build-oq composite action: compiles
@@ -580,17 +597,6 @@ jobs:
           echo "image=readiness-portal-server:local" >> "$GITHUB_OUTPUT"
           echo "seeded base image $(docker image inspect readiness-portal-server:local --format '{{ .Id }}')"
 
-          # A syntactically valid digest pin; the capability half of the check
-          # runs against the locally-seeded stand-in image passed as an input,
-          # so this value only has to satisfy the pin format.
-          cat > deployment/base-config.json <<EOF
-          {
-            "base_images": {
-              "portal_server": "ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-            }
-          }
-          EOF
-
           cat > deployment/sponsor/role-permissions.yaml <<'EOF'
           roles:
             - CRA
@@ -600,9 +606,15 @@ jobs:
               - portal.site.view_list
           EOF
 
-      - name: Preflight passes on a compatible, digest-pinned config
+      - name: Preflight passes on compatible, digest-pinned references
         uses: ./.github/actions/sponsor-base-preflight
         with:
+          # A syntactically valid digest pin; the capability half runs against
+          # the locally-seeded stand-in passed below, so these only have to
+          # satisfy the pin format.
+          base-images: |
+            ghcr.io/cure-hht/sponsor-ci@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
           portal-server-image: ${{ steps.seed.outputs.image }}
 
       - name: Preflight rejects a mutable tag and an undeclared grant
@@ -614,10 +626,23 @@ jobs:
           preflight=.github/actions/sponsor-base-preflight/preflight.py
 
           # A mutable tag must be rejected (HSI-OPS-image-promotion/G).
-          printf '{"base_images":{"portal_server":"ghcr.io/cure-hht/portal-server:main-latest"}}\n' > /tmp/floating.json
-          rc=0; python3 "$preflight" pins --base-config /tmp/floating.json > /tmp/pins.out 2>&1 || rc=$?
+          rc=0; python3 "$preflight" pins --images ghcr.io/cure-hht/portal-server:main-latest > /tmp/pins.out 2>&1 || rc=$?
           if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a mutable base tag"; cat /tmp/pins.out; exit 1; fi
           grep -q 'main-latest' /tmp/pins.out || { echo "::error::pin failure did not name the offending reference"; exit 1; }
+
+          # Supplying nothing must be rejected too. That is how this check stops
+          # checking: a caller that quietly stops passing its references would
+          # otherwise get a green preflight for a build nothing examined.
+          rc=0; python3 "$preflight" pins --images "" > /tmp/none.out 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "::error::preflight passed with no base references at all"; cat /tmp/none.out; exit 1; fi
+
+          # A blank line among real references must be refused too, naming it.
+          # That is what an interpolation resolving to nothing looks like, and
+          # it is the case a shell-side split would have silently dropped.
+          rc=0; printf -v blob '%s\n%s\n' "" "ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          python3 "$preflight" pins --images "$blob" > /tmp/blank.out 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "::error::preflight accepted a blank reference"; cat /tmp/blank.out; exit 1; fi
+          grep -q 'line 1' /tmp/blank.out || { echo "::error::blank-reference failure did not name the line"; cat /tmp/blank.out; exit 1; }
 
           # A grant the base does not declare must be rejected by name
           # (HSI-OPS-image-promotion/H).

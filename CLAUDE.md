@@ -14,6 +14,14 @@ For every composite action there is a **canonical implementation** at `.github/a
 
 Critical convention: the wrapper's job `name:` field becomes the check-context name GitHub stores against the commit. Branch protection matches by that **bare job name** (not the `<workflow> / <job>` form the UI shows). When adding a new required-check action, the wrapper's `jobs.<x>.name:` must exactly equal the name the org-level ruleset expects.
 
+### This repo is also a pinnable upstream
+
+Beyond the actions consumers `uses:`, every commit on `main` publishes the repository's tracked tree as `ghcr.io/cure-hht/hht_workflows:commit-<sha>` at `/upstream` (`Dockerfile.artifact`, `.github/workflows/publish-artifact.yml`). A consumer that needs these *files* — the URS compile scripts, say — pins a commit and reads that artifact via the `obtain-upstream` action, rather than cloning this repo at whatever revision a working tree happens to hold.
+
+Two things about that publish are load-bearing and easy to undo by accident. Its trigger is unconditional: a consumer pins a commit, so an artifact has to exist for every commit that can be pinned, and adding a path filter would leave commits that cannot be resolved. And its build context is `git archive HEAD` rather than the working directory, so content is defined by git instead of by an ignore list that could omit a class of file while leaving the identity unmoved.
+
+The artifact declares a deliberately unrunnable `CMD`. It is never executed — only `docker create` + `docker cp` — but `docker create` refuses an image with no command at all.
+
 ### Readiness checks are the per-action PR gate
 
 `.github/workflows/readiness-checks.yml` is the canonical place to add a real end-to-end happy-path job for each action that has environmental prerequisites (WIF binding, OIDC handshake, etc.). Each readiness job's bare name is wired into `main`'s required-status-checks list (see `docs/branch-protection.md`). Adding a new action with external-dependency wiring → add a corresponding readiness job → add its bare name to the protection list.

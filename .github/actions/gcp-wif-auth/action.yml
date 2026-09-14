@@ -58,4 +58,32 @@ runs:
         token_format: ${{ inputs.token_format }}
         audience: ${{ inputs.audience }}
         create_credentials_file: true
+        # Exports GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GHA_CREDS_PATH and
+        # CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE. The next step rewrites all
+        # three; turning this off would strand the credential.
         export_environment_variables: true
+
+    # The credentials file must not stay in the workspace.
+    #
+    # This action writes `gha-creds-<random>.json` into $GITHUB_WORKSPACE and
+    # offers no input to move it: the path is built from that variable, and
+    # `credentials_file_path` is an output rather than an input. The file is
+    # untracked, no .gitignore in this organisation names `gha-creds`, and the
+    # action's post step removes it only at the end of the job.
+    #
+    # A step's output is defined as everything git reports as untracked or
+    # ignored, on purpose: no list decides what counts, so the file nobody
+    # thought to list is captured too. A credential in the workspace would be
+    # captured and published by construction.
+    #
+    # The alternative -- teaching every capture to skip `gha-creds-*.json` --
+    # reinstates the maintained list that arrangement exists to remove, and its
+    # omissions would disclose a credential rather than merely lose a file. So
+    # the credential moves instead.
+    - name: Move the credential out of the workspace
+      shell: bash
+      run: ${{ github.action_path }}/relocate-credential.sh
+
+    - name: Refuse if a credential reached the workspace
+      shell: bash
+      run: ${{ github.action_path }}/no-credential-in-workspace.sh

@@ -8,16 +8,18 @@
 #
 #   - uses: actions/checkout@v4
 #     with: { path: primary }
-#   - uses: actions/checkout@v4
-#     with:
-#       repository: Cure-HHT/hht_diary
-#       path: associate
-#       token: ${{ secrets.ASSOCIATE_REPO_TOKEN }}
-#   - uses: Cure-HHT/hht_workflows/.github/actions/build-urs@main
+#   - uses: Cure-HHT/hht_workflows/.github/actions/build-urs@<commit>
 #     with:
 #       primary-root: primary
-#       associate-root: associate
+#       associate-commits: |
+#         cure-hht/hht_diary@<40-hex commit>
+#       registry-token: ${{ secrets.GITHUB_TOKEN }}
 #       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
+#
+# Each associate is obtained from the artifact it published for that commit, so
+# the deliverable and the build it describes name one revision. The action is
+# itself pinned by the reference above, and records that reference in the
+# provenance file beside the deliverables.
 
 name: Build URS
 description: |
@@ -77,6 +79,23 @@ inputs:
       Produces docs/<basename>.pdf and .docx.
     required: false
     default: ""
+  associate-commits:
+    description: |
+      Newline-delimited `owner/repo@<40-hex commit>` list naming the
+      repositories whose spec content federates into this compile. Each is
+      obtained from the artifact that repository published for that commit,
+      so the compiled deliverable and the pinned build describe one revision.
+
+      Mutually exclusive with associate-root / associate-roots: a run that
+      supplied both could compile from two revisions while reporting one.
+    required: false
+    default: ""
+  registry-token:
+    description: |
+      Token with read access to the upstream artifacts named in
+      associate-commits. Required when that input is set.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -130,12 +149,38 @@ runs:
         fi
         pip install "elspais==${ELSPAIS_VERSION}"
 
+    # A deliverable enumerates obligations; the build it describes is pinned.
+    # Obtaining the spec source from the artifact published for that same pin
+    # is what stops the two being different revisions. The decisions live in
+    # obtain-associates.sh rather than here so a suite can run what executes:
+    # this route is skipped whenever a caller supplies paths, which is every
+    # caller until the first consumer pins.
+    - name: Obtain the pinned associates
+      id: associates
+      if: inputs.associate-commits != ''
+      shell: bash
+      env:
+        COMMITS: ${{ inputs.associate-commits }}
+        TOKEN: ${{ inputs.registry-token }}
+        PATH_ROOT: ${{ inputs.associate-root }}
+        PATH_ROOTS: ${{ inputs.associate-roots }}
+      run: |
+        "${{ github.action_path }}/obtain-associates.sh"
+
     - name: Run URS compile
       shell: bash
       env:
         MANIFEST: ${{ inputs.manifest }}
-        ASSOCIATE_ROOTS: ${{ inputs.associate-roots }}
+        ASSOCIATE_ROOTS: ${{ steps.associates.outputs.roots || inputs.associate-roots }}
         OUTPUT_BASENAME: ${{ inputs.output-basename }}
+        # The provenance record names the tool by the reference that invoked it.
+        # Named here so the value a reviewer reads in the caller's `uses:` line
+        # is visible where the compile is configured. Under its own name rather
+        # than the runner's: these contexts are empty for a locally-`uses:`d
+        # action, and overriding GITHUB_ACTION_* with an empty string would
+        # discard the value the runner had filled in correctly.
+        URS_TOOL_REPOSITORY: ${{ github.action_repository }}
+        URS_TOOL_REF: ${{ github.action_ref }}
       run: |
         "${{ github.action_path }}/../../../scripts/urs-compile/compile-urs.sh" \
           "${{ inputs.primary-root }}" \
@@ -148,4 +193,5 @@ runs:
         path: |
           ${{ inputs.primary-root }}/docs/*.pdf
           ${{ inputs.primary-root }}/docs/*.docx
+          ${{ inputs.primary-root }}/docs/*-build-provenance.md
         retention-days: 30

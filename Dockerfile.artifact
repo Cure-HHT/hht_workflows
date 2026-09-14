@@ -1,0 +1,16 @@
+# This repository's whole content at one commit, at the path the
+# obtain-upstream action reads from.
+#
+# Nothing selects which files count. The build context is `git archive HEAD`,
+# so the artifact's content is exactly the repository's tracked tree at that
+# commit -- defined by git rather than by an ignore list that could omit a
+# class of file and leave the identity unmoved when that class changes.
+#
+# FROM scratch: this image is never executed, only created and copied out of.
+# It still has to declare a command, because `docker create` refuses an image
+# without one -- and `docker create` plus `docker cp` is how a consumer
+# extracts the tree. The command is deliberately not runnable: reaching it
+# would mean something tried to run an artifact that is only ever read.
+FROM scratch
+COPY . /upstream
+CMD ["/upstream/this-image-is-data-not-a-program"]

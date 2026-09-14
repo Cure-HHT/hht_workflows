@@ -20,14 +20,23 @@ hht_hooks_guard "$REPO_ROOT" ".githooks" "tools/setup-repo.sh" "tools/setup-repo
 hht_associates_guard "$REPO_ROOT"
 
 # The test target directories, listed once.
+#
+# scripts/urs-compile/test_compile_urs is deliberately absent: it needs the
+# pinned pandoc and a LaTeX engine, which CI installs for that job and a clone
+# does not have. Every other suite CI runs belongs here.
 TARGETS='hooks/release-notes-update/tests
 hooks/no-or-true-guard/tests
 hooks/confidential-terms-scan/tests
 .github/actions/release-notes-publish/tests
 .github/actions/sponsor-base-preflight/tests
 .github/actions/elspais-federate/tests
+.github/actions/obtain-upstream/tests
+.github/actions/build-urs/tests
+.github/actions/cosign-verify/tests
+scripts/publish/tests
+.github/actions/cloud-run-resolve-serving-digest/tests
+tests/test_promote_template.py
 bootstrap/tests
-scripts/urs-compile/test_compile_urs
 scripts/oq-compile/test_oq_compile'
 
 if [ "${1:-}" = "--list" ]; then
@@ -39,30 +48,29 @@ fi
 # suite needs on top.
 python3 -m pip install --quiet -e '.[test]'
 
-# The three hook suites each run separately to avoid namespace collision of
-# their __init__.py files (all named 'tests'). The action suites already run
-# individually with PYTHONPATH set, so this is consistent.
-python3 -m pytest hooks/release-notes-update/tests/ -v
-
-python3 -m pytest hooks/no-or-true-guard/tests/ -v
-
-python3 -m pytest hooks/confidential-terms-scan/tests/ -v
-
-( cd .github/actions/release-notes-publish && \
-  PYTHONPATH=.:../../../hooks/release-notes-update python3 -m pytest tests/ )
-
-( cd .github/actions/sponsor-base-preflight && \
-  PYTHONPATH=. python3 -m pytest tests/ )
-
-( cd .github/actions/elspais-federate && \
-  PYTHONPATH=. python3 -m pytest tests/ )
-
-python3 -m pytest bootstrap/tests/
-
-python3 -m pip install --quiet -r scripts/urs-compile/requirements-compile.txt lxml
-
-python3 -m pytest scripts/urs-compile/test_compile_urs/
-
+# The OQ report generator reads YAML and writes a workbook; neither dependency
+# is in the [test] extra, and unlike the URS compile it needs nothing a clone
+# cannot install.
 python3 -m pip install --quiet -r scripts/oq-compile/requirements-oq.txt
 
-python3 -m pytest scripts/oq-compile/test_oq_compile/
+# One pytest invocation per target, driven from the list above so the two cannot disagree:
+# a target named there is a target that runs. Several hooks name their test
+# package `tests`, so a single invocation spanning them fails collection on the
+# duplicate module name and runs none of them.
+#
+# Two suites import a module from their own directory and so run from it, with
+# that directory on the path. Anything else runs from the repository root.
+echo "$TARGETS" | while IFS= read -r target; do
+  [ -z "$target" ] && continue
+  case "$target" in
+    .github/actions/release-notes-publish/tests)
+      ( cd .github/actions/release-notes-publish && \
+        PYTHONPATH=.:../../../hooks/release-notes-update python3 -m pytest tests/ ) ;;
+    .github/actions/sponsor-base-preflight/tests|\
+    .github/actions/elspais-federate/tests|\
+    .github/actions/obtain-upstream/tests)
+      ( cd "$(dirname "$target")" && PYTHONPATH=. python3 -m pytest tests/ ) ;;
+    *)
+      python3 -m pytest "$target" ;;
+  esac
+done

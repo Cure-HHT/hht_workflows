@@ -146,6 +146,50 @@ Override the stem with `OUTPUT_BASENAME=custom` to produce `docs/custom.pdf`
 etc., or set `MANIFEST=spec/URS-manifest/other.yaml` to use a different manifest
 (stem `other` derives automatically).
 
+### What the provenance record identifies
+
+`docs/<stem>-build-provenance.md` names the revision of every out-of-repo input
+the deliverables were compiled from — this pipeline, and each federated source.
+
+Each identity is read from the source tree itself, by `source-identity.sh`:
+
+| The tree is | Identified by |
+| ----------- | ------------- |
+| an artifact obtained at a pinned commit | `.upstream-repo` and `.upstream-commit`, written by `obtain-upstream` |
+| a working tree | the origin remote, and `git describe` |
+| neither | a row saying which of the two is missing, and where |
+
+The pipeline's own row is read the same way, with one addition: where the
+compile runs as a composite action, the action's repository and the reference
+the caller pinned it at name it instead. A remotely-`uses:`d action is a
+downloaded tarball with no `.git`, so git identifies it no better than it
+identifies an obtained tree — and the reference is what the caller actually
+chose, which a description of the working tree is not.
+
+The stamp wins where both exist. A stamped tree that someone also ran `git init`
+in holds the artifact's content whatever its working history says, and only the
+stamp names what the compile actually read.
+
+The third row is deliberately not the word `unknown`. A row reading `unknown`
+looks like a value, and a reader cannot tell from it whether the source was
+unstamped, unversioned, or simply absent.
+
+### Reproducible builds
+
+`SOURCE_DATE_EPOCH` fixes the build date the provenance file records, and is
+honoured by `pandoc` and `xelatex` as well, so it fixes the whole toolchain's
+idea of now:
+
+```bash
+SOURCE_DATE_EPOCH=1788998400 ./compile-urs.sh /path/to/consumer/worktree
+```
+
+Unset, the date comes from the clock. That means a recompile from identical
+sources produces a different provenance file the next day, so two builds cannot
+be compared byte for byte unless the epoch is fixed. Set it to a value derived
+from the sources being compiled — the newest input commit's date — rather than
+to an arbitrary constant, so the recorded date still means something.
+
 Prerequisites:
 
 - `pandoc` 3.x and `xelatex` on `PATH`

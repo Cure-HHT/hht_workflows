@@ -1,0 +1,79 @@
+---
+# Materialise another repository's whole content at a pinned commit, once per
+# run, at a path every later step reads.
+#
+# Whole content, not a curated subset: nothing here selects which files count,
+# so no class of file can change without changing what a consumer sees. A
+# subset would reproduce, in a new location, the defect of an artifact whose
+# identity does not move when its requirements do.
+#
+# Once per run, not once per consumer: the stamp makes a repeat request for the
+# same commit a no-op, so a run needing the upstream in five steps materialises
+# it once. Two steps reading the same path are reading the same bytes, not two
+# copies that happen to agree.
+
+name: Obtain upstream at a pinned commit
+description: >
+  Materialise another repository's whole content at a pinned commit, once per
+  run, at a path every later step reads. A second call naming the same commit
+  is a no-op.
+
+inputs:
+  repository:
+    description: 'Upstream as owner/name, e.g. cure-hht/hht_diary.'
+    required: true
+  commit:
+    description: 'The pinned commit: 40 lowercase hex characters.'
+    required: true
+  registry:
+    description: 'Registry holding the upstream artifacts.'
+    required: false
+    default: 'ghcr.io'
+  dest:
+    description: >
+      Where to materialise the tree. Whatever is at this path is REPLACED:
+      the tree holds the pinned commit's content, not a merge of it with what
+      was there. Defaults to a path under the runner temp directory carrying
+      the owner as well as the repository name, so no two upstreams in one run
+      collide.
+    required: false
+    default: ''
+  token:
+    description: 'Token with read access to the upstream artifact.'
+    required: true
+
+outputs:
+  path:
+    description: 'Absolute path to the materialised tree.'
+    value: ${{ steps.materialise.outputs.path }}
+  digest:
+    description: 'Resolved artifact digest, for the provenance record.'
+    value: ${{ steps.materialise.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Materialise the upstream
+      id: materialise
+      shell: bash
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+        COMMIT: ${{ inputs.commit }}
+        REGISTRY: ${{ inputs.registry }}
+        DEST_INPUT: ${{ inputs.dest }}
+        TOKEN: ${{ inputs.token }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        # One implementation, two entry points. The script is what a caller
+        # obtaining several upstreams in a loop runs too; duplicating it here
+        # would be two answers to what obtaining means. That covers the default
+        # destination as well: the stamp only makes a repeat request a no-op if
+        # both entry points land the same pin in the same place.
+        #
+        dest="${DEST_INPUT:-$("${ACTION_PATH}/obtain.sh" --dest-for "$REPOSITORY" "$COMMIT")}"
+        "${ACTION_PATH}/obtain.sh" "$REPOSITORY" "$COMMIT" "$dest" "$REGISTRY"
+
+        echo "path=$dest" >> "$GITHUB_OUTPUT"
+        echo "digest=$(cat "$dest/.upstream-digest")" >> "$GITHUB_OUTPUT"
