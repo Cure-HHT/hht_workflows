@@ -1,9 +1,11 @@
 import pytest
 
 from urs_compile.graph_loader import Graph
+from urs_compile.manifest import Manifest
 from urs_compile.ordering import (
     grouped_section_requirements,
     parse_req_id,
+    section_index,
     section_remainders,
 )
 
@@ -192,3 +194,87 @@ def test_grouped_levels_default_is_prd_gui():
     )
     groups = grouped_section_requirements(g, ["spec/x.md"], scope="core")
     assert _ids(groups) == [["DIARY-PRD-foo"], ["DIARY-GUI-bar"]]
+
+
+# --- section_index -------------------------------------------------------
+
+
+def _manifest(*chapters: dict) -> Manifest:
+    return Manifest.from_dict({"document": {}, "levels": ["PRD", "GUI"],
+                               "chapters": list(chapters)})
+
+
+def _chapter(number: int, sections: list[dict], scope: str = "core") -> dict:
+    return {"number": number, "title": f"CH{number}", "scope": scope,
+            "sections": sections}
+
+
+def test_section_index_routes_core_and_sponsor_reqs_from_one_file():
+    # The sponsor chapter lists the same file the core chapter does and takes
+    # the other namespace's REQs from it, so the file alone cannot name the
+    # section -- the namespace participates.
+    g = _graph(
+        _req("DIARY-PRD-roles", "spec/prd-rbac.md", parse_line=10),
+        _req("SPN-PRD-roles-configuration", "spec/prd-rbac.md", parse_line=20),
+    )
+    manifest = _manifest(
+        _chapter(4, [{"number": "4.3", "title": "Roles",
+                      "files": ["spec/prd-rbac.md"]}]),
+        _chapter(7, [{"number": "7.1", "title": "Standards",
+                      "files": ["spec/prd-rbac.md"]}], scope="sponsor"),
+    )
+    assert section_index(g, manifest) == {
+        "DIARY-PRD-roles": "4.3",
+        "SPN-PRD-roles-configuration": "7.1",
+    }
+
+
+def test_section_index_omits_reqs_no_section_places():
+    g = _graph(
+        _req("DIARY-PRD-roles", "spec/prd-rbac.md"),
+        _req("DIARY-PRD-elsewhere", "spec/prd-elsewhere.md"),
+        _req("DIARY-OPS-rotation", "spec/prd-rbac.md"),
+    )
+    manifest = _manifest(
+        _chapter(4, [{"number": "4.3", "title": "Roles",
+                      "files": ["spec/prd-rbac.md"]}]),
+    )
+    assert section_index(g, manifest) == {"DIARY-PRD-roles": "4.3"}
+
+
+def test_section_index_refuses_a_req_claimed_by_two_sections():
+    g = _graph(_req("DIARY-PRD-roles", "spec/prd-rbac.md"))
+    manifest = _manifest(
+        _chapter(4, [
+            {"number": "4.3", "title": "Roles", "files": ["spec/prd-rbac.md"]},
+            {"number": "4.9", "title": "Again", "files": ["spec/prd-rbac.md"]},
+        ]),
+    )
+    with pytest.raises(ValueError, match="DIARY-PRD-roles.*4.3 and 4.9"):
+        section_index(g, manifest)
+
+
+def test_section_index_honours_a_section_level_override():
+    g = _graph(
+        _req("DIARY-PRD-roles", "spec/prd-rbac.md"),
+        _req("DIARY-DEV-schema", "spec/prd-rbac.md"),
+    )
+    manifest = _manifest(
+        _chapter(9, [{"number": "9.1", "title": "Implementation",
+                      "files": ["spec/prd-rbac.md"], "levels": ["DEV"]}]),
+    )
+    assert section_index(g, manifest) == {"DIARY-DEV-schema": "9.1"}
+
+
+def test_section_index_indexes_a_by_level_section_across_the_corpus():
+    # A section with levels and no files selects across every source file in
+    # the graph, exactly as the document assembler does.
+    g = _graph(
+        _req("DIARY-PRD-roles", "spec/prd-rbac.md"),
+        _req("DIARY-DEV-schema", "spec/dev-schema.md"),
+    )
+    manifest = _manifest(
+        _chapter(9, [{"number": "9.1", "title": "Implementation",
+                      "levels": ["DEV"]}]),
+    )
+    assert section_index(g, manifest) == {"DIARY-DEV-schema": "9.1"}

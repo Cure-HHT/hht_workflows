@@ -1,0 +1,14 @@
+document:
+  title: "Readiness Fixture OQ Report"
+  project: "Readiness Fixture"
+scope: readiness
+uat_case_prefix: "UAT-"
+sheets:
+  req:
+    name: "REQ"
+    columns: ["Req ID", "Description", "Test Result", "UAT Result", "UAT Test Case ID"]
+  uat:
+    name: "UAT Test Cases"
+    columns: ["UAT Test Case ID", "Description", "Pass/Fail", "User Journey ID", "Req ID"]
+  provenance:
+    name: "Provenance"

@@ -29,6 +29,7 @@ on:
       # The urs-compile suite had no CI runner at all: a pre-existing
       # failure sat unnoticed because nothing ever executed it.
       - 'scripts/urs-compile/**'
+      - 'scripts/oq-compile/**'
       - 'tests/**'
       - 'bootstrap/**'
       - 'pyproject.toml'
@@ -151,11 +152,26 @@ jobs:
           set -euo pipefail
           pytest scripts/urs-compile/test_compile_urs/ -v
 
+  oq-compile-tests:
+    name: oq-compile tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install --quiet -r scripts/oq-compile/requirements-oq.txt
+      - name: Run oq-compile tests
+        run: |
+          set -euo pipefail
+          pytest scripts/oq-compile/test_oq_compile/ -v
+
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.
   notify-failure:
     name: Notify failure
-    needs: [test]
+    needs: [test, oq-compile-tests]
     if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:

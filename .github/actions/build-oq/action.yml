@@ -1,0 +1,116 @@
+# Build the OQ traceability report from a consumer repo.
+#
+# Wraps scripts/oq-compile/oq-compile.sh. Callers check out the
+# consumer repo (and optionally sibling associate repos) before
+# invoking this action.
+#
+# Example caller (in the consumer repo):
+#
+#   - uses: actions/checkout@v4
+#   - uses: Cure-HHT/hht_workflows/.github/actions/build-oq@<40-char commit SHA>
+#     with:
+#       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
+#
+# Pin this action to a commit SHA, not to a moving ref. It refuses an
+# unpinned `elspais-version` because an unpinned report is not reproducible;
+# an unpinned generator is the same defect one layer out, and the resolved ref
+# is what the provenance sheet names as the generator.
+
+name: Build OQ traceability report
+description: >-
+  Generate the OQ traceability deliverables (committed CSV extract plus a
+  run-bound workbook) from the elspais graph of the calling repository and its
+  associates.
+
+inputs:
+  primary-root:
+    description: Path to the consuming repository checkout holding the OQ manifest.
+    required: false
+    default: ${{ github.workspace }}
+  associate-root:
+    description: Path to a single associate repository checkout.
+    required: false
+    default: ''
+  associate-roots:
+    description: Newline-delimited associate checkout paths. Takes precedence over associate-root.
+    required: false
+    default: ''
+  manifest:
+    description: Manifest path relative to primary-root.
+    required: false
+    default: spec/OQ-manifest/oq.yaml
+  elspais-version:
+    description: Exact elspais version to install. Required; an unpinned report is not reproducible.
+    required: true
+  python-version:
+    description: Python version used to run the generator.
+    required: false
+    default: '3.11'
+
+outputs:
+  requirement-count:
+    description: Number of requirements reported on the REQ sheet.
+    value: ${{ steps.compile.outputs.requirement-count }}
+  uat-case-count:
+    description: Number of UAT test cases reported.
+    value: ${{ steps.compile.outputs.uat-case-count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${{ inputs.elspais-version }}" ]; then
+          echo "::error::elspais-version is required; an unpinned report is not reproducible" >&2
+          exit 1
+        fi
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip install --quiet -r "${{ github.action_path }}/../../../scripts/oq-compile/requirements-oq.txt"
+        pip install --quiet "elspais==${{ inputs.elspais-version }}"
+
+    - name: Compile the OQ report
+      id: compile
+      shell: bash
+      env:
+        ASSOCIATE_ROOTS: ${{ inputs.associate-roots }}
+        MANIFEST: ${{ inputs.manifest }}
+        # The generator identity for the provenance sheet. A remote `uses:`
+        # unpacks this action as a tarball with no .git, so the script's own
+        # git derivation would resolve to "unknown" on every consumer run.
+        # Empty for a local `uses: ./`, where the script's git path is right.
+        TOOL_VERSION: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        out="$("${{ github.action_path }}/../../../scripts/oq-compile/oq-compile.sh" \
+          "${{ inputs.primary-root }}" "${{ inputs.associate-root }}" | tee /dev/stderr | tail -1)"
+        reqs="$(echo "$out" | sed -n 's/^OQ report: \([0-9]*\) requirements.*/\1/p')"
+        cases="$(echo "$out" | sed -n 's/.*, \([0-9]*\) UAT test cases$/\1/p')"
+        # The generator's stdout contract is the only channel these counts
+        # arrive on. A silent parse failure hands every downstream consumer an
+        # empty string where a count belongs, which reads as "nothing to
+        # report" rather than "the report was never measured".
+        if ! [[ "$reqs" =~ ^[0-9]+$ ]] || ! [[ "$cases" =~ ^[0-9]+$ ]]; then
+          echo "::error::could not parse the generator's counts from its final" \
+            "stdout line: '${out}'. Expected 'OQ report: <n> requirements, <n>" \
+            "UAT test cases'." >&2
+          exit 1
+        fi
+        echo "requirement-count=${reqs}" >> "$GITHUB_OUTPUT"
+        echo "uat-case-count=${cases}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload the workbook
+      uses: actions/upload-artifact@v4
+      with:
+        name: oq-report
+        path: ${{ inputs.primary-root }}/promotion-evidence/_build/oq-report.xlsx
+        if-no-files-found: error

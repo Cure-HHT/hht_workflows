@@ -36,7 +36,8 @@ hooks/confidential-terms-scan/tests
 scripts/publish/tests
 .github/actions/cloud-run-resolve-serving-digest/tests
 tests/test_promote_template.py
-bootstrap/tests'
+bootstrap/tests
+scripts/oq-compile/test_oq_compile'
 
 if [ "${1:-}" = "--list" ]; then
   echo "$TARGETS"
@@ -47,7 +48,12 @@ fi
 # suite needs on top.
 python3 -m pip install --quiet -e '.[test]'
 
-# One pytest per target, driven from the list above so the two cannot disagree:
+# The OQ report generator reads YAML and writes a workbook; neither dependency
+# is in the [test] extra, and unlike the URS compile it needs nothing a clone
+# cannot install.
+python3 -m pip install --quiet -r scripts/oq-compile/requirements-oq.txt
+
+# One pytest invocation per target, driven from the list above so the two cannot disagree:
 # a target named there is a target that runs. Several hooks name their test
 # package `tests`, so a single invocation spanning them fails collection on the
 # duplicate module name and runs none of them.
@@ -59,12 +65,12 @@ echo "$TARGETS" | while IFS= read -r target; do
   case "$target" in
     .github/actions/release-notes-publish/tests)
       ( cd .github/actions/release-notes-publish && \
-        PYTHONPATH=.:../../../hooks/release-notes-update pytest tests/ ) ;;
+        PYTHONPATH=.:../../../hooks/release-notes-update python3 -m pytest tests/ ) ;;
     .github/actions/sponsor-base-preflight/tests|\
     .github/actions/elspais-federate/tests|\
     .github/actions/obtain-upstream/tests)
-      ( cd "$(dirname "$target")" && PYTHONPATH=. pytest tests/ ) ;;
+      ( cd "$(dirname "$target")" && PYTHONPATH=. python3 -m pytest tests/ ) ;;
     *)
-      pytest "$target" ;;
+      python3 -m pytest "$target" ;;
   esac
 done

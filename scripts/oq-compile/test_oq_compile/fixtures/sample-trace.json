@@ -1,0 +1,39 @@
+[
+  {
+    "id": "SPN-PRD-session-management",
+    "title": "Session Management",
+    "level": "PRD",
+    "status": "Active",
+    "uat_coverage": {"count": 2.0, "total": 2.0, "ratio": 1.0},
+    "uat_verified": {"count": 2.0, "total": 2.0, "ratio": 1.0},
+    "verified": {"count": 2.0, "total": 2.0, "ratio": 1.0, "carried": false},
+    "tested": {"count": 2.0, "total": 2.0, "ratio": 1.0, "passed": 2.0, "failed": 0.0, "awaiting": 0.0},
+    "journeys": [{"id": "JNY-AUTH-06", "verdict": "pass"}]
+  },
+  {
+    "id": "SPN-GUI-calendar-day-view",
+    "title": "Calendar Day View",
+    "level": "GUI",
+    "status": "Draft",
+    "uat_coverage": {"count": 1.0, "total": 3.0, "ratio": 0.33},
+    "uat_verified": {"count": 0.0, "total": 3.0, "ratio": 0.0},
+    "verified": {"count": 0.0, "total": 3.0, "ratio": 0.0, "carried": false},
+    "tested": {"count": 3.0, "total": 3.0, "ratio": 1.0, "passed": 0.0, "failed": 0.0, "awaiting": 3.0},
+    "journeys": [
+      {"id": "JNY-EPIS-10", "verdict": "unverified"},
+      {"id": "JNY-EPIS-10", "verdict": "unverified"},
+      {"id": "JNY-EPIS-07", "verdict": "fail"}
+    ]
+  },
+  {
+    "id": "SPN-PRD-audit-log",
+    "title": "Audit Log",
+    "level": "PRD",
+    "status": "Draft",
+    "uat_coverage": {"count": 0.0, "total": 4.0, "ratio": 0.0},
+    "uat_verified": {"count": 0.0, "total": 4.0, "ratio": 0.0},
+    "verified": {"count": 2.0, "total": 4.0, "ratio": 0.5, "carried": false},
+    "tested": {"count": 4.0, "total": 4.0, "ratio": 1.0, "passed": 2.0, "failed": 2.0, "awaiting": 0.0},
+    "journeys": []
+  }
+]

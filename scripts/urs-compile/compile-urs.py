@@ -38,8 +38,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 import build_docx_reference  # noqa: E402
 from urs_compile.graph_loader import Graph  # noqa: E402
 from urs_compile.ordering import (  # noqa: E402
+    effective_section_levels,
     grouped_section_requirements,
     section_remainders,
+    section_requirement_relpaths,
 )
 from urs_compile.manifest import Manifest  # noqa: E402
 from urs_compile.render import RenderConfig, render_node  # noqa: E402
@@ -460,22 +462,11 @@ def assemble_markdown(graph: Graph, manifest: Manifest, primary: Path,
                 ):
                     rendered_chunks.append((rem.kind, render_node(rem, graph, config)))
                     rendered_chunks.append(("SEP", "\n"))
-            # Effective levels for this section: an explicit section override
-            # wins, else the manifest's document-wide levels.
-            eff_levels = section.levels or manifest.levels
-            # Choose which relpaths to pull REQs from:
-            # - explicit section.files -> the section's own files (today's
-            #   behaviour), intersected with eff_levels below.
-            # - section.levels but no files -> a "by-level" section that
-            #   selects across the WHOLE corpus (every distinct REQUIREMENT
-            #   source_file in the graph), filtered to eff_levels.
-            # - neither -> empty section.files -> the existing no-content path.
-            if section.files:
-                req_relpaths: list[str] = section.files
-            elif section.levels:
-                req_relpaths = graph.requirement_source_files()
-            else:
-                req_relpaths = section.files
+            # Effective levels and source paths for this section. Both come
+            # from urs_compile.ordering, which the section index reuses, so
+            # the document and any index of it route a REQ identically.
+            eff_levels = effective_section_levels(section, manifest.levels)
+            req_relpaths = section_requirement_relpaths(graph, section)
             groups = grouped_section_requirements(
                 graph, req_relpaths, scope=chapter.scope, levels=eff_levels,
             )

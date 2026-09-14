@@ -1,0 +1,50 @@
+version = 5
+
+[project]
+namespace = "SPN"
+name = "Readiness Fixture"
+
+[id-patterns]
+canonical = "{namespace}-{level.letter}-{component}"
+
+[id-patterns.component]
+style = "kebab-case"
+
+[id-patterns.assertions]
+separator = "/"
+
+[levels.PRD]
+rank = 1
+letter = "PRD"
+display_name = "Product"
+implements = ["PRD"]
+expects_validation = true
+
+[levels.GUI]
+rank = 3
+letter = "GUI"
+display_name = "Interface"
+implements = ["GUI", "PRD"]
+
+[scopes.readiness]
+level = ["PRD", "GUI"]
+
+[scanning.spec]
+directories = ["spec"]
+file_patterns = ["*.md"]
+skip_dirs = ["OQ-manifest"]
+
+[scanning.journey]
+directories = ["spec"]
+file_patterns = ["*.md"]
+
+[rules.format]
+require_hash = false
+require_status = true
+
+[validation]
+hash_mode = "normalized-text"
+hash_algorithm = "sha256"
+hash_length = 8
+
+[associates]

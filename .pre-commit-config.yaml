@@ -46,7 +46,13 @@ repos:
     rev: v0.42.0
     hooks:
       - id: markdownlint
-        args: [--ignore, .github/]
+        # Fixture journey files legitimately carry multiple top-level H1
+        # headings (a file title plus one per JNY-* journey) — the same
+        # convention real elspais journey specs use (e.g. hht_diary's
+        # spec/user-journeys/*.md), which is why that repo disables MD025
+        # outright. Scope the exemption to the fixture tree instead of
+        # weakening MD025 repo-wide.
+        args: [--ignore, .github/, --ignore, scripts/oq-compile/test_oq_compile/fixtures/]
 
   # GitHub Actions YAML validation — catches workflow syntax errors,
   # bad expressions, missing inputs, etc. before push.
