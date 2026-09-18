@@ -32,6 +32,15 @@ inputs:
       one (e.g., authenticating to a specific Cloud Run service URL).
     required: false
     default: ''
+  access_token_scopes:
+    description: >
+      Comma-separated OAuth scopes for the minted access token. Set only when
+      the caller needs a scope the default does not cover -- the Play Developer
+      API (https://www.googleapis.com/auth/androidpublisher) is the case this
+      exists for. Leaving it empty keeps google-github-actions/auth's own
+      default, which is cloud-platform.
+    required: false
+    default: ''
 
 outputs:
   access_token:
@@ -43,6 +52,14 @@ outputs:
     description: >
       The minted ID token when token_format == 'id_token'.
     value: ${{ steps.gcp.outputs.id_token }}
+  credentials_file_path:
+    description: >
+      Where the credentials file actually is, AFTER this action moves it out of
+      the workspace. Deliberately not a passthrough of the upstream action's
+      output of the same name: that one names the workspace path this action has
+      just emptied, so forwarding it would hand callers a path to a file that is
+      not there.
+    value: ${{ steps.relocate.outputs.credentials_file_path }}
 
 runs:
   using: composite
@@ -57,6 +74,7 @@ runs:
         service_account: ${{ inputs.service_account }}
         token_format: ${{ inputs.token_format }}
         audience: ${{ inputs.audience }}
+        access_token_scopes: ${{ inputs.access_token_scopes }}
         create_credentials_file: true
         # Exports GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GHA_CREDS_PATH and
         # CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE. The next step rewrites all
@@ -81,6 +99,7 @@ runs:
     # omissions would disclose a credential rather than merely lose a file. So
     # the credential moves instead.
     - name: Move the credential out of the workspace
+      id: relocate
       shell: bash
       run: ${{ github.action_path }}/relocate-credential.sh
 

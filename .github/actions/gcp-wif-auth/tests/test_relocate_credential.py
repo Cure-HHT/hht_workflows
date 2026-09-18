@@ -35,11 +35,14 @@ def env(tmp_path):
     runner_temp.mkdir()
     github_env = tmp_path / "github-env"
     github_env.write_text("")
+    github_output = tmp_path / "github-output"
+    github_output.write_text("")
     return {
         "PATH": "/usr/bin:/bin",
         "GITHUB_WORKSPACE": str(workspace),
         "RUNNER_TEMP": str(runner_temp),
         "GITHUB_ENV": str(github_env),
+        "GITHUB_OUTPUT": str(github_output),
     }
 
 
@@ -135,3 +138,43 @@ def test_a_credential_already_outside_the_workspace_is_still_placed_and_exported
     moved = pathlib.Path(env["RUNNER_TEMP"]) / "gcp-wif-auth" / "gha-creds-deadbeef.json"
     assert moved.exists()
     assert exported(env)["GOOGLE_GHA_CREDS_PATH"] == str(moved)
+
+
+def outputs(env):
+    lines = pathlib.Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+def test_the_published_path_is_where_the_file_now_is(env):
+    """The composite exposes this as `credentials_file_path`.
+
+    The upstream action's output of that name still points into the workspace,
+    which this script has just emptied. A caller handed that path -- a
+    third-party action being passed the credential, say -- would fail somewhere
+    far from the cause, so the value published here has to be the destination.
+    """
+    creds = pathlib.Path(env["GITHUB_WORKSPACE"]) / "gha-creds-deadbeef.json"
+    creds.write_text('{"type":"external_account"}')
+
+    result = run(env, creds)
+    assert result.returncode == 0, result.stderr
+
+    published = outputs(env)["credentials_file_path"]
+    assert pathlib.Path(published).exists(), "the published path names no file"
+    assert published == exported(env)["GOOGLE_APPLICATION_CREDENTIALS"]
+    assert not published.startswith(env["GITHUB_WORKSPACE"] + "/"), (
+        "the published path is still inside the workspace"
+    )
+
+
+def test_the_script_still_works_with_no_output_file(env):
+    """A caller outside Actions has no GITHUB_OUTPUT, and must not crash."""
+    e = dict(env)
+    del e["GITHUB_OUTPUT"]
+    creds = pathlib.Path(e["GITHUB_WORKSPACE"]) / "gha-creds-deadbeef.json"
+    creds.write_text('{"type":"external_account"}')
+
+    result = run(e, creds)
+
+    assert result.returncode == 0, result.stderr
+    assert not creds.exists()

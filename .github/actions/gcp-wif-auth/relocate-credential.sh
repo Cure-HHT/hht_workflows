@@ -66,4 +66,15 @@ chmod 600 "$dest"
   echo "GOOGLE_GHA_CREDS_PATH=${dest}"
 } >> "${GITHUB_ENV}"
 
+# And as a step output, so the composite can expose a path that is TRUE.
+#
+# The upstream action's own `credentials_file_path` output still names the
+# workspace location, which this script has just emptied. A composite that
+# forwarded that output would hand every caller a path to a file that is not
+# there -- and the caller most likely to use it is one passing the credential to
+# a third-party action, which would fail somewhere far from the cause.
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  echo "credentials_file_path=${dest}" >> "${GITHUB_OUTPUT}"
+fi
+
 echo "credential moved out of the workspace"
