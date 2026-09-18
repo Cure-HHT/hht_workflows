@@ -1,0 +1,25 @@
+# The phases this repository's pipeline is expected to produce, and the gate
+# each is due by.
+#
+# A gate reads this file, so a phase cannot be silently absent: removing a step
+# from the Dockerfile without removing it here leaves a declared phase with no
+# result, and `pipeline/refuse` treats that as a refusal rather than as a pass.
+# That direction is deliberate. The failure this estate keeps hitting is a check
+# that reports success because the thing it names never ran.
+#
+# `due_by` is recorded now and unused at this milestone: this repository has one
+# gate, which is the build itself. It exists so the field is not invented later
+# by whoever first needs it.
+phases:
+  - id: git-init
+    due_by: build
+    description: An initialised repository, so the tools that need one have one.
+  - id: install
+    due_by: build
+    description: This repository and its test extras, installed.
+  - id: guard
+    due_by: build
+    description: The no-or-true-guard hook, run through pre-commit over all files.
+  - id: release-notes
+    due_by: build
+    description: The release-notes hook suite.

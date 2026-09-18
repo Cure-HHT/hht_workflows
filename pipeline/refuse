@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Refuse, on the evidence the image carries.
+
+Every pipeline step records its outcome and exits zero, so the build always
+succeeds and the evidence always survives. This program is what says no. The
+workflow builds the image, publishes it, and then starts this program against
+the published digest -- so "the evidence exists" holds by construction rather
+than by getting two workflow steps into the right order. If the push fails
+there is no digest, and the refusal cannot run at all.
+
+It reads two things:
+
+  the ledger      which phases were expected  (default /pipeline/phases.yaml)
+  the evidence    what each phase recorded    (default /evidence)
+
+and refuses unless every expected phase both ran and passed.
+
+An ABSENT verdict is a refusal, not a pass. A missing .rc file means the step
+never reached the wrapper, which is indistinguishable from the step never
+running -- and treating that as success is the same class of defect as a secret
+scan that reports clean on a leaking image.
+
+Stdlib only, deliberately. The dependency install is itself a phase, and it is
+the phase this pipeline's discriminating check deliberately breaks. A refusal
+program that imported PyYAML would fail to start in exactly the case it exists
+to report. The ledger is therefore parsed with a restricted reader that
+understands the one shape this file is allowed to take, and rejects anything
+else rather than guessing.
+
+Diagnostics go to stderr. Stdout carries a single JSON object, so a later step
+can join this verdict without re-deriving it -- and so that nothing chatty can
+corrupt a caller that is reading stdout.
+
+Exit status:
+  0  every expected phase ran and passed
+  1  at least one expected phase is absent, unreadable, or failed
+  2  the ledger or the evidence directory could not be read at all
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+
+DEFAULT_LEDGER = "/pipeline/phases.yaml"
+DEFAULT_EVIDENCE = "/evidence"
+
+# The one shape the ledger is allowed to take. Anything else is an error rather
+# than a best-effort parse: a ledger this program silently misreads is a ledger
+# that can declare phases nobody checks.
+_PHASES_KEY = re.compile(r"^phases:\s*$")
+_ITEM_ID = re.compile(r"^\s{2,}-\s+id:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$")
+_ITEM_FIELD = re.compile(r"^\s{4,}[A-Za-z_][A-Za-z0-9_]*:\s*\S.*$")
+_COMMENT_OR_BLANK = re.compile(r"^\s*(#.*)?$")
+
+
+class LedgerError(Exception):
+    """The ledger could not be read in the one shape it is allowed to take."""
+
+
+def read_ledger(path: str) -> list[str]:
+    """Return the ids of the phases the ledger declares, in order."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError as exc:
+        raise LedgerError(f"cannot read ledger {path}: {exc}") from exc
+
+    seen_key = False
+    ids: list[str] = []
+    for number, line in enumerate(lines, start=1):
+        if _COMMENT_OR_BLANK.match(line):
+            continue
+        if not seen_key:
+            if _PHASES_KEY.match(line):
+                seen_key = True
+                continue
+            raise LedgerError(
+                f"{path}:{number}: expected 'phases:' before anything else, got {line!r}"
+            )
+        item = _ITEM_ID.match(line)
+        if item:
+            phase = item.group(1)
+            if phase in ids:
+                raise LedgerError(f"{path}:{number}: phase {phase!r} declared twice")
+            ids.append(phase)
+            continue
+        if _ITEM_FIELD.match(line):
+            # A sibling field of the current item (due_by, description). Carried
+            # for the reader; this program only needs the ids.
+            if not ids:
+                raise LedgerError(f"{path}:{number}: field before any '- id:' entry")
+            continue
+        raise LedgerError(f"{path}:{number}: unrecognised line {line!r}")
+
+    if not seen_key:
+        raise LedgerError(f"{path}: no 'phases:' key")
+    if not ids:
+        # An empty ledger must not pass. A gate that reads an empty expectation
+        # and reports success is the vacuous pass this whole mechanism exists to
+        # make impossible.
+        raise LedgerError(f"{path}: declares no phases")
+    return ids
+
+
+def judge(phase: str, evidence_dir: str) -> tuple[bool, str]:
+    """Return (passed, reason) for one phase, from what it left behind."""
+    rc_path = os.path.join(evidence_dir, f"{phase}.rc")
+    log_path = os.path.join(evidence_dir, f"{phase}.log")
+
+    if not os.path.exists(rc_path):
+        return False, "did not run (no verdict recorded)"
+
+    try:
+        with open(rc_path, "r", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+    except OSError as exc:
+        return False, f"verdict unreadable ({exc})"
+
+    if not re.fullmatch(r"-?\d+", raw):
+        return False, f"verdict is not a status ({raw!r})"
+
+    if not os.path.exists(log_path):
+        # The wrapper writes the log before it writes the status, so a status
+        # with no log means something other than the wrapper wrote it.
+        return False, "status recorded without a log"
+
+    status = int(raw)
+    if status != 0:
+        return False, f"failed with status {status}"
+    return True, "ran and passed"
+
+
+def main(argv: list[str]) -> int:
+    ledger_path = os.environ.get("PIPELINE_LEDGER", DEFAULT_LEDGER)
+    evidence_dir = os.environ.get("EVIDENCE_DIR", DEFAULT_EVIDENCE)
+    if len(argv) > 1:
+        ledger_path = argv[1]
+    if len(argv) > 2:
+        evidence_dir = argv[2]
+
+    try:
+        phases = read_ledger(ledger_path)
+    except LedgerError as exc:
+        print(f"refuse: {exc}", file=sys.stderr)
+        return 2
+
+    if not os.path.isdir(evidence_dir):
+        # Not a refusal about one phase -- nothing was recorded at all, which
+        # means this image is not one this program can judge.
+        print(
+            f"refuse: no evidence directory at {evidence_dir}; "
+            "this image carries no record of its own build",
+            file=sys.stderr,
+        )
+        return 2
+
+    results = {}
+    refusals = []
+    for phase in phases:
+        passed, reason = judge(phase, evidence_dir)
+        results[phase] = {"passed": passed, "reason": reason}
+        marker = "ok " if passed else "REFUSE"
+        print(f"{marker}  {phase}: {reason}", file=sys.stderr)
+        if not passed:
+            refusals.append(phase)
+
+    verdict = {
+        "ledger": ledger_path,
+        "evidence": evidence_dir,
+        "expected": phases,
+        "phases": results,
+        "refused": refusals,
+        "passed": not refusals,
+    }
+    print(json.dumps(verdict, indent=2, sort_keys=True))
+
+    if refusals:
+        print(
+            "refuse: refusing on "
+            + ", ".join(refusals)
+            + f" ({len(refusals)} of {len(phases)} expected phases)",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"refuse: {len(phases)} expected phases ran and passed", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

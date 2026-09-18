@@ -1,0 +1,67 @@
+#!/bin/sh
+# Run one pipeline phase, record what it did, and exit zero.
+#
+# The exit-zero is the point. Under BuildKit a `RUN` that fails leaves no
+# addressable image, so a step that refuses destroys the evidence it just
+# produced -- the defect this pipeline exists to remove, arriving at the moment
+# it matters most. Every step therefore records its outcome and succeeds; the
+# refusal is `pipeline/refuse`, which the workflow starts against the published
+# image afterwards.
+#
+# This is a wrapper rather than a convention because a convention is something
+# each step's author has to remember, and the step that forgets is the one whose
+# result goes missing.
+#
+# Usage: /pipeline/record <phase> <command> [args...]
+#
+# Writes, under $EVIDENCE_DIR (default /evidence):
+#   <phase>.rc   the command's exit status, as a decimal integer
+#   <phase>.log  everything the command wrote to stdout and stderr
+#
+# Both are required. A verdict that is only an exit code cannot distinguish
+# "the tool was missing" from "a test failed", and those need different
+# responses -- see DIARY-OPS-promotion-evidence-currency/E, which states the
+# estate's rule for exactly this.
+
+set -u
+
+evidence="${EVIDENCE_DIR:-/evidence}"
+
+if [ "$#" -lt 2 ]; then
+    echo "record: usage: record <phase> <command> [args...]" >&2
+    exit 2
+fi
+
+phase="$1"
+shift
+
+mkdir -p "$evidence"
+log="$evidence/$phase.log"
+rc_file="$evidence/$phase.rc"
+
+{
+    echo "phase:   $phase"
+    echo "command: $*"
+    echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "---"
+} > "$log"
+
+# Not `set -e` and not a pipeline: the status below must be the command's own.
+# A `| tee` would hand back tee's status and every phase would record success.
+"$@" >> "$log" 2>&1
+rc=$?
+
+{
+    echo "---"
+    echo "finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "status:   $rc"
+} >> "$log"
+
+printf '%s\n' "$rc" > "$rc_file"
+
+# Echo into the build log too, so a human reading the build sees what a machine
+# will read later. This is a convenience; the files above are the record.
+cat "$log"
+echo "[record] phase=$phase status=$rc (recorded, not enforced)"
+
+exit 0
