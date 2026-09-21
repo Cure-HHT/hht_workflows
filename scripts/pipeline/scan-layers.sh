@@ -45,6 +45,14 @@ if ! command -v docker > /dev/null 2>&1; then
     exit 2
 fi
 
+# The layer-scan config, not the repository's commit-time gate. See the file's
+# own header for why it carries an allowlist and the gate does not.
+config="$(cd "$(dirname "$0")" && pwd)/layer-scan.toml"
+if [ ! -f "$config" ]; then
+    echo "::error::layer-scan.toml is missing; refusing to scan with unknown rules" >&2
+    exit 2
+fi
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -100,7 +108,7 @@ while IFS= read -r blob; do
     scanned=$((scanned + 1))
     report="$work/report-$(basename "$blob").json"
 
-    if gitleaks dir "$dest" --no-banner --redact \
+    if gitleaks dir "$dest" --no-banner --redact --config "$config" \
             --report-format json --report-path "$report" > /dev/null 2>&1; then
         continue
     fi

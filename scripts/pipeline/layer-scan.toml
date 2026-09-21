@@ -1,0 +1,45 @@
+# The gitleaks configuration used by the LAYER scan only.
+#
+# Not the repository's commit-time gate. That one runs on gitleaks' embedded
+# defaults with no allowlist at all, and nothing here weakens it -- a config
+# that loosened the gate every developer commits through, in order to quieten a
+# scan of build output, would be the worst possible trade.
+#
+# WHY AN ALLOWLIST EXISTS AT ALL
+#
+# The layer scan asks one question: did a secret enter the image from THIS
+# build's own work? It is not asking whether third-party source contains
+# strings that look like keys, and the answer to that is emphatically yes.
+# Measured on the first real run: 403 findings, of which 402 were gitleaks'
+# OWN rule definitions, downloaded into the image by the guard step, and 1 was
+# a Perl header in the base image. A scanner flagging another scanner's test
+# corpus is not a finding; it is noise that would train everyone to ignore the
+# check -- which is how a real leak gets waved through.
+#
+# WHY THESE PATHS AND NO OTHERS
+#
+# Each is content the build OBTAINED rather than content it WROTE, and each
+# arrives from an input that is itself pinned and reviewed: the base image by
+# content digest in Dockerfile.pipeline, the hook repositories by `rev:` in
+# .pre-commit-config.yaml. Nothing this pipeline authors lands in any of them.
+#
+# This is a list, and a list is the thing the mandate's rule 1 exists to avoid.
+# It is registered as an exception in docs/pipeline-design.md rather than left
+# implicit here. Keep it minimal: add a path only when a real run produces
+# noise from it, never pre-emptively, and never a path a build step writes to.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Tool caches under root's home: obtained at build time, never authored here. The pre-commit cache holds the hook repositories, gitleaks' among them, whose rule files are full of example secrets by design."
+paths = [
+  '''/root/\.cache/''',
+]
+
+[[allowlists]]
+description = "Operating-system files from the digest-pinned base image. No step in this pipeline writes to either path."
+paths = [
+  '''/usr/lib/''',
+  '''/usr/share/''',
+]
