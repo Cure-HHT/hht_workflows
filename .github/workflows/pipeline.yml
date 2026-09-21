@@ -164,13 +164,35 @@ jobs:
           # A package of its own, separate from anything publishable, so a
           # retention policy can remove the whole thing and nothing outside CI
           # can come to depend on an intermediate.
-          ref="ghcr.io/cure-hht/hht_workflows-pipeline:commit-${GITHUB_SHA}"
+          repo="ghcr.io/cure-hht/hht_workflows-pipeline"
+          ref="${repo}:commit-${GITHUB_SHA}"
           docker tag pipeline:local "$ref"
           docker push "$ref"
 
-          digest="$(docker image inspect "$ref" --format '{{index .RepoDigests 0}}')"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "published $digest" >&2
+          # Ask the REGISTRY what it published, not the local daemon what it
+          # believes. Two reasons, and the second was a live bug:
+          #
+          #   The refusal is supposed to run against the published digest. The
+          #   registry is the thing that published it, so the registry is the
+          #   authority; the daemon's view is a cache of a claim.
+          #
+          #   `docker image inspect --format '{{index .RepoDigests 0}}'` --
+          #   which this step used to do -- is ordering-dependent and returned
+          #   the WRONG entry. The image is tagged twice (pipeline:local, then
+          #   this ref), so it carries two RepoDigests, and index 0 was
+          #   `pipeline@sha256:...`. That is not a reference to anything here:
+          #   Docker would resolve a bare `pipeline` against Docker Hub. It
+          #   would not error, it would look elsewhere. Measured against a
+          #   local registry before this ever ran in CI.
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::the registry returned no digest for $ref (got '$digest')"; exit 1 ;;
+          esac
+
+          published="${repo}@${digest}"
+          echo "digest=$published" >> "$GITHUB_OUTPUT"
+          echo "published $published" >&2
 
       - name: Refuse, against the published digest
         run: |
