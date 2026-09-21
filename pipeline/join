@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Bring a leg's result into the image, as a new layer at a new digest.
+
+Some work cannot happen inside a hermetic build: a browser suite needs a
+deployed environment, a device farm needs real hardware, a scan needs full git
+history. Those run beside the pipeline -- legs -- and hand back a DELTA: the
+files they produced. This program is what puts that delta into the lineage.
+
+Three properties, and each is a rule from the mandate rather than a preference:
+
+  A join does not update an image in place. It builds FROM the base digest and
+  adds a layer, so the result is a new digest and every earlier one still
+  exists and still resolves. An image whose contents move is an image two
+  readers at different times disagree about.
+
+  A delta, not a verdict. A verdict is a judgement about files that are then
+  discarded, which is rule 1 by another name. A bare verdict is admissible
+  only where the leg's output cannot leave the machine it ran on, and that is
+  registered as an exception rather than assumed here.
+
+  THE JOIN REFUSES WHEN TWO LEGS WROTE THE SAME PATH. That is decidable
+  without knowing anything about what the legs did, which is why it is the
+  check worth having: whichever leg landed second would otherwise overwrite
+  the first, and the result would be an image that looks complete and is
+  missing a leg's work.
+
+Each join records what it contributed, in the image, so the next join can be
+checked against it -- and records the base digest it received, so nothing later
+has to resolve a moving tag to find out what it was built on.
+
+Usage:
+  join --base <image@digest> --leg <name> --delta <dir> --tag <result> [--repo <ns>]
+
+Exit status:
+  0  joined; the new reference is printed on stdout
+  1  refused -- a path collision, named
+  2  could not run
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+MANIFEST_DIR = "joins"
+
+
+def paths_in(delta_dir: str) -> set[str]:
+    """Every file the leg produced, relative to the delta root."""
+    found = set()
+    for root, _dirs, files in os.walk(delta_dir):
+        for name in files:
+            full = os.path.join(root, name)
+            found.add(os.path.relpath(full, delta_dir))
+    return found
+
+
+def collisions(new_paths: set[str], already: dict[str, set[str]]) -> dict[str, set[str]]:
+    """Which previously-joined legs this delta would overwrite, and where.
+
+    Pure, so it is testable without a container. The container part is the easy
+    part; this is the part that has to be right.
+    """
+    clashes = {}
+    for leg, owned in already.items():
+        overlap = new_paths & owned
+        if overlap:
+            clashes[leg] = overlap
+    return clashes
+
+
+_BARE_ID = re.compile(r"^(sha256:)?[0-9a-f]{12,64}$")
+
+
+def usable_base(ref: str) -> tuple[bool, str]:
+    """Is this a reference another machine could resolve?
+
+    A bare image id is not. Docker reads `sha256:abc...` as a REPOSITORY named
+    sha256, tries to pull it from Docker Hub, and fails with an authorization
+    error that says nothing about the real problem. Worse, it is a
+    machine-local handle: the join would appear to work here and resolve to
+    nothing anywhere else, which is precisely what "record the digest you
+    received" exists to prevent.
+    """
+    if _BARE_ID.match(ref):
+        return False, (
+            f"'{ref}' is a bare image id, not a reference. A join must name its base "
+            "the way every later reader will: <repository>@sha256:<digest>, or a tag."
+        )
+    if "@" not in ref and ":" not in ref.rsplit("/", 1)[-1]:
+        return False, f"'{ref}' has neither a digest nor a tag"
+    return True, ""
+
+
+def _run(cmd: list[str], **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def base_platform(ref: str) -> str:
+    """The platform the base was built for, so the join matches it.
+
+    A join that builds for the machine it runs on rather than for its base
+    fails with "no match for platform in manifest" -- which says nothing about
+    the cause. Inferring it is better than asking every caller to remember: the
+    answer is a property of the base, and the base is already named.
+    """
+    local = _run(["docker", "image", "inspect", ref, "--format", "{{.Os}}/{{.Architecture}}"])
+    if local.returncode == 0 and "/" in local.stdout.strip():
+        return local.stdout.strip()
+    remote = _run(["docker", "buildx", "imagetools", "inspect", ref, "--raw"])
+    if remote.returncode == 0:
+        try:
+            doc = json.loads(remote.stdout)
+        except json.JSONDecodeError:
+            return ""
+        for entry in doc.get("manifests", []):
+            plat = entry.get("platform", {})
+            if plat.get("os") and plat.get("os") != "unknown":
+                return f"{plat['os']}/{plat['architecture']}"
+    return ""
+
+
+def read_existing(base: str, repo: str) -> dict[str, set[str]]:
+    """What previous joins contributed, read out of the base image itself.
+
+    The record travels with the image rather than beside it. A manifest kept
+    somewhere else is a second copy that can disagree with the image it
+    describes, and the disagreement would surface as a join that should have
+    refused and did not.
+    """
+    where = f"/evidence/{repo}/{MANIFEST_DIR}" if repo else f"/evidence/{MANIFEST_DIR}"
+    plat = base_platform(base)
+    run_cmd = ["docker", "run", "--rm"]
+    if plat:
+        run_cmd += ["--platform", plat]
+    proc = _run(run_cmd + [
+        "--entrypoint", "sh", base, "-c",
+        f'[ -d {where} ] && for f in {where}/*.json; do [ -e "$f" ] && cat "$f"; done || true',
+    ])
+    if proc.returncode != 0:
+        raise RuntimeError(f"cannot read the base image {base}: {proc.stderr.strip()}")
+
+    already: dict[str, set[str]] = {}
+    buf = proc.stdout.strip()
+    if not buf:
+        return already
+    decoder = json.JSONDecoder()
+    index = 0
+    while index < len(buf):
+        while index < len(buf) and buf[index].isspace():
+            index += 1
+        if index >= len(buf):
+            break
+        record, index = decoder.raw_decode(buf, index)
+        already[record["leg"]] = set(record.get("paths", []))
+    return already
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="join")
+    ap.add_argument("--base", required=True, help="the image this join continues, by digest")
+    ap.add_argument("--leg", required=True)
+    ap.add_argument("--delta", required=True, help="directory of files the leg produced")
+    ap.add_argument("--tag", required=True, help="tag for the resulting image")
+    ap.add_argument("--repo", default="", help="evidence namespace")
+    ap.add_argument(
+        "--platform",
+        default="",
+        help="build platform; inferred from the base when omitted, which is what you want",
+    )
+    args = ap.parse_args(argv[1:])
+
+    ok, why = usable_base(args.base)
+    if not ok:
+        print(f"join: {why}", file=sys.stderr)
+        return 2
+
+    if not os.path.isdir(args.delta):
+        print(f"join: no delta directory at {args.delta}", file=sys.stderr)
+        return 2
+
+    new_paths = paths_in(args.delta)
+    if not new_paths:
+        # A leg that produced nothing is not a leg that passed. It is a leg
+        # whose output went somewhere this join cannot see.
+        print(f"join: the delta at {args.delta} is empty; nothing to join", file=sys.stderr)
+        return 2
+
+    try:
+        already = read_existing(args.base, args.repo)
+    except RuntimeError as exc:
+        print(f"join: {exc}", file=sys.stderr)
+        return 2
+
+    clashes = collisions(new_paths, already)
+    if clashes:
+        for leg, overlap in sorted(clashes.items()):
+            for path in sorted(overlap):
+                print(f"join: REFUSE {path} — already written by leg '{leg}'", file=sys.stderr)
+        print(
+            f"join: refusing to join '{args.leg}': it would overwrite "
+            f"{sum(len(v) for v in clashes.values())} path(s) another leg produced",
+            file=sys.stderr,
+        )
+        return 1
+
+    where = f"/evidence/{args.repo}" if args.repo else "/evidence"
+    record = {
+        "leg": args.leg,
+        "base": args.base,
+        "paths": sorted(new_paths),
+    }
+
+    work = tempfile.mkdtemp(prefix="join-")
+    try:
+        shutil.copytree(args.delta, os.path.join(work, "delta"))
+        os.makedirs(os.path.join(work, "manifest"), exist_ok=True)
+        with open(os.path.join(work, "manifest", f"{args.leg}.json"), "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, sort_keys=True)
+
+        dockerfile = os.path.join(work, "Dockerfile")
+        with open(dockerfile, "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Generated by pipeline/join. A join is a one-instruction build:\n"
+                "# FROM the base DIGEST, plus the leg's delta as one layer.\n"
+                f"FROM {args.base}\n"
+                "USER root\n"
+                f"COPY delta/ /\n"
+                f"COPY manifest/ {where}/{MANIFEST_DIR}/\n"
+            )
+
+        cmd = ["docker", "build", "-f", dockerfile, "-t", args.tag]
+        platform = args.platform or base_platform(args.base)
+        if platform:
+            cmd += ["--platform", platform]
+        cmd.append(work)
+        built = _run(cmd)
+        if built.returncode != 0:
+            print(f"join: the build failed\n{built.stderr}", file=sys.stderr)
+            return 2
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    print(f"join: '{args.leg}' added {len(new_paths)} path(s) on top of {args.base}", file=sys.stderr)
+    print(args.tag)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
