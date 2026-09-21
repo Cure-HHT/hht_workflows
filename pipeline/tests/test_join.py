@@ -103,3 +103,22 @@ def test_a_name_with_neither_tag_nor_digest_is_refused():
     ok, why = join.usable_base("ghcr.io/cure-hht/x-pipeline")
     assert not ok
     assert "neither a digest nor a tag" in why
+
+
+def test_the_join_restores_the_users_the_base_ran_as():
+    """A join adds evidence. It must not change what the image runs as.
+
+    The first version left every joined image running as root, which broke git
+    in the workspace -- the files belong to the build user and the process no
+    longer did -- and silently changed the runtime user of a published image.
+    """
+    text = join.dockerfile_for("base@sha256:" + "a" * 64, "/evidence/acme", "devuser")
+
+    assert text.rstrip().endswith("USER devuser")
+    assert text.index("USER root") < text.index("COPY delta/")
+
+
+def test_a_base_with_no_declared_user_is_left_alone():
+    text = join.dockerfile_for("base:tag", "/evidence", "")
+    assert "USER devuser" not in text
+    assert text.rstrip().endswith("joins/")
