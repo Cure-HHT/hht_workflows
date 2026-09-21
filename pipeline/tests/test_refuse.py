@@ -184,13 +184,14 @@ def test_duplicate_phase_is_an_error(tmp_path, capsys):
 
 def test_ledger_ids_are_read_in_order(tmp_path):
     ledger = _write_ledger(tmp_path)
-    assert refuse.read_ledger(str(ledger)) == ["install", "guard"]
+    assert refuse.read_ledger(str(ledger)) == (None, ["install", "guard"])
 
 
 def test_the_repositorys_own_ledger_parses():
     """The shipped ledger must satisfy the reader that will judge it."""
     shipped = pathlib.Path(__file__).resolve().parents[1] / "phases.yaml"
-    ids = refuse.read_ledger(str(shipped))
+    repo, ids = refuse.read_ledger(str(shipped))
+    assert repo is None
     assert ids == ["git-init", "install", "guard", "release-notes"]
 
 
@@ -204,3 +205,73 @@ def test_diagnostics_go_to_stderr_and_stdout_stays_machine_readable(tmp_path, ca
 
     json.loads(captured.out)  # stdout alone must still parse
     assert "REFUSE" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Namespacing. A consumer inherits its upstream's image, so one image carries
+# both ledgers and both evidence trees. These are the cases where the two would
+# otherwise collide -- which is the defect the design review named before any
+# of this was built.
+# ---------------------------------------------------------------------------
+
+
+def _ledger_dir(tmp_path, **repos):
+    d = tmp_path / "phases.d"
+    d.mkdir(parents=True, exist_ok=True)
+    for repo, phases in repos.items():
+        body = f"repo: {repo}\nphases:\n" + "".join(f"  - id: {p}\n" for p in phases)
+        (d / f"{repo}.yaml").write_text(body, encoding="utf-8")
+    return d
+
+
+def test_two_repositories_each_keep_their_own_evidence(tmp_path, capsys):
+    """The platform and the sponsor both run a phase called 'requirements'."""
+    ledgers = _ledger_dir(tmp_path, hht_diary=["requirements"], acme=["requirements"])
+    root = tmp_path / "evidence"
+    _record(root / "hht_diary", "requirements", 0)
+    _record(root / "acme", "requirements", 0)
+
+    code = refuse.main(["refuse", str(ledgers), str(root)])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    verdict = json.loads(captured.out)
+    assert set(verdict["expected"]) == {"hht_diary/requirements", "acme/requirements"}
+
+
+def test_an_upstream_phase_cannot_be_satisfied_by_the_consumers(tmp_path, capsys):
+    """The exact collision: the sponsor passed, the platform never ran.
+
+    If evidence were not namespaced, the sponsor's result would sit at the path
+    the platform's would have used, and this would read as a pass.
+    """
+    ledgers = _ledger_dir(tmp_path, hht_diary=["requirements"], acme=["requirements"])
+    root = tmp_path / "evidence"
+    _record(root / "acme", "requirements", 0)
+    # hht_diary recorded nothing at all.
+
+    code = refuse.main(["refuse", str(ledgers), str(root)])
+    captured = capsys.readouterr()
+
+    assert code == 1
+    verdict = json.loads(captured.out)
+    assert verdict["refused"] == ["hht_diary/requirements"]
+    assert "did not run" in verdict["phases"]["hht_diary/requirements"]["reason"]
+
+
+def test_two_ledgers_claiming_one_repo_is_an_error(tmp_path, capsys):
+    d = tmp_path / "phases.d"
+    d.mkdir()
+    (d / "a.yaml").write_text("repo: same\nphases:\n  - id: x\n", encoding="utf-8")
+    (d / "b.yaml").write_text("repo: same\nphases:\n  - id: y\n", encoding="utf-8")
+    (tmp_path / "evidence").mkdir()
+
+    code = refuse.main(["refuse", str(d), str(tmp_path / "evidence")])
+
+    assert code == 2
+
+
+def test_a_ledger_declaring_repo_reads_it(tmp_path):
+    ledger = tmp_path / "one.yaml"
+    ledger.write_text("repo: hht_diary\nphases:\n  - id: build\n", encoding="utf-8")
+    assert refuse.read_ledger(str(ledger)) == ("hht_diary", ["build"])

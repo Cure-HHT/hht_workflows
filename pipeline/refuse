@@ -45,11 +45,13 @@ import re
 import sys
 
 DEFAULT_LEDGER = "/pipeline/phases.yaml"
+DEFAULT_LEDGER_DIR = "/pipeline/phases.d"
 DEFAULT_EVIDENCE = "/evidence"
 
 # The one shape the ledger is allowed to take. Anything else is an error rather
 # than a best-effort parse: a ledger this program silently misreads is a ledger
 # that can declare phases nobody checks.
+_REPO_KEY = re.compile(r"^repo:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$")
 _PHASES_KEY = re.compile(r"^phases:\s*$")
 _ITEM_ID = re.compile(r"^\s{2,}-\s+id:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$")
 _ITEM_FIELD = re.compile(r"^\s{4,}[A-Za-z_][A-Za-z0-9_]*:\s*\S.*$")
@@ -60,8 +62,13 @@ class LedgerError(Exception):
     """The ledger could not be read in the one shape it is allowed to take."""
 
 
-def read_ledger(path: str) -> list[str]:
-    """Return the ids of the phases the ledger declares, in order."""
+def read_ledger(path: str) -> tuple[str | None, list[str]]:
+    """Return (repo, phase ids) for one ledger.
+
+    `repo` is the namespace the phases' evidence lives under, or None when the
+    ledger declares none -- a single-repository image, which is what the root
+    of the chain builds.
+    """
     try:
         with open(path, "r", encoding="utf-8") as handle:
             lines = handle.read().splitlines()
@@ -69,16 +76,23 @@ def read_ledger(path: str) -> list[str]:
         raise LedgerError(f"cannot read ledger {path}: {exc}") from exc
 
     seen_key = False
+    repo: str | None = None
     ids: list[str] = []
     for number, line in enumerate(lines, start=1):
         if _COMMENT_OR_BLANK.match(line):
             continue
         if not seen_key:
+            declared = _REPO_KEY.match(line)
+            if declared:
+                if repo is not None:
+                    raise LedgerError(f"{path}:{number}: 'repo:' declared twice")
+                repo = declared.group(1)
+                continue
             if _PHASES_KEY.match(line):
                 seen_key = True
                 continue
             raise LedgerError(
-                f"{path}:{number}: expected 'phases:' before anything else, got {line!r}"
+                f"{path}:{number}: expected 'repo:' or 'phases:', got {line!r}"
             )
         item = _ITEM_ID.match(line)
         if item:
@@ -102,7 +116,7 @@ def read_ledger(path: str) -> list[str]:
         # and reports success is the vacuous pass this whole mechanism exists to
         # make impossible.
         raise LedgerError(f"{path}: declares no phases")
-    return ids
+    return repo, ids
 
 
 def judge(phase: str, evidence_dir: str) -> tuple[bool, str]:
@@ -135,16 +149,45 @@ def judge(phase: str, evidence_dir: str) -> tuple[bool, str]:
 
 def main(argv: list[str]) -> int:
     ledger_path = os.environ.get("PIPELINE_LEDGER", DEFAULT_LEDGER)
-    evidence_dir = os.environ.get("EVIDENCE_DIR", DEFAULT_EVIDENCE)
+    ledger_dir = os.environ.get("PIPELINE_LEDGER_DIR", DEFAULT_LEDGER_DIR)
+    evidence_dir = os.environ.get("EVIDENCE_ROOT", DEFAULT_EVIDENCE)
     if len(argv) > 1:
         ledger_path = argv[1]
+        ledger_dir = argv[1] if os.path.isdir(argv[1]) else ledger_dir
     if len(argv) > 2:
         evidence_dir = argv[2]
 
+    # A consumer inherits its upstream's image, so one image can carry several
+    # ledgers -- the platform's and the sponsor's. They are separate files in a
+    # directory rather than one file two repositories edit, because the second
+    # writer would otherwise silently replace the first, and the phase that
+    # disappeared would be the upstream's.
+    ledgers: list[str] = []
+    if os.path.isdir(ledger_dir):
+        ledgers = sorted(
+            os.path.join(ledger_dir, name)
+            for name in os.listdir(ledger_dir)
+            if name.endswith((".yaml", ".yml"))
+        )
+    if not ledgers and os.path.exists(ledger_path):
+        ledgers = [ledger_path]
+    if not ledgers:
+        print(
+            f"refuse: no ledger at {ledger_path} and none in {ledger_dir}; "
+            "this image declares no phases, so nothing can be checked",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
-        phases = read_ledger(ledger_path)
+        declared = [read_ledger(path) for path in ledgers]
     except LedgerError as exc:
         print(f"refuse: {exc}", file=sys.stderr)
+        return 2
+
+    seen_repos = [repo for repo, _ in declared if repo is not None]
+    if len(seen_repos) != len(set(seen_repos)):
+        print("refuse: two ledgers declare the same repo", file=sys.stderr)
         return 2
 
     if not os.path.isdir(evidence_dir):
@@ -159,18 +202,27 @@ def main(argv: list[str]) -> int:
 
     results = {}
     refusals = []
-    for phase in phases:
-        passed, reason = judge(phase, evidence_dir)
-        results[phase] = {"passed": passed, "reason": reason}
-        marker = "ok " if passed else "REFUSE"
-        print(f"{marker}  {phase}: {reason}", file=sys.stderr)
-        if not passed:
-            refusals.append(phase)
+    expected = []
+    for repo, phases in declared:
+        # Evidence is namespaced by the repository that produced it. Without
+        # this, a consumer running a phase its upstream also ran would write
+        # over the upstream's result, and a report meant to cover both would
+        # quietly cover one.
+        where = os.path.join(evidence_dir, repo) if repo else evidence_dir
+        for phase in phases:
+            key = f"{repo}/{phase}" if repo else phase
+            expected.append(key)
+            passed, reason = judge(phase, where)
+            results[key] = {"passed": passed, "reason": reason}
+            marker = "ok " if passed else "REFUSE"
+            print(f"{marker}  {key}: {reason}", file=sys.stderr)
+            if not passed:
+                refusals.append(key)
 
     verdict = {
-        "ledger": ledger_path,
+        "ledgers": ledgers,
         "evidence": evidence_dir,
-        "expected": phases,
+        "expected": expected,
         "phases": results,
         "refused": refusals,
         "passed": not refusals,
@@ -181,12 +233,12 @@ def main(argv: list[str]) -> int:
         print(
             "refuse: refusing on "
             + ", ".join(refusals)
-            + f" ({len(refusals)} of {len(phases)} expected phases)",
+            + f" ({len(refusals)} of {len(expected)} expected phases)",
             file=sys.stderr,
         )
         return 1
 
-    print(f"refuse: {len(phases)} expected phases ran and passed", file=sys.stderr)
+    print(f"refuse: {len(expected)} expected phases ran and passed", file=sys.stderr)
     return 0
 
 
