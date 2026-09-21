@@ -35,7 +35,27 @@ fi
 phase="$1"
 shift
 
-mkdir -p "$evidence"
+# If the evidence cannot be written, FAIL -- loudly, here, now.
+#
+# Everywhere else this wrapper exits zero so that a failing check leaves an
+# image to read. That rests on the recording having worked. When it has not,
+# exiting zero produces an image with no evidence AND no signal, which is
+# strictly worse than a red build: the step's outcome is simply gone, and the
+# refusal that would have caught it has nothing to read.
+#
+# Found by running it: the platform's toolchain image runs as a non-root user,
+# `mkdir /evidence` was denied, and this wrapper cheerfully reported a status
+# for a phase whose verdict was never written anywhere.
+if ! mkdir -p "$evidence" 2> /dev/null; then
+    echo "::error::record: cannot create the evidence directory $evidence" >&2
+    echo "::error::record: refusing to report a status that is not written down" >&2
+    exit 3
+fi
+if [ ! -w "$evidence" ]; then
+    echo "::error::record: the evidence directory $evidence is not writable" >&2
+    exit 3
+fi
+
 log="$evidence/$phase.log"
 rc_file="$evidence/$phase.rc"
 
@@ -58,6 +78,13 @@ rc=$?
 } >> "$log"
 
 printf '%s\n' "$rc" > "$rc_file"
+
+# And confirm it landed. A write that silently produced nothing leaves the same
+# hole as never running.
+if [ ! -s "$rc_file" ]; then
+    echo "::error::record: the verdict for $phase was not written to $rc_file" >&2
+    exit 3
+fi
 
 # Echo into the build log too, so a human reading the build sees what a machine
 # will read later. This is a convenience; the files above are the record.
