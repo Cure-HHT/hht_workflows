@@ -114,11 +114,15 @@ def test_the_join_restores_the_users_the_base_ran_as():
     """
     text = join.dockerfile_for("base@sha256:" + "a" * 64, "/evidence/acme", "devuser")
 
-    assert text.rstrip().endswith("USER devuser")
-    assert text.index("USER root") < text.index("COPY delta/")
+    assert "--chown=devuser" in text
+    instructions = [l for l in text.splitlines() if l and not l.startswith("#")]
+    assert not any(l.startswith("USER") for l in instructions), (
+        "a join must not change what the image runs as"
+    )
 
 
 def test_a_base_with_no_declared_user_is_left_alone():
     text = join.dockerfile_for("base:tag", "/evidence", "")
-    assert "USER devuser" not in text
-    assert text.rstrip().endswith("joins/")
+    assert "--chown=root" in text
+    instructions = [l for l in text.splitlines() if l and not l.startswith("#")]
+    assert not any(l.startswith("USER") for l in instructions)

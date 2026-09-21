@@ -58,6 +58,24 @@ fi
 
 log="$evidence/$phase.log"
 rc_file="$evidence/$phase.rc"
+cmd_file="$evidence/$phase.cmd"
+cwd_file="$evidence/$phase.cwd"
+
+# The command, in a form that can be run again.
+#
+# The log's "command:" line is for a human and loses quoting -- re-running it
+# would split `sh -c 'cd x && y'` into nonsense. Rule 4 says the artifact can be
+# re-created in this environment, and that is only true if the environment
+# records what to re-create it WITH. NUL-separated argv, because it is the one
+# encoding a shell cannot mangle.
+for arg in "$@"; do
+    printf '%s\0' "$arg"
+done > "$cmd_file"
+
+# And WHERE it ran. Most steps cd relatively, so the argv alone re-runs
+# something else entirely -- or nothing -- from a different directory. Found by
+# rebuilding a sponsor image, whose working directory is not the platform's.
+pwd > "$cwd_file"
 
 {
     echo "phase:   $phase"
