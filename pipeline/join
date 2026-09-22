@@ -161,9 +161,33 @@ def base_user(ref: str) -> str:
     make.
     """
     proc = _run(["docker", "image", "inspect", ref, "--format", "{{.Config.User}}"])
-    if proc.returncode == 0:
-        return proc.stdout.strip()
-    return ""
+    if proc.returncode != 0:
+        # An inspect failure and an image that genuinely declares no USER used
+        # to give the same answer, and the caller maps "" to --chown=root. So a
+        # transient inspect failure silently re-introduced the root-ownership
+        # defect described above. Refuse instead: the answer is not known.
+        raise RuntimeError(
+            f"cannot read the user of {ref}: {proc.stderr.strip() or 'docker image inspect failed'}"
+        )
+    return proc.stdout.strip()
+
+
+# A leg and a repo become a filename, a path inside the image, and a fragment
+# of a shell command run in the base. None of those tolerate arbitrary text.
+# `--repo 'ns$(id -u)'` executed the substitution inside the base image, and
+# `--leg ../../escaped` wrote its manifest outside the build context and still
+# reported success -- leaving an image carrying no record of the leg, which the
+# next join is then free to overwrite. refuse constrains these ids; join did not.
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _checked_name(value: str, what: str) -> str:
+    if not _NAME.match(value):
+        raise SystemExit(
+            f"join: {what} '{value}' is not a name: "
+            f"letters, digits, dot, dash and underscore, not starting with a separator"
+        )
+    return value
 
 
 def read_existing(base: str, repo: str) -> dict[str, set[str]]:
@@ -179,15 +203,36 @@ def read_existing(base: str, repo: str) -> dict[str, set[str]]:
     run_cmd = ["docker", "run", "--rm"]
     if plat:
         run_cmd += ["--platform", plat]
-    proc = _run(run_cmd + [
-        "--entrypoint", "sh", base, "-c",
-        f'[ -d {where} ] && for f in {where}/*.json; do [ -e "$f" ] && cat "$f"; done || true',
-    ])
+    # The `|| true` this used to end with made every failure look like "no
+    # previous joins": an unreadable manifest directory, a base that could not
+    # be run, a glob that could not expand. The check that exists to refuse a
+    # collision would then find nothing to collide with and overwrite another
+    # leg's files. A check that fails open is worse than no check, because the
+    # build stays green.
+    #
+    # So the script now says which of the two it saw, and anything else is an
+    # error. NODIR means it looked and there was no manifest directory; DIR
+    # means it read one. No sentinel at all means the read did not happen.
+    script = (
+        f'if [ ! -d "{where}" ]; then printf "NODIR\n"; exit 0; fi; '
+        f'ls -1 "{where}" >/dev/null || exit 9; '
+        f'printf "DIR\n"; '
+        f'for f in "{where}"/*.json; do [ -e "$f" ] || continue; cat "$f" || exit 9; done'
+    )
+    proc = _run(run_cmd + ["--entrypoint", "sh", base, "-c", script])
     if proc.returncode != 0:
         raise RuntimeError(f"cannot read the base image {base}: {proc.stderr.strip()}")
 
     already: dict[str, set[str]] = {}
-    buf = proc.stdout.strip()
+    buf = proc.stdout.lstrip()
+    if buf.startswith("NODIR"):
+        return already
+    if not buf.startswith("DIR"):
+        raise RuntimeError(
+            f"cannot read the joins recorded in {base}: the manifest probe "
+            f"returned no sentinel, so a collision could not be ruled out"
+        )
+    buf = buf[len("DIR"):].strip()
     if not buf:
         return already
     decoder = json.JSONDecoder()
@@ -197,8 +242,17 @@ def read_existing(base: str, repo: str) -> dict[str, set[str]]:
             index += 1
         if index >= len(buf):
             break
-        record, index = decoder.raw_decode(buf, index)
-        already[record["leg"]] = set(record.get("paths", []))
+        try:
+            record, index = decoder.raw_decode(buf, index)
+            leg_name = record["leg"]
+        except (ValueError, KeyError, TypeError) as exc:
+            # Refuse, with the reason. Crashing here reported an unreadable
+            # manifest as "a path collision, named", which is what the
+            # docstring promises an exit-1 means.
+            raise RuntimeError(
+                f"the joins recorded in {base} are not readable: {exc}"
+            ) from exc
+        already[leg_name] = set(record.get("paths", []))
     return already
 
 
@@ -233,6 +287,10 @@ def main(argv: list[str]) -> int:
         return 2
 
     try:
+        if args.repo:
+            _checked_name(args.repo, "--repo")
+        _checked_name(args.leg, "--leg")
+
         already = read_existing(args.base, args.repo)
     except RuntimeError as exc:
         print(f"join: {exc}", file=sys.stderr)

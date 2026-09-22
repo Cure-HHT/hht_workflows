@@ -36,6 +36,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The mechanism's own unit suite, in the workflow that depends on it.
+  #
+  # It ran only in release-notes-tests.yml, which is a different workflow about
+  # a different thing -- so rebuild, join and run-target had never executed in
+  # CI in any form, and a green pipeline run said nothing about them. The four
+  # defects that turned a broken build into a green one all survived a passing
+  # suite for exactly this reason.
+  mechanism-tests:
+    name: Mechanism unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          # tomllib. The floor is declared in pyproject.toml and must match.
+          python-version: '3.11'
+
+      - name: Install the pinned test tools
+        run: python -m pip install --quiet "pytest==8.4.2" "PyYAML==6.0.3"
+
+      - name: Run the mechanism's unit suite
+        run: python -m pytest pipeline/tests/ -q
+
   # The negative controls. These run everywhere, including pull requests, and
   # they are the reason the mechanism's clean results mean anything. Each one
   # breaks something on purpose and asserts the breakage is detected.

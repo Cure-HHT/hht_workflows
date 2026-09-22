@@ -80,3 +80,55 @@ def test_an_undeclared_target_is_refused(tmp_path):
 
 def test_a_missing_declaration_is_refused(tmp_path):
     assert rt.main(["run-target", "anything", str(tmp_path)]) == 2
+
+
+def _toml(tmp_path, body):
+    (tmp_path / ".elspais.toml").write_text(body)
+    return tmp_path
+
+
+def test_a_list_command_is_refused_rather_than_hanging(tmp_path, capsys):
+    """`shell=True` with a list runs a bare `sh`, which blocks on stdin.
+
+    Under `record` inside a build that consumes the whole job timeout with
+    nothing said, so the declaration is rejected by name instead.
+    """
+    root = _toml(tmp_path, '''
+[[scanning.test.targets]]
+name = "t"
+cwd = "."
+command = ["sh", "-c", "true"]
+''')
+    assert rt.main(["run-target", "t", str(root)]) == 2
+    assert "must be a string" in capsys.readouterr().err
+
+
+def test_a_malformed_declaration_is_a_declaration_error(tmp_path, capsys):
+    """Exit 1 here reaches refuse as 'failed with status 1' -- a test failure."""
+    root = _toml(tmp_path, "[[scanning.test.targets]\nname = broken")
+    assert rt.main(["run-target", "t", str(root)]) == 2
+    assert "cannot parse" in capsys.readouterr().err
+
+
+def test_a_leftover_results_file_does_not_satisfy_the_check(tmp_path, capsys):
+    """A rerun in a dirty workspace is the case this check exists to catch."""
+    root = _toml(tmp_path, '''
+[[scanning.test.targets]]
+name = "t"
+cwd = "."
+command = "true"
+results = "r.json"
+''')
+    (root / "r.json").write_text('{"stale": true}')
+    assert rt.main(["run-target", "t", str(root)]) == 1
+    assert "MISSING" in capsys.readouterr().err
+
+
+def test_a_cwd_that_does_not_exist_is_a_declaration_error(tmp_path, capsys):
+    root = _toml(tmp_path, '''
+[[scanning.test.targets]]
+name = "t"
+cwd = "nowhere"
+command = "true"
+''')
+    assert rt.main(["run-target", "t", str(root)]) == 2

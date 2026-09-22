@@ -275,3 +275,22 @@ def test_a_ledger_declaring_repo_reads_it(tmp_path):
     ledger = tmp_path / "one.yaml"
     ledger.write_text("repo: hht_diary\nphases:\n  - id: build\n", encoding="utf-8")
     assert refuse.read_ledger(str(ledger)) == ("hht_diary", ["build"])
+
+
+def test_two_ledgers_without_a_repo_are_refused(tmp_path, capsys):
+    """Omitting `repo:` twice put both ledgers at the evidence root.
+
+    The duplicate guard filtered `None` out before comparing, so this -- the
+    version reachable by leaving a key out rather than by getting it wrong --
+    slipped through, and the second ledger's phases were judged against the
+    first's evidence.
+    """
+    d = tmp_path / "phases.d"
+    d.mkdir()
+    for name in ("one", "two"):
+        (d / f"{name}.yaml").write_text("phases:\n  - id: install\n    due_by: build\n")
+
+    evidence = tmp_path / "evidence"
+    _record(evidence, "install", 0)
+
+    assert _run(capsys, str(d), str(evidence))[0] == 2

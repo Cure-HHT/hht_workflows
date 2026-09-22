@@ -12,6 +12,8 @@ import importlib.machinery
 import importlib.util
 import pathlib
 
+import pytest
+
 JOIN_PATH = pathlib.Path(__file__).resolve().parents[1] / "join"
 
 
@@ -121,8 +123,49 @@ def test_the_join_restores_the_users_the_base_ran_as():
     )
 
 
-def test_a_base_with_no_declared_user_is_left_alone():
+def test_a_base_that_declares_no_user_is_a_root_base():
+    """An empty user means the base really does run as root.
+
+    This test used to be called "left alone" while asserting --chown=root,
+    which are opposite claims -- it locked in the behaviour join exists to
+    prevent. The name now matches what is asserted, and the case where the
+    user could not be READ is covered separately, because those two must not
+    give the same answer.
+    """
     text = join.dockerfile_for("base:tag", "/evidence", "")
     assert "--chown=root" in text
     instructions = [l for l in text.splitlines() if l and not l.startswith("#")]
     assert not any(l.startswith("USER") for l in instructions)
+
+
+def test_a_user_that_cannot_be_read_is_refused_not_assumed_root(monkeypatch):
+    """The failure path that used to be indistinguishable from a root base."""
+    class _Failed:
+        returncode = 1
+        stdout = ""
+        stderr = "no such image"
+
+    monkeypatch.setattr(join, "_run", lambda *a, **k: _Failed())
+    with pytest.raises(RuntimeError, match="cannot read the user"):
+        join.base_user("base:tag")
+
+
+def test_a_repo_that_is_not_a_name_is_refused(tmp_path):
+    """`--repo 'ns$(id -u)'` ran the substitution inside the base image."""
+    with pytest.raises(SystemExit, match="not a name"):
+        join._checked_name("ns$(id -u)", "--repo")
+
+
+def test_a_leg_that_escapes_the_work_directory_is_refused(tmp_path):
+    """`--leg ../../escaped` wrote outside the context and still exited 0.
+
+    The image then carried no manifest for the leg, so the next join was free
+    to overwrite its files -- the collision refusal defeated by a leg name.
+    """
+    with pytest.raises(SystemExit, match="not a name"):
+        join._checked_name("../../escaped", "--leg")
+
+
+def test_ordinary_names_are_accepted():
+    for ok in ("e2e", "mobile", "hht_diary", "callisto", "leg-1", "a.b"):
+        assert join._checked_name(ok, "--leg") == ok

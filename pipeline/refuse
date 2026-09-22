@@ -185,9 +185,21 @@ def main(argv: list[str]) -> int:
         print(f"refuse: {exc}", file=sys.stderr)
         return 2
 
-    seen_repos = [repo for repo, _ in declared if repo is not None]
+    # `None` is a namespace too -- the evidence root itself. Filtering it out
+    # before the duplicate check meant two ledgers that simply omit `repo:`
+    # both landed at the root, where the second's phases judged the first's
+    # evidence. That is the exact substitution this guard exists to prevent,
+    # reachable by leaving a key out rather than by getting it wrong.
+    seen_repos = [repo for repo, _ in declared]
     if len(seen_repos) != len(set(seen_repos)):
-        print("refuse: two ledgers declare the same repo", file=sys.stderr)
+        if None in seen_repos and seen_repos.count(None) > 1:
+            print(
+                "refuse: two ledgers declare no repo, so both would be judged "
+                "against the evidence root -- give each one a `repo:`",
+                file=sys.stderr,
+            )
+        else:
+            print("refuse: two ledgers declare the same repo", file=sys.stderr)
         return 2
 
     if not os.path.isdir(evidence_dir):

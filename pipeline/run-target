@@ -47,9 +47,21 @@ def targets_in(root: str) -> list[dict]:
             doc = tomllib.load(handle)
     except OSError as exc:
         raise DeclarationError(f"cannot read {path}: {exc}") from exc
-    scanning = doc.get("scanning", {})
-    test = scanning.get("test", {})
-    return test.get("targets", [])
+    except tomllib.TOMLDecodeError as exc:
+        # Exit 1 here would have reached refuse as "failed with status 1",
+        # indistinguishable from a genuine test failure -- the very
+        # ran-versus-passed distinction this mechanism exists to keep.
+        raise DeclarationError(f"cannot parse {path}: {exc}") from exc
+    try:
+        targets = doc.get("scanning", {}).get("test", {}).get("targets", [])
+    except AttributeError as exc:
+        raise DeclarationError(
+            f"{path}: [scanning.test] is not a table -- "
+            f"an array-of-tables here reads as a list, not a declaration"
+        ) from exc
+    if not isinstance(targets, list) or not all(isinstance(x, dict) for x in targets):
+        raise DeclarationError(f"{path}: [[scanning.test.targets]] is not a list of tables")
+    return targets
 
 
 def find(targets: list[dict], name: str) -> dict | None:
@@ -81,11 +93,41 @@ def main(argv: list[str]) -> int:
     if not command:
         print(f"run-target: '{name}' declares no command", file=sys.stderr)
         return 2
+    if not isinstance(command, str):
+        # shell=True with a list makes the tail shell positional arguments, so
+        # a bare `sh` runs, reads stdin and blocks until the job times out with
+        # nothing said. An array of strings is a natural way to write this in
+        # TOML, so refuse it by name rather than hanging.
+        print(
+            f"run-target: '{name}' declares command as {type(command).__name__}, "
+            f"and it must be a string",
+            file=sys.stderr,
+        )
+        return 2
 
     cwd = os.path.join(root, declared.get("cwd", "."))
+    if not os.path.isdir(cwd):
+        print(f"run-target: '{name}' declares cwd {cwd}, which is not a directory", file=sys.stderr)
+        return 2
     print(f"run-target: {name}", file=sys.stderr)
     print(f"  declared command: {command}", file=sys.stderr)
     print(f"  in:               {cwd}", file=sys.stderr)
+
+    # Clear the declared outputs first. Without this the check passes on a
+    # file the previous run left behind -- which is the common case, a rerun in
+    # a dirty workspace, and exactly the case it was written to catch.
+    for key in ("results", "coverage"):
+        rel = declared.get(key)
+        if not rel:
+            continue
+        stale = os.path.join(cwd, rel)
+        try:
+            os.remove(stale)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"run-target: cannot clear {rel}: {exc}", file=sys.stderr)
+            return 2
 
     result = subprocess.run(command, shell=True, cwd=cwd)
 

@@ -14,7 +14,10 @@ description = "Cure-HHT-specific pre-commit hooks distributed from cure-hht/hht_
 # refuses 4.6.0 on 3.9. Raised deliberately rather than worked around by pinning
 # an older pre-commit here, because two declarations of one estate-wide version
 # that disagree is the defect this whole ticket is about.
-requires-python = ">=3.10"
+# 3.11, not 3.10: pipeline/run-target reads the declaration with tomllib,
+# which is 3.11+. On 3.10 it exits 2 with "needs Python 3.11+" -- so the
+# declared floor was one release below the one the code actually needs.
+requires-python = ">=3.11"
 
 [project.scripts]
 release-notes-update = "release_notes_update.__main__:main"

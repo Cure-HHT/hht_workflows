@@ -77,3 +77,63 @@ def test_a_rebuild_writes_beside_the_original_and_leaves_it_alone(tmp_path):
 
     assert (ev / "p.rc").read_text() == original, "the original verdict was overwritten"
     assert (ev / "rebuild" / "p.rc").read_text().strip() == "9"
+
+
+# ---------------------------------------------------------------------------
+# The fail-open paths. A green suite missed all of these: `rebuild.main()` was
+# never called by any test, so the exit code -- the only thing CI reads -- had
+# no coverage at all.
+# ---------------------------------------------------------------------------
+
+
+def _ledger(tmp_path, repo, *phases):
+    d = tmp_path / "phases.d"
+    d.mkdir(exist_ok=True)
+    body = f"repo: {repo}\nphases:\n" + "".join(
+        f"  - id: {p}\n    due_by: build\n" for p in phases
+    )
+    (d / f"{repo}.yaml").write_text(body)
+    return d
+
+
+def test_reproducing_nothing_is_not_success(tmp_path, monkeypatch):
+    """Every phase skipped used to exit 0 -- rule 4 passing on no evidence."""
+    ledgers = _ledger(tmp_path, "solo", "alpha", "beta")
+    ev = tmp_path / "evidence" / "solo"
+    ev.mkdir(parents=True)
+    for phase in ("alpha", "beta"):
+        # a joined leg: a verdict and a log, but no command to re-run
+        (ev / f"{phase}.rc").write_text("0\n")
+        (ev / f"{phase}.log").write_text("came from elsewhere\n")
+
+    monkeypatch.setenv("EVIDENCE_ROOT", str(tmp_path / "evidence"))
+    monkeypatch.setenv("PIPELINE_LEDGER_DIR", str(ledgers))
+    assert rebuild.main(["rebuild"]) == 1
+
+
+def test_an_absent_verdict_is_not_an_agreement(tmp_path, monkeypatch):
+    """`absent == absent` compared two strings and called it reproduced."""
+    ledgers = _ledger(tmp_path, "solo", "alpha")
+    ev = tmp_path / "evidence" / "solo"
+    ev.mkdir(parents=True)
+    # a command to re-run, but no recorded verdict to compare against
+    (ev / "alpha.cmd").write_bytes(b"sh\x00-c\x00true\x00")
+    (ev / "alpha.cwd").write_text(str(tmp_path))
+
+    monkeypatch.setenv("EVIDENCE_ROOT", str(tmp_path / "evidence"))
+    monkeypatch.setenv("PIPELINE_LEDGER_DIR", str(ledgers))
+    monkeypatch.setattr(rebuild, "RECORD", str(RECORD))
+    assert rebuild.main(["rebuild"]) == 1
+
+
+def test_a_phase_that_reproduces_still_passes(tmp_path, monkeypatch):
+    """The fixes must not make a genuine rebuild fail."""
+    ledgers = _ledger(tmp_path, "solo", "alpha")
+    ev = tmp_path / "evidence" / "solo"
+    ev.mkdir(parents=True)
+    _record(ev, "alpha", "sh", "-c", "exit 0")
+
+    monkeypatch.setenv("EVIDENCE_ROOT", str(tmp_path / "evidence"))
+    monkeypatch.setenv("PIPELINE_LEDGER_DIR", str(ledgers))
+    monkeypatch.setattr(rebuild, "RECORD", str(RECORD))
+    assert rebuild.main(["rebuild"]) == 0
