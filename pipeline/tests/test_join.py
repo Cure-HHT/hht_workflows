@@ -167,5 +167,5 @@ def test_a_leg_that_escapes_the_work_directory_is_refused(tmp_path):
 
 
 def test_ordinary_names_are_accepted():
-    for ok in ("e2e", "mobile", "hht_diary", "callisto", "leg-1", "a.b"):
+    for ok in ("e2e", "mobile", "hht_diary", "acme", "leg-1", "a.b"):
         assert join._checked_name(ok, "--leg") == ok

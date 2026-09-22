@@ -203,12 +203,15 @@ def read_existing(base: str, repo: str) -> dict[str, set[str]]:
     run_cmd = ["docker", "run", "--rm"]
     if plat:
         run_cmd += ["--platform", plat]
-    # The `|| true` this used to end with made every failure look like "no
-    # previous joins": an unreadable manifest directory, a base that could not
-    # be run, a glob that could not expand. The check that exists to refuse a
-    # collision would then find nothing to collide with and overwrite another
-    # leg's files. A check that fails open is worse than no check, because the
-    # build stays green.
+    # This probe used to end in the unconditional-success suffix -- the shell
+    # idiom this repository keeps a pre-commit guard against, which did not
+    # reach it because it lived inside a Python string rather than a script.
+    #
+    # It made every failure look like "no previous joins": an unreadable
+    # manifest directory, a base that could not be run, a glob that could not
+    # expand. The check that exists to refuse a collision then found nothing to
+    # collide with and overwrote another leg's files. A check that fails open
+    # is worse than no check, because the build stays green.
     #
     # So the script now says which of the two it saw, and anything else is an
     # error. NODIR means it looked and there was no manifest directory; DIR
