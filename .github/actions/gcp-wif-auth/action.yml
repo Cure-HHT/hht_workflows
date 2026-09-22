@@ -74,7 +74,14 @@ runs:
         service_account: ${{ inputs.service_account }}
         token_format: ${{ inputs.token_format }}
         audience: ${{ inputs.audience }}
-        access_token_scopes: ${{ inputs.access_token_scopes }}
+        # The default is spelled out rather than passed through empty. A
+        # composite cannot omit a `with:` key conditionally, and to the auth
+        # action an empty string is a scope list that happens to be empty --
+        # not an absent one. Every caller that does not set this got
+        # INVALID_ARGUMENT from the token exchange. This is the value the
+        # action itself defaults to, so a caller that sets nothing is
+        # unaffected.
+        access_token_scopes: ${{ inputs.access_token_scopes || 'https://www.googleapis.com/auth/cloud-platform' }}
         create_credentials_file: true
         # Exports GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_GHA_CREDS_PATH and
         # CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE. The next step rewrites all
