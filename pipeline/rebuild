@@ -128,7 +128,7 @@ def main(argv: list[str]) -> int:
     print("re-running this image's pipeline from its own record", file=sys.stderr)
     print("the original evidence is not touched; results go to <repo>/rebuild/\n", file=sys.stderr)
 
-    disagreed, skipped, matched = [], [], []
+    disagreed, skipped, matched, reproduced_failures = [], [], [], []
 
     for repo, phases in declared:
         where = os.path.join(root, repo) if repo else root
@@ -166,6 +166,20 @@ def main(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
                 disagreed.append(key)
+            elif after == before and before != "0":
+                # Reproduced, and reproduced a FAILURE. That is a true answer to
+                # "is this deterministic" and the wrong answer to the question
+                # anyone actually runs this to ask. `rebuild` is the default
+                # command of these images, so exiting 0 here means `docker run
+                # <image>` reports success on an image carrying a failed phase
+                # -- the toolchain guard could refuse and the caller would never
+                # know. refuse is the program that judges; rebuild must at least
+                # not contradict it.
+                print(
+                    f"FAILED  {key}: reproduced, but the verdict is {after}",
+                    file=sys.stderr,
+                )
+                reproduced_failures.append(key)
             elif after == before:
                 print(f"same    {key}: {after}", file=sys.stderr)
                 matched.append(key)
@@ -178,6 +192,13 @@ def main(argv: list[str]) -> int:
         f"{len(disagreed)} differed, {len(skipped)} not re-runnable here",
         file=sys.stderr,
     )
+    if reproduced_failures:
+        print(
+            "rebuild: " + ", ".join(reproduced_failures)
+            + " reproduced a failing verdict -- this image carries a phase that did not pass",
+            file=sys.stderr,
+        )
+        return 1
     if disagreed:
         print("rebuild: " + ", ".join(disagreed) + " did not reproduce", file=sys.stderr)
         return 1

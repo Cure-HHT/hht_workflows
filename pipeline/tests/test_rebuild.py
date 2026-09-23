@@ -137,3 +137,23 @@ def test_a_phase_that_reproduces_still_passes(tmp_path, monkeypatch):
     monkeypatch.setenv("PIPELINE_LEDGER_DIR", str(ledgers))
     monkeypatch.setattr(rebuild, "RECORD", str(RECORD))
     assert rebuild.main(["rebuild"]) == 0
+
+
+def test_a_reproduced_failure_is_not_a_pass(tmp_path, monkeypatch):
+    """`docker run <image>` must not report success on a failed phase.
+
+    rebuild is the default command of these images. A phase that failed and
+    fails again identically is deterministic, which is a true answer to the
+    wrong question -- the caller is asking whether the image is sound. Exiting
+    0 here would let a toolchain refusal reach CI as a green run.
+    """
+    ledgers = _ledger(tmp_path, "solo", "alpha")
+    ev = tmp_path / "evidence" / "solo"
+    ev.mkdir(parents=True)
+    _record(ev, "alpha", "sh", "-c", "exit 7")
+    assert (ev / "alpha.rc").read_text().strip() == "7"
+
+    monkeypatch.setenv("EVIDENCE_ROOT", str(tmp_path / "evidence"))
+    monkeypatch.setenv("PIPELINE_LEDGER_DIR", str(ledgers))
+    monkeypatch.setattr(rebuild, "RECORD", str(RECORD))
+    assert rebuild.main(["rebuild"]) == 1
