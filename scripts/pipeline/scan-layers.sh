@@ -80,6 +80,7 @@ fi
 total_findings=0
 scanned=0
 leaking_layers=0
+partial_layers=0
 
 while IFS= read -r blob; do
     [ -n "$blob" ] || continue
@@ -89,17 +90,34 @@ while IFS= read -r blob; do
 
     # A blob is a tar, a gzipped tar, or a JSON config. Only the first two are
     # filesystem content; anything else is skipped rather than guessed at.
-    # A layer can carry entries this filesystem will not accept (device nodes,
-    # duplicate whiteouts). That is expected and is not a reason to stop: what
-    # was written is still worth scanning. It IS worth saying so, though --
-    # silence here would be indistinguishable from a layer that extracted whole.
+    #
+    # A partial extraction REFUSES, and that is a deliberate change from saying
+    # so and carrying on. The files that failed to extract are precisely the
+    # ones never scanned, so gitleaks finding nothing in what did extract would
+    # report the layer clean on evidence that excludes the unexamined part --
+    # the same shape as the gate that passed vacuously for months under
+    # CUR-1424. A scan that cannot see everything must not be allowed to say
+    # everything is fine.
+    #
+    # If a benign entry type (device nodes, duplicate whiteouts) turns out to be
+    # common, exclude exactly that entry with `--exclude` so extraction is whole
+    # again. Do not relax this back into a note: the excluded thing is then
+    # named and reviewable, which "extracted partially" never was.
     if tar -tzf "$blob" > /dev/null 2>&1; then
-        if ! tar -xzf "$blob" -C "$dest" 2> /dev/null; then
-            echo "  note: $(basename "$blob") extracted partially; scanning what was written"
+        if ! tar -xzf "$blob" -C "$dest" 2> "$work/tar.err"; then
+            partial_layers=$((partial_layers + 1))
+            echo "::error::$(basename "$blob") extracted partially, so part of this layer was never scanned" >&2
+            if [ -s "$work/tar.err" ]; then
+                sed 's/^/  tar: /' "$work/tar.err" >&2
+            fi
         fi
     elif tar -tf "$blob" > /dev/null 2>&1; then
-        if ! tar -xf "$blob" -C "$dest" 2> /dev/null; then
-            echo "  note: $(basename "$blob") extracted partially; scanning what was written"
+        if ! tar -xf "$blob" -C "$dest" 2> "$work/tar.err"; then
+            partial_layers=$((partial_layers + 1))
+            echo "::error::$(basename "$blob") extracted partially, so part of this layer was never scanned" >&2
+            if [ -s "$work/tar.err" ]; then
+                sed 's/^/  tar: /' "$work/tar.err" >&2
+            fi
         fi
     else
         continue
@@ -142,6 +160,13 @@ PY
 done <<< "$layers"
 
 echo "scanned $scanned layer(s) of $ref: $total_findings finding(s) in $leaking_layers layer(s)"
+
+# Before any verdict about findings: if a layer did not extract whole, this run
+# does not know what was in it. Refuse rather than report on a subset.
+if [ "$partial_layers" -gt 0 ]; then
+    echo "::error::$partial_layers layer(s) did not extract completely; this scan cannot speak for them" >&2
+    exit 2
+fi
 
 if [ "$scanned" -eq 0 ]; then
     echo "::error::no layer carried filesystem content; nothing was actually scanned" >&2

@@ -31,6 +31,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # One declaration. It was written at each of the two steps that install
+  # gitleaks, which is the shape a later bump updates once and misses once.
+  # `.pre-commit-config.yaml` carries the same version as a `rev:` and is the
+  # third copy -- pre-commit resolves its own tools and cannot read this, so
+  # collapsing that one needs the wider cleanup rather than a line here.
+  GITLEAKS_VERSION: 8.29.0
+
 concurrency:
   group: pipeline-${{ github.ref }}
   cancel-in-progress: false
@@ -136,10 +144,6 @@ jobs:
           # The positive control. A scan that has never seen a leak reports
           # clean on a leaking image -- measured, not assumed.
           ./scripts/pipeline/scan-layers.sh pipeline-leak:local --expect-findings
-        env:
-          # The same version .pre-commit-config.yaml pins. One declaration would
-          # be better; that collapse belongs with the cleanup, not here.
-          GITLEAKS_VERSION: 8.29.0
 
   build-and-refuse:
     name: Build, publish, then refuse
@@ -180,8 +184,6 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz -C /usr/local/bin gitleaks
           ./scripts/pipeline/scan-layers.sh pipeline:local
-        env:
-          GITLEAKS_VERSION: 8.29.0
 
       - name: Publish
         id: publish
