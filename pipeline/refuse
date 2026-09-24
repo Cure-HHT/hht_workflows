@@ -15,6 +15,17 @@ It reads two things:
 
 and refuses unless every expected phase both ran and passed.
 
+`--gate <build|qa|uat|prod>` narrows "expected" to the phases due BY that gate.
+The ledger has always carried `due_by` and this program has always ignored it,
+which meant a phase declared due at qa was demanded at build -- so a sponsor
+image, whose browser suite cannot run inside a hermetic build, could never pass
+its own build gate. Without the flag every declared phase is still required,
+because weakening a gate that other things already depend on, silently, is
+worse than making a caller say which gate it means.
+
+A phase that is declared but not yet due is reported as deferred rather than
+omitted. "This gate did not ask" and "nobody declared it" must not look alike.
+
 An ABSENT verdict is a refusal, not a pass. A missing .rc file means the step
 never reached the wrapper, which is indistinguishable from the step never
 running -- and treating that as success is the same class of defect as a secret
@@ -32,7 +43,7 @@ can join this verdict without re-deriving it -- and so that nothing chatty can
 corrupt a caller that is reading stdout.
 
 Exit status:
-  0  every expected phase ran and passed
+  0  every phase due by this gate ran and passed
   1  at least one expected phase is absent, unreadable, or failed
   2  the ledger or the evidence directory could not be read at all
 """
@@ -55,15 +66,27 @@ _REPO_KEY = re.compile(r"^repo:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$")
 _PHASES_KEY = re.compile(r"^phases:\s*$")
 _ITEM_ID = re.compile(r"^\s{2,}-\s+id:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$")
 _ITEM_FIELD = re.compile(r"^\s{4,}[A-Za-z_][A-Za-z0-9_]*:\s*\S.*$")
+_ITEM_DUE_BY = re.compile(r"^\s{4,}due_by:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$")
 _COMMENT_OR_BLANK = re.compile(r"^\s*(#.*)?$")
+
+
+# The gates, in the order a change passes through them. A phase declared
+# `due_by: qa` is due at qa and at every gate after it, and is NOT due at build.
+# Declared here rather than inferred, because "which gate comes first" is a
+# fact about this estate and not something to guess from a string.
+GATES = ("build", "qa", "uat", "prod")
 
 
 class LedgerError(Exception):
     """The ledger could not be read in the one shape it is allowed to take."""
 
 
-def read_ledger(path: str) -> tuple[str | None, list[str]]:
-    """Return (repo, phase ids) for one ledger.
+def read_ledger(path: str) -> tuple[str | None, list[tuple[str, str | None]]]:
+    """Return (repo, [(phase id, due_by)]) for one ledger.
+
+    `due_by` is carried now rather than discarded. It was always in the file and
+    always ignored, which meant a phase declared due at qa was demanded at build
+    and the sponsor image could never pass its own gate.
 
     `repo` is the namespace the phases' evidence lives under, or None when the
     ledger declares none -- a single-repository image, which is what the root
@@ -97,15 +120,24 @@ def read_ledger(path: str) -> tuple[str | None, list[str]]:
         item = _ITEM_ID.match(line)
         if item:
             phase = item.group(1)
-            if phase in ids:
+            if phase in [name for name, _ in ids]:
                 raise LedgerError(f"{path}:{number}: phase {phase!r} declared twice")
-            ids.append(phase)
+            ids.append((phase, None))
             continue
-        if _ITEM_FIELD.match(line):
-            # A sibling field of the current item (due_by, description). Carried
-            # for the reader; this program only needs the ids.
+        field = _ITEM_FIELD.match(line)
+        if field:
             if not ids:
                 raise LedgerError(f"{path}:{number}: field before any '- id:' entry")
+            due = _ITEM_DUE_BY.match(line)
+            if due:
+                gate = due.group(1)
+                if gate not in GATES:
+                    raise LedgerError(
+                        f"{path}:{number}: due_by {gate!r} is not a gate "
+                        f"({', '.join(GATES)})"
+                    )
+                name, _ = ids[-1]
+                ids[-1] = (name, gate)
             continue
         raise LedgerError(f"{path}:{number}: unrecognised line {line!r}")
 
@@ -151,11 +183,38 @@ def main(argv: list[str]) -> int:
     ledger_path = os.environ.get("PIPELINE_LEDGER", DEFAULT_LEDGER)
     ledger_dir = os.environ.get("PIPELINE_LEDGER_DIR", DEFAULT_LEDGER_DIR)
     evidence_dir = os.environ.get("EVIDENCE_ROOT", DEFAULT_EVIDENCE)
-    if len(argv) > 1:
-        ledger_path = argv[1]
-        ledger_dir = argv[1] if os.path.isdir(argv[1]) else ledger_dir
-    if len(argv) > 2:
-        evidence_dir = argv[2]
+    # --gate asks a narrower question: is everything due BY this gate present?
+    # Without it the question is "is everything present", which is what every
+    # caller asked before this existed and stays the default, because silently
+    # weakening a gate that other things already depend on is worse than making
+    # callers say which gate they mean.
+    gate = None
+    rest = []
+    pending = argv[1:]
+    while pending:
+        item = pending.pop(0)
+        if item == "--gate":
+            if not pending:
+                print("refuse: --gate needs a gate name", file=sys.stderr)
+                return 2
+            gate = pending.pop(0)
+        elif item.startswith("--gate="):
+            gate = item.split("=", 1)[1]
+        else:
+            rest.append(item)
+
+    if gate is not None and gate not in GATES:
+        print(
+            f"refuse: {gate!r} is not a gate ({', '.join(GATES)})",
+            file=sys.stderr,
+        )
+        return 2
+
+    if rest:
+        ledger_path = rest[0]
+        ledger_dir = rest[0] if os.path.isdir(rest[0]) else ledger_dir
+    if len(rest) > 1:
+        evidence_dir = rest[1]
 
     # A consumer inherits its upstream's image, so one image can carry several
     # ledgers -- the platform's and the sponsor's. They are separate files in a
@@ -215,14 +274,21 @@ def main(argv: list[str]) -> int:
     results = {}
     refusals = []
     expected = []
+    deferred = []
     for repo, phases in declared:
         # Evidence is namespaced by the repository that produced it. Without
         # this, a consumer running a phase its upstream also ran would write
         # over the upstream's result, and a report meant to cover both would
         # quietly cover one.
         where = os.path.join(evidence_dir, repo) if repo else evidence_dir
-        for phase in phases:
+        for phase, due_by in phases:
             key = f"{repo}/{phase}" if repo else phase
+            if gate is not None and due_by is not None and GATES.index(due_by) > GATES.index(gate):
+                # Declared, and not due yet. Not the same as absent: the ledger
+                # still names it, so it cannot be quietly forgotten -- it is
+                # simply not this gate's business.
+                deferred.append(f"{key} (due by {due_by})")
+                continue
             expected.append(key)
             passed, reason = judge(phase, where)
             results[key] = {"passed": passed, "reason": reason}
@@ -231,14 +297,22 @@ def main(argv: list[str]) -> int:
             if not passed:
                 refusals.append(key)
 
+    # `deferred` is in the verdict on purpose. A reader must be able to tell
+    # "this gate did not ask about e2e" from "nobody declared e2e", and only one
+    # of those is acceptable.
     verdict = {
         "ledgers": ledgers,
         "evidence": evidence_dir,
+        "gate": gate,
         "expected": expected,
+        "deferred": deferred,
         "phases": results,
         "refused": refusals,
         "passed": not refusals,
     }
+    for item in deferred:
+        print(f"later   {item}", file=sys.stderr)
+
     print(json.dumps(verdict, indent=2, sort_keys=True))
 
     if refusals:

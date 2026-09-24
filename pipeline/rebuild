@@ -133,7 +133,10 @@ def main(argv: list[str]) -> int:
     for repo, phases in declared:
         where = os.path.join(root, repo) if repo else root
         out = os.path.join(where, "rebuild")
-        for phase in phases:
+        # read_ledger carries (id, due_by) now. A rebuild re-runs whatever the
+        # image recorded, at any gate, so the gate is not this program's
+        # business -- but the shape is.
+        for phase, _due_by in phases:
             key = f"{repo}/{phase}" if repo else phase
             cmd = argv_for(where, phase)
             before = original_status(where, phase)
