@@ -387,3 +387,41 @@ def test_an_unknown_due_by_in_the_ledger_is_an_error(tmp_path):
     )
     with pytest.raises(refuse.LedgerError, match="is not a gate"):
         refuse.read_ledger(str(ledger))
+
+
+def test_a_gate_that_asks_about_nothing_is_not_a_pass(tmp_path, capsys):
+    """Every declared phase deferred means this gate asked about nothing.
+
+    read_ledger already refuses an empty ledger for exactly this reason. The
+    gate filter reached the same hole from the other side: expected empty,
+    refusals empty, exit 0 -- a vacuous pass on an image nobody checked.
+    """
+    d = tmp_path / "phases.d"
+    d.mkdir()
+    (d / "legs.yaml").write_text(
+        "repo: legs\nphases:\n  - id: e2e\n    due_by: qa\n  - id: mob\n    due_by: uat\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "evidence").mkdir()
+
+    assert refuse.main(["refuse", "--gate", "build", str(d), str(tmp_path / "evidence")]) == 2
+    assert "nothing here to pass" in capsys.readouterr().err
+
+
+def test_a_due_by_this_reader_cannot_parse_is_an_error(tmp_path):
+    """Falling through to None would mean 'due at every gate', silently."""
+    for body in ('    due_by: qa  # needs a deployed env\n', '    due_by: "qa"\n'):
+        ledger = tmp_path / "bad.yaml"
+        ledger.write_text("phases:\n  - id: b\n" + body, encoding="utf-8")
+        with pytest.raises(refuse.LedgerError, match="bare gate name"):
+            refuse.read_ledger(str(ledger))
+
+
+def test_a_field_that_is_not_due_by_is_still_carried_quietly(tmp_path):
+    """The stricter rule must not reject the fields it never cared about."""
+    ledger = tmp_path / "ok.yaml"
+    ledger.write_text(
+        "phases:\n  - id: b\n    due_by: qa\n    description: anything at all # even this\n",
+        encoding="utf-8",
+    )
+    assert refuse.read_ledger(str(ledger)) == (None, [("b", "qa")])

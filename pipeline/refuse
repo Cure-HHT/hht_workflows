@@ -129,6 +129,16 @@ def read_ledger(path: str) -> tuple[str | None, list[tuple[str, str | None]]]:
             if not ids:
                 raise LedgerError(f"{path}:{number}: field before any '- id:' entry")
             due = _ITEM_DUE_BY.match(line)
+            if line.lstrip().startswith("due_by:") and not due:
+                # A due_by this reader cannot parse -- a trailing comment, a
+                # quoted value -- used to fall through to None, which means due
+                # at EVERY gate. A one-word comment would silently re-introduce
+                # the defect this field exists to remove, and the ledger would
+                # still look correct. Every other malformed field here is an
+                # error; this one is now too.
+                raise LedgerError(
+                    f"{path}:{number}: due_by must be a bare gate name, got {line.strip()!r}"
+                )
             if due:
                 gate = due.group(1)
                 if gate not in GATES:
@@ -300,6 +310,18 @@ def main(argv: list[str]) -> int:
     # `deferred` is in the verdict on purpose. A reader must be able to tell
     # "this gate did not ask about e2e" from "nobody declared e2e", and only one
     # of those is acceptable.
+    # Every declared phase deferred is not a pass. `expected` empty with
+    # `deferred` non-empty means this gate asked about nothing, and reporting
+    # success on nothing is the vacuous pass read_ledger already refuses for an
+    # empty ledger -- the same hole, reached through the gate filter instead.
+    if not expected and deferred:
+        print(
+            f"refuse: --gate {gate} asked about none of the "
+            f"{len(deferred)} declared phase(s); there is nothing here to pass",
+            file=sys.stderr,
+        )
+        return 2
+
     verdict = {
         "ledgers": ledgers,
         "evidence": evidence_dir,
