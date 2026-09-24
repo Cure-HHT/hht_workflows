@@ -1,0 +1,250 @@
+---
+# The pipeline: one image build whose every step leaves its result behind, and a
+# refusal that reads those results afterwards.
+#
+# The order is the mechanism, not a preference:
+#
+#   1. BUILD   the context is `git archive HEAD`; every check records and exits 0
+#   2. PUSH    which returns a digest
+#   3. REFUSE  started against THAT digest
+#
+# Binding step 3 to what step 2 returned makes "the evidence image exists" true
+# by construction rather than by keeping two workflow steps in the right order.
+# If the push fails there is no digest, so the refusal cannot run -- and a
+# refusal that cannot run is a failed job, not a silent pass.
+#
+# Whether this build also runs at a pull request, and which phases belong at
+# which trigger, is deliberately NOT answered here: it is an open question in
+# the design, and `DIARY-OPS-change-appropriate-ci/B+G` bears on it. Inventing an
+# answer in a workflow file is how an undecided question becomes a convention
+# nobody chose. The negative controls below run on pull requests, because they
+# need no registry and they are what protects the mechanism from rotting.
+
+name: Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # One declaration. It was written at each of the two steps that install
+  # gitleaks, which is the shape a later bump updates once and misses once.
+  # `.pre-commit-config.yaml` carries the same version as a `rev:` and is the
+  # third copy -- pre-commit resolves its own tools and cannot read this, so
+  # collapsing that one needs the wider cleanup rather than a line here.
+  GITLEAKS_VERSION: 8.29.0
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The mechanism's own unit suite, in the workflow that depends on it.
+  #
+  # It ran only in release-notes-tests.yml, which is a different workflow about
+  # a different thing -- so rebuild, join and run-target had never executed in
+  # CI in any form, and a green pipeline run said nothing about them. The four
+  # defects that turned a broken build into a green one all survived a passing
+  # suite for exactly this reason.
+  mechanism-tests:
+    name: Mechanism unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          # tomllib. The floor is declared in pyproject.toml and must match.
+          python-version: '3.11'
+
+      - name: Install the pinned test tools
+        run: python -m pip install --quiet "pytest==8.4.2" "PyYAML==6.0.3"
+
+      - name: Run the mechanism's unit suite
+        run: python -m pytest pipeline/tests/ -q
+
+  # The negative controls. These run everywhere, including pull requests, and
+  # they are the reason the mechanism's clean results mean anything. Each one
+  # breaks something on purpose and asserts the breakage is detected.
+  negative-controls:
+    name: Negative controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Nothing here reuses the token, and a credential written into
+          # .git/config is a credential that can reach a build context.
+          persist-credentials: false
+
+      - name: Evidence survives a failing step
+        run: |
+          set -euo pipefail
+
+          # Build succeeds despite a step that failed. If this build goes red,
+          # the wrapper is not doing its job and the rest of the mechanism is
+          # worthless.
+          git archive --format=tar HEAD \
+            | docker build -f .github/fixtures/pipeline-failing/Dockerfile \
+                -t pipeline-failing:local -
+
+          # The failure is readable from the image, which is the actual claim.
+          log="$(docker run --rm pipeline-failing:local cat /evidence/will-fail.log)"
+          echo "$log"
+          echo "$log" | grep -q "did not like what it found" \
+            || { echo "::error::the failing step's log is not readable from the image"; exit 1; }
+
+          status="$(docker run --rm pipeline-failing:local cat /evidence/will-fail.rc)"
+          [ "$status" = "3" ] \
+            || { echo "::error::expected recorded status 3, got '$status'"; exit 1; }
+
+      - name: An absent verdict refuses, and a failure refuses
+        run: |
+          set -euo pipefail
+
+          # Expected to refuse: one phase failed, one never ran at all.
+          if docker run --rm pipeline-failing:local /pipeline/refuse > /tmp/verdict.json 2> /tmp/verdict.err; then
+            echo "::error::refuse passed an image with a failed phase and an absent one"
+            cat /tmp/verdict.err
+            exit 1
+          fi
+          cat /tmp/verdict.err
+
+          python3 - <<'PY'
+          import json
+
+          with open("/tmp/verdict.json", encoding="utf-8") as handle:
+              verdict = json.load(handle)
+
+          assert verdict["passed"] is False, verdict
+          assert set(verdict["refused"]) == {"will-fail", "never-ran"}, verdict
+          assert "did not run" in verdict["phases"]["never-ran"]["reason"], verdict
+          print("refuse refused for both reasons, and said which was which")
+          PY
+
+      - name: The layer scan can actually fail
+        run: |
+          set -euo pipefail
+
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+          docker build -f .github/fixtures/pipeline-leak/Dockerfile \
+            -t pipeline-leak:local .github/fixtures/pipeline-leak
+
+          # The positive control. A scan that has never seen a leak reports
+          # clean on a leaking image -- measured, not assumed.
+          ./scripts/pipeline/scan-layers.sh pipeline-leak:local --expect-findings
+
+  build-and-refuse:
+    name: Build, publish, then refuse
+    if: github.event_name != 'pull_request'
+    needs: [negative-controls]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Log in to the registry
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build
+        run: |
+          set -euo pipefail
+
+          # The tracked tree at this commit, as Dockerfile.artifact already does:
+          # content defined by git rather than by an ignore list, and `.git`
+          # absent by construction rather than by a rule someone maintains.
+          git archive --format=tar HEAD \
+            | docker build -f Dockerfile.pipeline \
+                --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+                -t pipeline:local -
+
+      - name: Scan every layer before publishing
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          ./scripts/pipeline/scan-layers.sh pipeline:local
+
+      - name: Publish
+        id: publish
+        run: |
+          set -euo pipefail
+
+          # A package of its own, separate from anything publishable, so a
+          # retention policy can remove the whole thing and nothing outside CI
+          # can come to depend on an intermediate.
+          repo="ghcr.io/cure-hht/hht_workflows-pipeline"
+          ref="${repo}:commit-${GITHUB_SHA}"
+          docker tag pipeline:local "$ref"
+          docker push "$ref"
+
+          # Ask the REGISTRY what it published, not the local daemon what it
+          # believes. Two reasons, and the second was a live bug:
+          #
+          #   The refusal is supposed to run against the published digest. The
+          #   registry is the thing that published it, so the registry is the
+          #   authority; the daemon's view is a cache of a claim.
+          #
+          #   `docker image inspect --format '{{index .RepoDigests 0}}'` --
+          #   which this step used to do -- is ordering-dependent and returned
+          #   the WRONG entry. The image is tagged twice (pipeline:local, then
+          #   this ref), so it carries two RepoDigests, and index 0 was
+          #   `pipeline@sha256:...`. That is not a reference to anything here:
+          #   Docker would resolve a bare `pipeline` against Docker Hub. It
+          #   would not error, it would look elsewhere. Measured against a
+          #   local registry before this ever ran in CI.
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::the registry returned no digest for $ref (got '$digest')"; exit 1 ;;
+          esac
+
+          published="${repo}@${digest}"
+          echo "digest=$published" >> "$GITHUB_OUTPUT"
+          echo "published $published" >&2
+
+      - name: Refuse, against the published digest
+        run: |
+          set -euo pipefail
+
+          # Not the local tag. The published image is the one anything else will
+          # read, and it is the one that has to be judged.
+          docker run --rm "${DIGEST}" /pipeline/refuse
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+
+  # Implements: HHT-OPS-failure-notification-routing/A
+  #   The standard job, verbatim — notify-failure-lint checks it literally.
+  notify-failure:
+    name: Notify failure
+    needs: [mechanism-tests, negative-controls, build-and-refuse]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+        with:
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}

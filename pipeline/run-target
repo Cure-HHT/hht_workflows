@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Run a test target the way its repository declares it.
+
+The acceptance list for CUR-1996 asks that what a clone runs, what CI runs and
+what is declared be one statement rather than three kept in step by hand. A
+pipeline step that hard-codes `flutter test --machine --coverage ...` is the
+third copy -- and the one that drifts, because nothing compares it to the
+declaration.
+
+So this reads `.elspais.toml`, finds the named target, and runs the command that
+file says to run, in the directory it says to run it in. Change the declaration
+and the pipeline follows; there is nothing to keep in step.
+
+It also reports where the RESULTS are declared to land, because that is the
+difference between a log and something a report generator can read. A phase that
+captures output but produces no machine-readable results looks like it ran the
+tests and gives the traceability report nothing to consume.
+
+tomllib is in the standard library from Python 3.11, so this needs nothing
+installed -- which matters, because the dependency install is itself a phase and
+may be the one that failed.
+
+Usage: run-target <target-name> [repo-root]
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    print("run-target: needs Python 3.11+ for tomllib", file=sys.stderr)
+    raise SystemExit(2)
+
+
+class DeclarationError(Exception):
+    """The declaration could not be read."""
+
+
+def targets_in(root: str) -> list[dict]:
+    path = os.path.join(root, ".elspais.toml")
+    try:
+        with open(path, "rb") as handle:
+            doc = tomllib.load(handle)
+    except OSError as exc:
+        raise DeclarationError(f"cannot read {path}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        # Exit 1 here would have reached refuse as "failed with status 1",
+        # indistinguishable from a genuine test failure -- the very
+        # ran-versus-passed distinction this mechanism exists to keep.
+        raise DeclarationError(f"cannot parse {path}: {exc}") from exc
+    try:
+        targets = doc.get("scanning", {}).get("test", {}).get("targets", [])
+    except AttributeError as exc:
+        raise DeclarationError(
+            f"{path}: [scanning.test] is not a table -- "
+            f"an array-of-tables here reads as a list, not a declaration"
+        ) from exc
+    if not isinstance(targets, list) or not all(isinstance(x, dict) for x in targets):
+        raise DeclarationError(f"{path}: [[scanning.test.targets]] is not a list of tables")
+    return targets
+
+
+def find(targets: list[dict], name: str) -> dict | None:
+    for target in targets:
+        if target.get("name") == name:
+            return target
+    return None
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print("run-target: usage: run-target <target-name> [repo-root]", file=sys.stderr)
+        return 2
+    name = argv[1]
+    root = argv[2] if len(argv) > 2 else os.getcwd()
+
+    try:
+        declared = find(targets_in(root), name)
+    except DeclarationError as exc:
+        print(f"run-target: {exc}", file=sys.stderr)
+        return 2
+    if declared is None:
+        # Not a warning. A target the pipeline runs but the declaration does not
+        # know about is exactly the drift this exists to prevent.
+        print(f"run-target: '{name}' is not a declared target in .elspais.toml", file=sys.stderr)
+        return 2
+
+    command = declared.get("command")
+    if not command:
+        print(f"run-target: '{name}' declares no command", file=sys.stderr)
+        return 2
+    if not isinstance(command, str):
+        # shell=True with a list makes the tail shell positional arguments, so
+        # a bare `sh` runs, reads stdin and blocks until the job times out with
+        # nothing said. An array of strings is a natural way to write this in
+        # TOML, so refuse it by name rather than hanging.
+        print(
+            f"run-target: '{name}' declares command as {type(command).__name__}, "
+            f"and it must be a string",
+            file=sys.stderr,
+        )
+        return 2
+
+    cwd = os.path.join(root, declared.get("cwd", "."))
+    if not os.path.isdir(cwd):
+        print(f"run-target: '{name}' declares cwd {cwd}, which is not a directory", file=sys.stderr)
+        return 2
+    print(f"run-target: {name}", file=sys.stderr)
+    print(f"  declared command: {command}", file=sys.stderr)
+    print(f"  in:               {cwd}", file=sys.stderr)
+
+    # Clear the declared outputs first. Without this the check passes on a
+    # file the previous run left behind -- which is the common case, a rerun in
+    # a dirty workspace, and exactly the case it was written to catch.
+    for key in ("results", "coverage"):
+        rel = declared.get(key)
+        if not rel:
+            continue
+        stale = os.path.join(cwd, rel)
+        try:
+            os.remove(stale)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"run-target: cannot clear {rel}: {exc}", file=sys.stderr)
+            return 2
+
+    result = subprocess.run(command, shell=True, cwd=cwd)
+
+    # Say whether the machine-readable outputs the declaration promises actually
+    # landed. A green test run that produced no results file is a phase the
+    # traceability report cannot use, and nothing else would notice.
+    for key in ("results", "coverage"):
+        rel = declared.get(key)
+        if not rel:
+            continue
+        where = os.path.join(cwd, rel)
+        ok = os.path.isfile(where) and os.path.getsize(where) > 0
+        print(f"  {key:9}: {rel} {'written' if ok else 'MISSING'}", file=sys.stderr)
+        if not ok:
+            print(
+                f"run-target: the declaration promises {key} at {rel} and it is not there",
+                file=sys.stderr,
+            )
+            return 1
+
+    return result.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

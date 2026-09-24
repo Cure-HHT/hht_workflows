@@ -6,7 +6,18 @@ build-backend = "setuptools.build_meta"
 name = "hht-workflows-hooks"
 version = "0.1.0"
 description = "Cure-HHT-specific pre-commit hooks distributed from cure-hht/hht_workflows. Hosts the release-notes-update hook and (in future) any other cross-cutting Cure-HHT hooks."
-requires-python = ">=3.9"
+# >= 3.10 rather than >= 3.9. No workflow in this repository has ever run below
+# 3.11 (release-notes-tests says 3.11; readiness-checks and notify-presence say
+# 3.12), and the estate's pinned pre-commit -- PRE_COMMIT_VERSION=4.6.0 in
+# hht_diary/.github/versions.env -- requires 3.10. The old floor was a claim
+# nothing exercised, and pinning the test extras is what exposed it: the install
+# refuses 4.6.0 on 3.9. Raised deliberately rather than worked around by pinning
+# an older pre-commit here, because two declarations of one estate-wide version
+# that disagree is the defect this whole ticket is about.
+# 3.11, not 3.10: pipeline/run-target reads the declaration with tomllib,
+# which is 3.11+. On 3.10 it exits 2 with "needs Python 3.11+" -- so the
+# declared floor was one release below the one the code actually needs.
+requires-python = ">=3.11"
 
 [project.scripts]
 release-notes-update = "release_notes_update.__main__:main"
@@ -14,7 +25,21 @@ no-or-true-guard = "no_or_true_guard.__main__:main"
 confidential-terms-scan = "confidential_terms_scan.__main__:main"
 
 [project.optional-dependencies]
-test = ["pytest>=7", "PyYAML>=6,<7"]
+# Pinned, not floated. The purpose is control of what may enter a build --
+# decided deliberately rather than by whatever resolved on the day -- which is
+# why a retained build environment does not excuse a loose range. pre-commit is
+# here rather than in a versions.env because this repository consumes pins
+# rather than declaring them, and `pip install -e '.[test]'` already installs
+# this list; a second declaration would be one more thing to keep in step.
+# PRE_COMMIT_VERSION in hht_diary/.github/versions.env is the estate's value.
+test = [
+    # 8.4.2 rather than the current 9.x: pytest 9 requires Python >= 3.10 and
+    # this package declares >= 3.9. Measured, not assumed -- the 9.x pin was
+    # written first and the install refused it.
+    "pytest==8.4.2",
+    "PyYAML==6.0.3",
+    "pre-commit==4.6.0",
+]
 
 # Each hook's source lives under hooks/<hook-name>/. Setuptools is configured to
 # search those directories for top-level packages so the console-script entry

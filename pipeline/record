@@ -1,0 +1,116 @@
+#!/bin/sh
+# Run one pipeline phase, record what it did, and exit zero.
+#
+# The exit-zero is the point. Under BuildKit a `RUN` that fails leaves no
+# addressable image, so a step that refuses destroys the evidence it just
+# produced -- the defect this pipeline exists to remove, arriving at the moment
+# it matters most. Every step therefore records its outcome and succeeds; the
+# refusal is `pipeline/refuse`, which the workflow starts against the published
+# image afterwards.
+#
+# This is a wrapper rather than a convention because a convention is something
+# each step's author has to remember, and the step that forgets is the one whose
+# result goes missing.
+#
+# Usage: /pipeline/record <phase> <command> [args...]
+#
+# Writes, under $EVIDENCE_DIR (default /evidence):
+#   <phase>.rc   the command's exit status, as a decimal integer
+#   <phase>.log  everything the command wrote to stdout and stderr
+#
+# Both are required. A verdict that is only an exit code cannot distinguish
+# "the tool was missing" from "a test failed", and those need different
+# responses -- see DIARY-OPS-promotion-evidence-currency/E, which states the
+# estate's rule for exactly this.
+
+set -u
+
+evidence="${EVIDENCE_DIR:-/evidence}"
+
+if [ "$#" -lt 2 ]; then
+    echo "record: usage: record <phase> <command> [args...]" >&2
+    exit 2
+fi
+
+phase="$1"
+shift
+
+# If the evidence cannot be written, FAIL -- loudly, here, now.
+#
+# Everywhere else this wrapper exits zero so that a failing check leaves an
+# image to read. That rests on the recording having worked. When it has not,
+# exiting zero produces an image with no evidence AND no signal, which is
+# strictly worse than a red build: the step's outcome is simply gone, and the
+# refusal that would have caught it has nothing to read.
+#
+# Found by running it: the platform's toolchain image runs as a non-root user,
+# `mkdir /evidence` was denied, and this wrapper cheerfully reported a status
+# for a phase whose verdict was never written anywhere.
+if ! mkdir -p "$evidence" 2> /dev/null; then
+    echo "::error::record: cannot create the evidence directory $evidence" >&2
+    echo "::error::record: refusing to report a status that is not written down" >&2
+    exit 3
+fi
+if [ ! -w "$evidence" ]; then
+    echo "::error::record: the evidence directory $evidence is not writable" >&2
+    exit 3
+fi
+
+log="$evidence/$phase.log"
+rc_file="$evidence/$phase.rc"
+cmd_file="$evidence/$phase.cmd"
+cwd_file="$evidence/$phase.cwd"
+
+# The command, in a form that can be run again.
+#
+# The log's "command:" line is for a human and loses quoting -- re-running it
+# would split `sh -c 'cd x && y'` into nonsense. Rule 4 says the artifact can be
+# re-created in this environment, and that is only true if the environment
+# records what to re-create it WITH. NUL-separated argv, because it is the one
+# encoding a shell cannot mangle.
+if ! { for arg in "$@"; do printf '%s\0' "$arg"; done; } > "$cmd_file"; then
+    echo "::error::record: cannot write $cmd_file -- the phase would be unreplayable" >&2
+    exit 3
+fi
+
+# And WHERE it ran. Most steps cd relatively, so the argv alone re-runs
+# something else entirely -- or nothing -- from a different directory. Found by
+# rebuilding a sponsor image, whose working directory is not the platform's.
+if ! pwd > "$cwd_file"; then
+    echo "::error::record: cannot write $cwd_file -- the phase would be unreplayable" >&2
+    exit 3
+fi
+
+{
+    echo "phase:   $phase"
+    echo "command: $*"
+    echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "---"
+} > "$log"
+
+# Not `set -e` and not a pipeline: the status below must be the command's own.
+# A `| tee` would hand back tee's status and every phase would record success.
+"$@" >> "$log" 2>&1
+rc=$?
+
+{
+    echo "---"
+    echo "finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "status:   $rc"
+} >> "$log"
+
+printf '%s\n' "$rc" > "$rc_file"
+
+# And confirm it landed. A write that silently produced nothing leaves the same
+# hole as never running.
+if [ ! -s "$rc_file" ]; then
+    echo "::error::record: the verdict for $phase was not written to $rc_file" >&2
+    exit 3
+fi
+
+# Echo into the build log too, so a human reading the build sees what a machine
+# will read later. This is a convenience; the files above are the record.
+cat "$log"
+echo "[record] phase=$phase status=$rc (recorded, not enforced)"
+
+exit 0

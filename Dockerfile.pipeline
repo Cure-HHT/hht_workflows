@@ -1,0 +1,87 @@
+# This repository's pipeline: one image build whose every step leaves its result
+# behind.
+#
+# A step's output is the filesystem delta between its end and its beginning, and
+# a container's writable layer is exactly that delta. So the pipeline is an image
+# build, and nothing has to declare which files count -- the file that matters
+# later is the one nobody thought to list, and output that lands outside the
+# source tree (a package cache, a compiler's intermediates) is kept like any
+# other.
+#
+# Three things about this file are load-bearing:
+#
+#   1. The build context is `git archive HEAD`, as in Dockerfile.artifact. The
+#      content is defined by git rather than by an ignore list, and `.git` is
+#      therefore absent by construction rather than by a rule someone maintains.
+#
+#   2. Every check runs through /pipeline/record, which writes the check's exit
+#      status and log and then exits zero. A `RUN` that failed would leave no
+#      addressable image under BuildKit, and the evidence would die with it --
+#      the defect this pipeline exists to remove, arriving at the moment it
+#      matters most.
+#
+#   3. The refusal is NOT a layer. /pipeline/refuse is carried in the image and
+#      started by the workflow against the PUBLISHED digest, after the push. A
+#      `RUN /pipeline/refuse` would destroy the evidence it had just read.
+#
+# Nothing here removes anything it created -- no `apt-get clean`, no deleted
+# package lists. Those are files a step produced, and the rule is that a file a
+# step produced is not discarded. The few megabytes are the price of not having
+# to decide, each time, which deletions are the safe ones.
+
+# A bare tag is not enough: `python:3.11-slim` is rebuilt under the same name for
+# security patches, which is precisely the moving reference that makes two builds
+# of one commit different. 3.11 matches release-notes-tests.yml, the suite this
+# build runs. Resolved from the registry, not transcribed from memory.
+ARG PY_BASE=python:3.11-slim@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534
+FROM ${PY_BASE}
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    PYTHONDONTWRITEBYTECODE=0 \
+    EVIDENCE_DIR=/evidence
+
+# Expensive and stable first, so an edit to this repository's content does not
+# invalidate the toolchain layer. git is required twice over: `pre-commit` needs
+# a repository to run against, and the guard below is a `repo: local` hook.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates
+
+WORKDIR /workspace
+
+# The wrapper and the ledger arrive before anything is recorded, and separately
+# from the tree, so a content change does not invalidate them.
+COPY pipeline/ /pipeline/
+
+COPY . /workspace
+
+# An initialised repository, so the tools that need one have one.
+#
+# This commit's author is fabricated, and is meant to be. Identity is read from
+# the stamp a publishing step recorded -- here, the image's
+# org.opencontainers.image.revision label -- never reconstructed from
+# version-control metadata. Asking this repository which revision it holds
+# returns a plausible wrong answer rather than an error, which is why nothing
+# is allowed to ask it. Do not "fix" the author.
+RUN /pipeline/record git-init sh -c '\
+      git init -q . \
+      && git add -A \
+      && git -c user.name=pipeline -c user.email=pipeline@invalid \
+             commit -q -m "pipeline: initialised tree for tools that need a repository"'
+
+# The install. This is the step the discriminating check removes: with it gone,
+# the guard below must fail on absent dependencies rather than quietly pass.
+RUN /pipeline/record install pip install -e '.[test]'
+
+# A real check rather than a synthetic one. It runs through pre-commit, so it
+# exercises the initialised repository above, and it resolves `no-or-true-guard`
+# from PATH, so it exercises the install above.
+RUN /pipeline/record guard pre-commit run no-or-true-guard --all-files
+
+# A real suite, for the same reason.
+RUN /pipeline/record release-notes python -m pytest hooks/release-notes-update/tests -q
+
+# The refusal would go here, and deliberately does not. See note 3 above:
+# the workflow starts /pipeline/refuse against the published digest.
+
+CMD ["/pipeline/refuse"]

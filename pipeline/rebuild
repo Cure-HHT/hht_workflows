@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Re-run this image's pipeline, from the record the image carries.
+
+Mandate rule 4: for a deployed artifact there is a durable copy of the
+environment that created it, and in that environment, in isolation, the exact
+artifact can be re-created. This is the program that exercises that claim --
+because a capability nobody has ever run is an assertion, not a capability, and
+the design says so about secret scanning in the same words.
+
+It is driven by the image's own evidence rather than by a second copy of the
+recipe. Each phase recorded the argv it ran, so the rebuild asks the record what
+to do. A separate list of commands here would be the second copy this whole
+ticket exists to remove, and the one that drifts.
+
+Two properties make this safe rather than destructive:
+
+  THE ORIGINAL RECORD IS NEVER OVERWRITTEN. A rebuild writes to
+  <evidence>/<repo>/rebuild/, so what the build originally found is still
+  there to compare against. Overwriting it would be a rule 1 discard, and it
+  would destroy the only thing worth comparing to.
+
+  IT IS A PERMITTED REPEAT. Rule 3 forbids repeating a process unless the
+  repeat is intended to produce a different result -- and a verification
+  rebuild intends the SAME result, which is the point. The design registers
+  this as permitted explicitly; without that sentence nobody is allowed to run
+  this at all.
+
+Exit status:
+  0  every phase re-ran and reached the same verdict as the original
+  1  a phase disagreed with its original, or failed
+  2  the record could not be read
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import importlib.machinery
+import importlib.util
+
+
+def _load(name):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    spec = importlib.util.spec_from_loader(
+        f"{name}_mod", importlib.machinery.SourceFileLoader(f"{name}_mod", path)
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+refuse = _load("refuse")
+
+RECORD = "/pipeline/record"
+
+
+def argv_for(evidence_dir: str, phase: str) -> list[str] | None:
+    """What this phase actually ran, as argv, from the record."""
+    path = os.path.join(evidence_dir, f"{phase}.cmd")
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return None
+    parts = raw.split(b"\0")
+    if parts and parts[-1] == b"":
+        parts = parts[:-1]
+    return [p.decode("utf-8", "surrogateescape") for p in parts] or None
+
+
+def cwd_for(evidence_dir: str, phase: str) -> str | None:
+    """Where the phase ran. Without it, a relative `cd` re-runs nothing."""
+    try:
+        with open(os.path.join(evidence_dir, f"{phase}.cwd"), encoding="utf-8") as fh:
+            where = fh.read().strip()
+    except OSError:
+        return None
+    return where if os.path.isdir(where) else None
+
+
+ABSENT = "absent"
+
+
+def original_status(evidence_dir: str, phase: str) -> str:
+    """The recorded exit code, or ABSENT when there is no readable verdict.
+
+    ABSENT is not a status. Two of them are not an agreement -- a phase whose
+    record could not be read before and could not be written after has not
+    reproduced, it has failed twice in the same way. Comparing the strings
+    would call that a match, which is how a rebuild over an image with no
+    evidence at all came to report success.
+    """
+    try:
+        with open(os.path.join(evidence_dir, f"{phase}.rc"), encoding="utf-8") as fh:
+            return fh.read().strip() or ABSENT
+    except OSError:
+        return ABSENT
+
+
+def main(argv: list[str]) -> int:
+    root = os.environ.get("EVIDENCE_ROOT", "/evidence")
+    ledger_dir = os.environ.get("PIPELINE_LEDGER_DIR", "/pipeline/phases.d")
+    ledger_one = os.environ.get("PIPELINE_LEDGER", "/pipeline/phases.yaml")
+
+    ledgers = []
+    if os.path.isdir(ledger_dir):
+        ledgers = sorted(
+            os.path.join(ledger_dir, n)
+            for n in os.listdir(ledger_dir)
+            if n.endswith((".yaml", ".yml"))
+        )
+    elif os.path.exists(ledger_one):
+        ledgers = [ledger_one]
+    if not ledgers:
+        print("rebuild: this image declares no phases", file=sys.stderr)
+        return 2
+
+    try:
+        declared = [refuse.read_ledger(path) for path in ledgers]
+    except refuse.LedgerError as exc:
+        print(f"rebuild: {exc}", file=sys.stderr)
+        return 2
+
+    print("re-running this image's pipeline from its own record", file=sys.stderr)
+    print("the original evidence is not touched; results go to <repo>/rebuild/\n", file=sys.stderr)
+
+    disagreed, skipped, matched, reproduced_failures = [], [], [], []
+
+    for repo, phases in declared:
+        where = os.path.join(root, repo) if repo else root
+        out = os.path.join(where, "rebuild")
+        for phase in phases:
+            key = f"{repo}/{phase}" if repo else phase
+            cmd = argv_for(where, phase)
+            before = original_status(where, phase)
+
+            if cmd is None:
+                # A joined leg has evidence but no command: it never ran in this
+                # image, so there is nothing here to re-run. That is not a
+                # failure, and calling it one would make every joined image
+                # fail its own rebuild.
+                print(f"skip    {key}: joined from outside; no command to re-run", file=sys.stderr)
+                skipped.append(key)
+                continue
+
+            env = dict(os.environ, EVIDENCE_DIR=out)
+            proc = subprocess.run(
+                [RECORD, phase, *cmd], env=env, check=False, cwd=cwd_for(where, phase)
+            )
+            after = original_status(out, phase)
+
+            # record exits 3 when it could not write the evidence. That is not
+            # a verdict about the phase, it is the absence of one, and ignoring
+            # it let a rebuild that recorded nothing report that nothing
+            # differed.
+            if proc.returncode == 3:
+                print(f"DIFFERS {key}: the rebuild could not be recorded", file=sys.stderr)
+                disagreed.append(key)
+            elif ABSENT in (before, after):
+                print(
+                    f"DIFFERS {key}: no verdict to compare (was {before}, now {after})",
+                    file=sys.stderr,
+                )
+                disagreed.append(key)
+            elif after == before and before != "0":
+                # Reproduced, and reproduced a FAILURE. That is a true answer to
+                # "is this deterministic" and the wrong answer to the question
+                # anyone actually runs this to ask. `rebuild` is the default
+                # command of these images, so exiting 0 here means `docker run
+                # <image>` reports success on an image carrying a failed phase
+                # -- the toolchain guard could refuse and the caller would never
+                # know. refuse is the program that judges; rebuild must at least
+                # not contradict it.
+                print(
+                    f"FAILED  {key}: reproduced, but the verdict is {after}",
+                    file=sys.stderr,
+                )
+                reproduced_failures.append(key)
+            elif after == before:
+                print(f"same    {key}: {after}", file=sys.stderr)
+                matched.append(key)
+            else:
+                print(f"DIFFERS {key}: was {before}, now {after}", file=sys.stderr)
+                disagreed.append(key)
+
+    print(
+        f"\nrebuild: {len(matched)} phase(s) reproduced, "
+        f"{len(disagreed)} differed, {len(skipped)} not re-runnable here",
+        file=sys.stderr,
+    )
+    if reproduced_failures:
+        print(
+            "rebuild: " + ", ".join(reproduced_failures)
+            + " reproduced a failing verdict -- this image carries a phase that did not pass",
+            file=sys.stderr,
+        )
+        return 1
+    if disagreed:
+        print("rebuild: " + ", ".join(disagreed) + " did not reproduce", file=sys.stderr)
+        return 1
+    if not matched:
+        # Rule 4 is a claim that this environment can re-create the artifact.
+        # An image that re-ran nothing has not demonstrated it, and exiting 0
+        # here reported the strongest property in the mandate on no evidence
+        # whatsoever.
+        print(
+            "rebuild: nothing was re-run, so nothing was reproduced -- "
+            "this image cannot demonstrate that it re-creates its artifacts",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

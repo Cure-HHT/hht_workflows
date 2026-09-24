@@ -30,6 +30,12 @@ on:
       # failure sat unnoticed because nothing ever executed it.
       - 'scripts/urs-compile/**'
       - 'scripts/oq-compile/**'
+      # The pipeline mechanism: the wrapper, the ledger and the refusal
+      # program. Added WITH the suite rather than after it, because the
+      # comment two entries up records what happens otherwise.
+      - 'pipeline/**'
+      - 'Dockerfile.pipeline'
+      - 'scripts/pipeline/**'
       - 'tests/**'
       - 'bootstrap/**'
       - 'pyproject.toml'
@@ -126,6 +132,14 @@ jobs:
         run: |
           set -euo pipefail
           pytest tests/test_promote_template.py -v
+      # The refusal program the pipeline image carries. Its load-bearing case is
+      # that an ABSENT verdict refuses: a missing result means the step never
+      # ran, and reading that as a pass is how a gate reports success for work
+      # that never happened.
+      - name: Run pipeline refuse tests
+        run: |
+          set -euo pipefail
+          pytest pipeline/tests/ -v
       # pandoc pinned to the same release the build-urs action installs: the
       # docx reference builder seeds from pandoc's default data file, so an
       # unpinned pandoc makes these assertions track the runner image.
