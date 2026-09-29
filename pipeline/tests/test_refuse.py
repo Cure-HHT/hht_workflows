@@ -361,6 +361,43 @@ def test_the_same_phase_is_required_once_its_gate_arrives(tmp_path, capsys):
     assert out["deferred"] == ["sponsor/device (due by uat)"]
 
 
+def test_an_earlier_phase_that_never_ran_is_refused_at_a_later_gate(tmp_path, capsys):
+    """The case a promotion actually turns on: a build phase missing at qa.
+
+    The other gate tests approach the filter from the "not yet" side -- a phase
+    due later is deferred, and demanded once its gate arrives. This is the other
+    side, and it is the one a promotion depends on: `compile` was due by build,
+    it never ran, and the gate being asked is qa. The answer must be a refusal.
+
+    The filter is written to skip only a phase whose due_by is LATER than the
+    gate, so this already works. What it does not have without this test is a
+    reason to keep working. "Skip what is not due yet" and "skip what is not due
+    exactly now" are one character apart in `>` versus `!=`, both read
+    plausibly, and the difference between them is a promotion gate that passes
+    an image whose build never happened -- the vacuous pass this whole program
+    exists to make impossible.
+    """
+    d = _gated_ledger(tmp_path)
+    evidence = tmp_path / "evidence"
+    # browser ran and passed; compile, which was due two gates ago, never ran.
+    _record(evidence / "sponsor", "browser", 0)
+
+    assert refuse.main(["refuse", "--gate", "qa", str(d), str(evidence)]) == 1
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["gate"] == "qa"
+    # Both are this gate's business: one because it is due now, one because it
+    # was due earlier and its being overdue does not stop it being required.
+    assert out["expected"] == ["sponsor/compile", "sponsor/browser"]
+    assert out["refused"] == ["sponsor/compile"]
+    assert out["deferred"] == ["sponsor/device (due by uat)"]
+    assert not out["passed"]
+    assert "did not run" in out["phases"]["sponsor/compile"]["reason"]
+    # And the phase that did run is reported as having passed, so the refusal
+    # is specific rather than a blanket failure of the gate.
+    assert out["phases"]["sponsor/browser"]["passed"]
+
+
 def test_without_a_gate_every_phase_is_still_required(tmp_path, capsys):
     """Backward compatibility: callers that pass nothing get the old question."""
     d = _gated_ledger(tmp_path)
