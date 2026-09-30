@@ -67,11 +67,11 @@ outputs:
 runs:
   using: composite
   steps:
-    # Implements: HHT-OPS-identity-over-keys/A,D
+    # Implements: HHT-OPS-identity-over-keys/A+D
     #   Gmail access is minted from the job's WIF credentials (signJwt as
     #   the DWD SA, exchanged for a <1h Gmail-scoped token); no SA JSON
     #   key and no SMTP password exist anywhere.
-    # Implements: HHT-OPS-composite-action-library/A,F
+    # Implements: HHT-OPS-composite-action-library/A+F
     #   Deploy-notification primitive implemented once here, not inlined
     #   in consumer workflow YAML; contract declared via inputs/outputs.
     - name: Mint Gmail token via signJwt and send via Gmail API

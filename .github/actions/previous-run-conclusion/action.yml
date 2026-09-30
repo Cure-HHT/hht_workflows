@@ -48,7 +48,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # Implements: HHT-OPS-composite-action-library/A,F
+    # Implements: HHT-OPS-composite-action-library/A+F
     #   Recurring cross-repo CI primitive (pager "recovered" detection)
     #   implemented once here, not inlined per consumer; contract declared
     #   via inputs/outputs above.

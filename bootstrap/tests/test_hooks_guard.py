@@ -1,6 +1,6 @@
 """Exercise the shell guard functions through a real shell.
 
-Verifies: HHT-OPS-repo-bootstrap/F,I
+Verifies: HHT-OPS-repo-bootstrap/F+I
 """
 import subprocess
 from pathlib import Path

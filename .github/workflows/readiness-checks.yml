@@ -65,7 +65,7 @@ jobs:
 
   doppler-cli-oidc-auth:
     # Implements: HHT-OPS-identity-over-keys/B
-    # Implements: HHT-OPS-composite-action-library/A,B,F
+    # Implements: HHT-OPS-composite-action-library/A+B+F
     #   End-to-end readiness check of the CLI-token-mint variant of the
     #   Doppler OIDC handshake. Distinct from doppler-oidc-auth above:
     #   this action only authenticates the doppler CLI for the job; it

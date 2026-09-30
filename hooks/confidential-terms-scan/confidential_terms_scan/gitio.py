@@ -1,7 +1,7 @@
 """Git plumbing for the confidential-terms scan.
 
 Only added content and added/renamed paths are scanned
-(HHT-OPS-confidential-keywords-scrubbing/B,C: the scanned surfaces are
+(HHT-OPS-confidential-keywords-scrubbing/B+C: the scanned surfaces are
 added content lines and added/renamed paths).
 """
 import re

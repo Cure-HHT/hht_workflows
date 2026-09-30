@@ -9,7 +9,7 @@ description: >
   stage degrades to a warning and published=false rather than failing the
   job. The token MUST be a short-lived per-job GitHub App installation
   token scoped to the dashboard repo with contents:write only
-  (HHT-OPS-cicd-app-operations/B,J) — never a PAT
+  (HHT-OPS-cicd-app-operations/B+J) — never a PAT
   (HHT-OPS-identity-over-keys/C). Pin this action by SHA from consumer
   workflows; never by branch or tag.
 

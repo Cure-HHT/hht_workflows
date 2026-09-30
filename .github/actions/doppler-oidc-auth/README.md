@@ -54,12 +54,12 @@ on this wrapper. Choose a tightly scoped config to limit exposure.
 ## Why this exists
 
 Implements `HHT-OPS-identity-over-keys/B` and
-`HHT-OPS-one-source-of-truth-per-secret-value/A,B` from
+`HHT-OPS-one-source-of-truth-per-secret-value/A+B` from
 `Cure-HHT/hht_admin/spec/ops-secrets-architecture.md`. No static
 `DOPPLER_TOKEN` is stored anywhere; the ephemeral identity token is minted
 per job and expires with it.
 
-Implements `HHT-OPS-composite-action-library/A,B,F` from the same spec:
+Implements `HHT-OPS-composite-action-library/A+B+F` from the same spec:
 the OIDC handshake is implemented once here and consumed by reference;
 upgrades happen in one place; the input contract is declared with
 `description:` and `required:` fields.

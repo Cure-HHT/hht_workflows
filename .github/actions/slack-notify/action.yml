@@ -610,7 +610,7 @@ runs:
           ) || echo "::warning::thread-reply to $ch (ts $ts) failed: unexpected error (curl/jq aborted)"
         done
 
-    # Implements: HHT-OPS-composite-action-library/A,F
+    # Implements: HHT-OPS-composite-action-library/A+F
     #   Deploy-notification primitive lives here, not inlined in consumers;
     #   dm-user-email/dm-status extend the declared input/output contract.
     - name: Send DM copy to dm-user-email (opt-in, soft-fail)

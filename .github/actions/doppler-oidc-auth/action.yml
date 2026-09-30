@@ -29,7 +29,7 @@ runs:
   steps:
     # Implements: HHT-OPS-identity-over-keys/B
     #   CI -> Doppler auth via OIDC; no static DOPPLER_TOKEN anywhere.
-    # Implements: HHT-OPS-one-source-of-truth-per-secret-value/A,B
+    # Implements: HHT-OPS-one-source-of-truth-per-secret-value/A+B
     #   Doppler remains the canonical home for Kind-2 values; this wrapper
     #   only fetches; it never mirrors values to a second store.
     - name: Fetch Doppler secrets via OIDC
