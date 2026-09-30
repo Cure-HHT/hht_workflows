@@ -46,7 +46,7 @@ warning and `published=false` rather than failing the job.
 
 `token` MUST be a per-job GitHub App installation token minted from
 `cure-hht-ops-bot`, scoped to the single dashboard repo with
-`contents: write` only (`HHT-OPS-cicd-app-operations/B,J`). Personal
+`contents: write` only (`HHT-OPS-cicd-app-operations/B+J`). Personal
 access tokens are prohibited (`HHT-OPS-identity-over-keys/C`,
 `HHT-OPS-cicd-app-operations/I`).
 

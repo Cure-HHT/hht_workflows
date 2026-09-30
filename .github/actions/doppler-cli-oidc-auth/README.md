@@ -61,7 +61,7 @@ ordering directly.
 ## Why this exists
 
 Implements `HHT-OPS-identity-over-keys/B` and
-`HHT-OPS-composite-action-library/A,B,F` from
+`HHT-OPS-composite-action-library/A+B+F` from
 `Cure-HHT/hht_admin/spec/ops-secrets-architecture.md`. The OIDC handshake
 is implemented once here and consumed by reference; consumer repos SHA-pin
 this action; upgrades happen in one place.

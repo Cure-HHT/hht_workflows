@@ -11,7 +11,7 @@
 # CANONICAL HOME: cure-hht/hht_workflows (this file).
 # Caller must actions/checkout first — the lint reads the workflow tree.
 #
-# Implements: HHT-OPS-failure-notification-routing/E
+# Implements: HHT-OPS-failure-notification-routing/E+F
 # Implements: HHT-OPS-composite-action-library/A
 
 name: 'notify-failure-lint'

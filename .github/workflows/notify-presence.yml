@@ -1,7 +1,7 @@
 # Enforces that every workflow in THIS repo triggered by push, schedule, or
-# workflow_dispatch carries the standard notify-failure job. Without this
-# check the convention depends on authors remembering, which is the accretion
-# mechanism CUR-1778 removed.
+# workflow_dispatch carries the standard notify-failure job, and that no
+# workflow announces failure off an enumeration of workflow names. Without
+# this check the convention depends on authors remembering.
 #
 # This repo is the canonical home of notify-failure-lint, so it runs the
 # LOCAL action rather than a SHA-pinned release: a PR that regresses the
@@ -10,7 +10,7 @@
 # readiness-checks.yml (`notify-failure-lint-readiness`) — that job proves the
 # checker works; this workflow applies it to our own tree.
 #
-# Implements: HHT-OPS-failure-notification-routing/E
+# Implements: HHT-OPS-failure-notification-routing/E+F
 
 name: notify-failure presence
 

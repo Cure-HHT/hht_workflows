@@ -58,8 +58,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # Implements: HHT-OPS-confidential-keywords-scrubbing/F,G,I
-    # Implements: HHT-OPS-composite-action-library/A,B,F
+    # Implements: HHT-OPS-confidential-keywords-scrubbing/F+G+I
+    # Implements: HHT-OPS-composite-action-library/A+B+F
     - name: Validate inputs
       shell: bash
       env:

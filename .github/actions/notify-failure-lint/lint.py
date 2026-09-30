@@ -24,7 +24,7 @@ decision comes from the workflow's own triggers and the exemption from a
 marker inside the workflow file, so no hand-maintained list of workflow
 names exists to drift.
 
-Implements: HHT-OPS-failure-notification-routing/E
+Implements: HHT-OPS-failure-notification-routing/E+F
 Verifies:   HHT-OPS-failure-notification-routing/A+C
 """
 import re
@@ -53,7 +53,7 @@ MARKER = "# notify-failure: semantic-exempt"
 # README documents.
 #
 # Assertion A requires the exemption to state "the outcome classification it
-# publishes, in a form the Assertion-E check enumerates" — so a trailing
+# publishes, in a form the *Merge Check* enumerates" — so a trailing
 # description after a `-`, `:` or em-dash separator is REQUIRED, and it must
 # carry some substance (at least three consecutive letters): `- .` enumerates
 # as `-> .`, which no reviewer can act on. main() prints every accepted
@@ -157,7 +157,7 @@ _ENUMERATION_IF = re.compile(
 def _check_no_enumeration_lookup(filename, jobs):
     """Assertion C limb 2. See the proxy note above.
 
-    Implements: HHT-OPS-failure-notification-routing/E
+    Implements: HHT-OPS-failure-notification-routing/F
     """
     violations = []
     for job_id, job in jobs.items():
@@ -195,7 +195,7 @@ def _check_no_workflow_enumeration(filename, wf):
     defect this rule exists to catch lived in a workflow_run-only workflow,
     which rule A never looks at.
 
-    Implements: HHT-OPS-failure-notification-routing/E
+    Implements: HHT-OPS-failure-notification-routing/F
     """
     on = _on_block(wf)
     if not isinstance(on, dict):
@@ -342,7 +342,7 @@ def main():
           "standard notify-failure job, and no workflow enumerates other "
           "workflows.")
     # Assertion A: the exemption must state the outcome classification it
-    # publishes "in a form the Assertion-E check enumerates" — this listing
+    # publishes "in a form the *Merge Check* enumerates" — this listing
     # is that form, so every exemption is visible on the check's own log.
     if exemptions:
         print(f"\nSemantic-notifier exemptions ({len(exemptions)}):")

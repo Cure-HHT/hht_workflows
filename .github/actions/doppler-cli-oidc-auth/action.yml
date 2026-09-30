@@ -24,7 +24,7 @@ runs:
   steps:
     # Implements: HHT-OPS-identity-over-keys/B
     #   CI -> Doppler auth via OIDC; no static DOPPLER_TOKEN anywhere.
-    # Implements: HHT-OPS-composite-action-library/A,B,F
+    # Implements: HHT-OPS-composite-action-library/A+B+F
     #   Cross-repo CI primitive; declared input contract; SHA-pinned consumers.
     - name: Mint Doppler token via GitHub OIDC and mask it before export
       id: mint
