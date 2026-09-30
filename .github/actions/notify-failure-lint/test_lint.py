@@ -1,6 +1,6 @@
 """Unit tests for lint.py — run with: python3 -m pytest -q
 
-Verifies: HHT-OPS-failure-notification-routing/E
+Verifies: HHT-OPS-failure-notification-routing/E+F
 """
 import lint
 

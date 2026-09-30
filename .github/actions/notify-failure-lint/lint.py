@@ -24,7 +24,7 @@ decision comes from the workflow's own triggers and the exemption from a
 marker inside the workflow file, so no hand-maintained list of workflow
 names exists to drift.
 
-Implements: HHT-OPS-failure-notification-routing/E
+Implements: HHT-OPS-failure-notification-routing/E+F
 Verifies:   HHT-OPS-failure-notification-routing/A+C
 """
 import re
@@ -157,7 +157,7 @@ _ENUMERATION_IF = re.compile(
 def _check_no_enumeration_lookup(filename, jobs):
     """Assertion C limb 2. See the proxy note above.
 
-    Implements: HHT-OPS-failure-notification-routing/E
+    Implements: HHT-OPS-failure-notification-routing/F
     """
     violations = []
     for job_id, job in jobs.items():
@@ -195,7 +195,7 @@ def _check_no_workflow_enumeration(filename, wf):
     defect this rule exists to catch lived in a workflow_run-only workflow,
     which rule A never looks at.
 
-    Implements: HHT-OPS-failure-notification-routing/E
+    Implements: HHT-OPS-failure-notification-routing/F
     """
     on = _on_block(wf)
     if not isinstance(on, dict):

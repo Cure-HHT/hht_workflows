@@ -106,4 +106,5 @@ silently regressed rule would leave the readiness job green.
 
 ## Why this exists
 
-Implements `HHT-OPS-failure-notification-routing/E` and verifies `/A` + `/C`.
+Implements `HHT-OPS-failure-notification-routing/E` (rule A) and `/F` (rule C),
+and verifies `/A` + `/C`.
