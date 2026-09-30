@@ -449,7 +449,7 @@ jobs:
           fi
 
   confidential-terms-scan:
-    # Implements: HHT-OPS-confidential-keywords-scrubbing/F,G,I
+    # Implements: HHT-OPS-confidential-keywords-scrubbing/F+G+I
     #   End-to-end readiness of the scanner action. Uses test_terms
     #   (synthetic, cannot collide with real terms) because this public
     #   repo has no scan-* Doppler identity; the Doppler fetch path is
@@ -532,7 +532,7 @@ jobs:
           head_ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
   confidential-terms-gate:
-    # Implements: HHT-OPS-confidential-keywords-scrubbing/H,I
+    # Implements: HHT-OPS-confidential-keywords-scrubbing/I
     #   The REAL confidential-terms gate for this repo (assertion I): scans
     #   the PR range against the live scan-hht-workflows Doppler prohibit list,
     #   dogfooding the action the same way consumers invoke it. Distinct from

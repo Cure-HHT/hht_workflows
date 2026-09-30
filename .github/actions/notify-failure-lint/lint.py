@@ -53,7 +53,7 @@ MARKER = "# notify-failure: semantic-exempt"
 # README documents.
 #
 # Assertion A requires the exemption to state "the outcome classification it
-# publishes, in a form the Assertion-E check enumerates" — so a trailing
+# publishes, in a form the *Merge Check* enumerates" — so a trailing
 # description after a `-`, `:` or em-dash separator is REQUIRED, and it must
 # carry some substance (at least three consecutive letters): `- .` enumerates
 # as `-> .`, which no reviewer can act on. main() prints every accepted
@@ -342,7 +342,7 @@ def main():
           "standard notify-failure job, and no workflow enumerates other "
           "workflows.")
     # Assertion A: the exemption must state the outcome classification it
-    # publishes "in a form the Assertion-E check enumerates" — this listing
+    # publishes "in a form the *Merge Check* enumerates" — this listing
     # is that form, so every exemption is visible on the check's own log.
     if exemptions:
         print(f"\nSemantic-notifier exemptions ({len(exemptions)}):")

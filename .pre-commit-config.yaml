@@ -93,7 +93,7 @@ repos:
       # resolves on a fresh clone. The hosted manifest (.pre-commit-hooks.yaml)
       # keeps `language: python` — consumers clone this repo and `pip install`
       # it, which resolves the console script correctly there.
-      # Implements: HHT-OPS-confidential-keywords-scrubbing/H,I
+      # Implements: HHT-OPS-confidential-keywords-scrubbing/H
       - id: confidential-terms-scan
         name: confidential-terms-scan
         entry: confidential-terms-scan

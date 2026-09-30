@@ -509,7 +509,7 @@ def test_exemption_reports_its_classification():
 
 def test_main_enumerates_exemptions_on_success(tmp_path, capsys, monkeypatch):
     # Assertion A requires the exemption to be stated "in a form the
-    # Assertion-E check enumerates" — main()'s stdout IS that form.
+    # *Merge Check* enumerates" — main()'s stdout IS that form.
     (tmp_path / "m.yml").write_text(
         "# notify-failure: semantic-exempt - posts its own failure summary\n"
         "name: Maint\non:\n  schedule:\n    - cron: '0 9 1 * *'\n"
