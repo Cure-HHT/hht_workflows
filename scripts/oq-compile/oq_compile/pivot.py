@@ -9,6 +9,7 @@ from .manifest import SECTION_COLUMN_INDEX, Manifest
 
 PASS = "PASS"
 FAIL = "FAIL"
+PARTIAL = "PARTIAL"
 NOT_RUN = "NOT RUN"
 
 #: Appended to a test result whose verification came from a carried baseline
@@ -19,20 +20,25 @@ CARRIED_SUFFIX = " (carried)"
 
 _FAIL_VERDICTS = frozenset({"fail", "failed", "failure", "error"})
 _PASS_VERDICTS = frozenset({"pass", "passed", "success"})
+_PARTIAL_VERDICTS = frozenset({"partial"})
 
 
 def journey_verdict(verdict: str) -> str:
     """Render one journey's verdict.
 
-    Anything that is neither a pass nor a fail — `unverified` above all — is
-    NOT RUN. An absence of evidence is never reported as a failure: a
-    premature red is worse than an honest blank.
+    A journey whose steps passed but did not all have a passing test is
+    PARTIAL: tests ran, so it is not NOT RUN, and nothing failed, so it is not
+    FAIL. Anything else -- `unverified` above all -- is NOT RUN. An absence of
+    evidence is never reported as a failure: a premature red is worse than an
+    honest blank.
     """
     lowered = (verdict or "").strip().lower()
     if lowered in _FAIL_VERDICTS:
         return FAIL
     if lowered in _PASS_VERDICTS:
         return PASS
+    if lowered in _PARTIAL_VERDICTS:
+        return PARTIAL
     return NOT_RUN
 
 
@@ -40,13 +46,16 @@ def requirement_verdict(req: Requirement) -> str:
     """Roll a requirement's journeys up to one verdict.
 
     FAIL if any validating journey failed. PASS only when every assertion the
-    requirement expects is verified — a partly-covered requirement has not
-    been validated, whatever its journeys say. NOT RUN otherwise.
+    requirement expects is verified -- a partly-covered requirement has not
+    been validated, whatever its journeys say. PARTIAL when some but not all
+    of those assertions are verified. NOT RUN when none are.
     """
     if any(journey_verdict(j.verdict) == FAIL for j in req.journeys):
         return FAIL
     if req.journeys and req.uat_verified_ratio >= 1.0:
         return PASS
+    if req.journeys and req.uat_verified_ratio > 0.0:
+        return PARTIAL
     return NOT_RUN
 
 
@@ -57,11 +66,12 @@ def verification_verdict(req: Requirement) -> str:
 
     FAIL when at least one test citing the requirement failed. PASS only when
     every assertion is verified by a passing test -- partial verification is
-    not a pass. NOT RUN otherwise, which includes the `awaiting` case: a test
-    that exists but whose result has never been ingested is an absence of
-    evidence, not evidence of failure, and must never render as FAIL.
+    not a pass. PARTIAL when some but not all assertions are verified. NOT RUN
+    when none are, which includes the `awaiting` case: a test that exists but
+    whose result has never been ingested is an absence of evidence, not
+    evidence of failure, and must never render as FAIL.
 
-    Returns one of the three labels only; the carried-baseline caveat is
+    Returns one of the four labels only; the carried-baseline caveat is
     rendered by the caller, so callers reasoning about the verdict itself
     compare against a bare label.
     """
@@ -69,6 +79,8 @@ def verification_verdict(req: Requirement) -> str:
         return FAIL
     if req.verified_ratio >= 1.0:
         return PASS
+    if req.verified_ratio > 0.0:
+        return PARTIAL
     return NOT_RUN
 
 

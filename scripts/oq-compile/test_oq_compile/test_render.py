@@ -177,12 +177,22 @@ def test_provenance_sheet_reads_facts_then_definitions_then_legend(
 def test_legend_distinguishes_the_two_not_run_meanings(
     tmp_path, sample_manifest_path
 ):
-    """NOT RUN means a different absence in each column -- no test result
-    ingested, versus no validating journey run. A legend stating one
-    definition for both would mislead."""
+    """NOT RUN means a different absence in each column -- no passing test,
+    versus no validating journey, versus no tested journey step. A legend
+    stating one definition for all would mislead."""
+    text = _provenance_text(tmp_path, sample_manifest_path).lower()
+    assert "no assertion of this requirement is verified by a passing test" in text
+    assert "no assertion the requirement expects is verified by a validating journey" in text
+    assert "no test result verifies any step of the journey" in text
+
+
+def test_legend_defines_partial_for_every_verdict_column(
+    tmp_path, sample_manifest_path
+):
+    """PARTIAL appears in all three verdict columns, so each must say what it
+    means there."""
     text = _provenance_text(tmp_path, sample_manifest_path)
-    assert "no test result has been ingested" in text.lower()
-    assert "no validating journey has been run" in text.lower()
+    assert text.count(": PARTIAL\n") == 3
 
 
 def test_legend_explains_the_carried_marker(tmp_path, sample_manifest_path):

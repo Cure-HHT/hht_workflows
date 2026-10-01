@@ -8,7 +8,9 @@ from oq_compile.pivot import (
     CARRIED_SUFFIX,
     FAIL,
     NOT_RUN,
+    PARTIAL,
     PASS,
+    journey_verdict,
     rendered_verification_verdict,
     req_rows,
     requirement_verdict,
@@ -50,9 +52,24 @@ def test_unverified_is_not_run_never_fail():
     assert requirement_verdict(r) == NOT_RUN
 
 
-def test_partial_coverage_is_not_run():
+def test_partial_coverage_is_partial_not_pass():
+    """Journeys validate some of the requirement's assertions: evidence exists,
+    so it is not NOT RUN, and it is incomplete, so it is not PASS."""
     r = _req("SPN-PRD-a", 0.5, [JourneyRef("JNY-1", "pass")])
-    assert requirement_verdict(r) == NOT_RUN
+    assert requirement_verdict(r) == PARTIAL
+
+
+def test_journey_with_unverified_steps_is_partial():
+    """elspais reports a journey whose steps passed but did not all have a
+    passing test as `partial`. Its tests ran, so NOT RUN would be false."""
+    assert journey_verdict("partial") == PARTIAL
+
+
+def test_journey_verdicts_keep_their_meaning():
+    assert journey_verdict("pass") == PASS
+    assert journey_verdict("fail") == FAIL
+    assert journey_verdict("unverified") == NOT_RUN
+    assert journey_verdict("") == NOT_RUN
 
 
 def test_no_journeys_is_not_run():
@@ -227,11 +244,18 @@ def test_verification_pass_only_when_fully_verified():
     assert verification_verdict(r) == PASS
 
 
-def test_verification_partial_is_not_run_not_pass():
+def test_verification_partial_is_partial_not_pass():
     """Partial verification is not a pass: some assertion of this requirement
-    has no passing test behind it."""
+    has no passing test behind it. Nor is it NOT RUN: tests ran and passed."""
     r = _req("SPN-PRD-a", 0.0, [], verified_ratio=0.99, tested_failed=0.0)
-    assert verification_verdict(r) == NOT_RUN
+    assert verification_verdict(r) == PARTIAL
+
+
+def test_verification_partial_carried_is_marked():
+    r = _req(
+        "SPN-PRD-a", 0.0, [], verified_ratio=0.5, verified_carried=True,
+    )
+    assert rendered_verification_verdict(r) == f"{PARTIAL}{CARRIED_SUFFIX}"
 
 
 def test_verification_awaiting_is_not_run_never_fail():
