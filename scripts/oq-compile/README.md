@@ -38,11 +38,16 @@ its own column. The generator does not combine them.
 | test result | Did the tests of this requirement pass? |
 | UAT result | Did a user journey that validates this requirement pass? |
 
-Both columns use the same three values:
+Both columns use the same four values:
 
 - `FAIL`. Something failed.
 - `PASS`. The verification is complete. Partial verification is not a `PASS`.
-- `NOT RUN`. All other conditions.
+- `PARTIAL`. Some of the verification passed, none failed, and some is missing.
+- `NOT RUN`. No verification passed and none failed.
+
+The verdict of each test case on the UAT sheet uses the same four values. A
+journey is `PARTIAL` when some of its steps have a passing test and the others
+have no test result.
 
 A test can exist before a result exists. The generator shows `NOT RUN` for that
 test. It does not show `FAIL`.

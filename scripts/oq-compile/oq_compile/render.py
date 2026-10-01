@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .manifest import Manifest
-from .pivot import CARRIED_SUFFIX, FAIL, NOT_RUN, PASS
+from .pivot import CARRIED_SUFFIX, FAIL, NOT_RUN, PARTIAL, PASS
 
 #: Column-width bounds applied to every sheet, in Excel's character-count
 #: width unit. MIN keeps a column of short values (a verdict, a short id)
@@ -162,6 +162,7 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
     # declares, so a consumer that renames them keeps a legend that matches
     # its own sheet. The manifest guarantees both are present.
     test_column, uat_column = manifest.req_columns_without_section()[2:4]
+    case_verdict_column = manifest.uat_sheet.columns[2]
     identity_rows: list[list[str]] = [
         ["Report", manifest.title],
     ]
@@ -200,9 +201,8 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
         [
             "",
             f"Wherever a verdict cell holds one of these values, {PASS} is "
-            f"shown in green text and {FAIL} in red; {NOT_RUN} is left "
-            "unstyled because it reports an absence of evidence, not an "
-            "outcome.",
+            f"shown in green text and {FAIL} in red; {PARTIAL} and {NOT_RUN} "
+            "are left unstyled because neither is a complete outcome.",
         ],
         [],
         [
@@ -219,11 +219,15 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
             "At least one test citing this requirement failed.",
         ],
         [
+            f"{test_column}: {PARTIAL}",
+            "Some but not all of the requirement's assertions are verified by "
+            "a passing test, and no test failed.",
+        ],
+        [
             f"{test_column}: {NOT_RUN}",
-            "No test result has been ingested for this requirement, or only "
-            "some of its assertions are verified by a passing test. A test "
-            "that exists but whose result has not been ingested reports here, "
-            "never as a failure: absence of evidence is not evidence of "
+            "No assertion of this requirement is verified by a passing test. A "
+            "test that exists but whose result has not been ingested reports "
+            "here, never as a failure: absence of evidence is not evidence of "
             "failure.",
         ],
         [
@@ -247,9 +251,37 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
             "At least one validating journey failed.",
         ],
         [
+            f"{uat_column}: {PARTIAL}",
+            "Some but not all of the assertions the requirement expects are "
+            "verified by a validating journey, and no validating journey "
+            "failed.",
+        ],
+        [
             f"{uat_column}: {NOT_RUN}",
-            "No validating journey has been run, or journey coverage is "
-            "partial. Not a failure.",
+            "No assertion the requirement expects is verified by a validating "
+            "journey. Not a failure.",
+        ],
+        [],
+        [
+            f"{manifest.uat_sheet.name}: {case_verdict_column}",
+            "Did this test case's user journey pass?",
+        ],
+        [
+            f"{case_verdict_column}: {PASS}",
+            "Every step of the journey is verified by a passing test.",
+        ],
+        [
+            f"{case_verdict_column}: {FAIL}",
+            "A test verifying a step of the journey failed.",
+        ],
+        [
+            f"{case_verdict_column}: {PARTIAL}",
+            "Some but not all steps are verified by a passing test, and no "
+            "test failed. The tests that exist ran.",
+        ],
+        [
+            f"{case_verdict_column}: {NOT_RUN}",
+            "No test result verifies any step of the journey. Not a failure.",
         ],
     ]
 
