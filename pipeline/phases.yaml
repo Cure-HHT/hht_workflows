@@ -7,7 +7,8 @@
 # That direction is deliberate. The failure this estate keeps hitting is a check
 # that reports success because the thing it names never ran.
 #
-# `due_by` is recorded now and unused at this milestone: this repository has one
+# `due_by` is read by `refuse --gate`, which asks only for what is due by a
+# given gate. Every phase here is due at build: this repository has one
 # gate, which is the build itself. It exists so the field is not invented later
 # by whoever first needs it.
 phases:

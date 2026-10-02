@@ -120,14 +120,40 @@ while IFS= read -r blob; do
             fi
         fi
     else
+        # Not filesystem content (a JSON config blob). Drop the directory that
+        # was made for it. `rm -rf` rather than `rmdir` because rmdir fails on a
+        # non-empty directory, and under `set -e` that failure would end the run
+        # over a scratch directory nobody reads.
+        rm -rf "$dest"
         continue
     fi
 
     scanned=$((scanned + 1))
     report="$work/report-$(basename "$blob").json"
 
-    if gitleaks dir "$dest" --no-banner --redact --config "$config" \
-            --report-format json --report-path "$report" > /dev/null 2>&1; then
+    scan_rc=0
+    gitleaks dir "$dest" --no-banner --redact --config "$config" \
+        --report-format json --report-path "$report" > /dev/null 2>&1 || scan_rc=$?
+
+    # Free the extracted copy as soon as it has been scanned.
+    #
+    # Without this every layer's expanded contents stay on disk for the whole
+    # run, so the peak is the image in the daemon's graph, PLUS image.tar from
+    # `docker save`, PLUS every layer expanded at once -- three to four times
+    # the image, for a scan that only ever reads one layer at a time.
+    #
+    # Measured on hht_diary's platform image, which carries a Dart and Flutter
+    # toolchain: the runner had 35 GB free after clearing the hosted toolcache
+    # and it still ran out part-way through the largest layer. The failure was
+    # also self-concealing -- tar's stderr is redirected to a file, and the full
+    # disk meant that file could not be written either, so the run reported
+    # "extracted partially" with no reason attached, followed by gitleaks
+    # failing to write its report. Two errors, one cause, neither naming it.
+    #
+    # Peak is now the image, plus the tar, plus the single largest layer.
+    rm -rf "$dest"
+
+    if [ "$scan_rc" -eq 0 ]; then
         continue
     fi
 

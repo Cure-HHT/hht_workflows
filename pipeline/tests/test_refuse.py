@@ -184,7 +184,10 @@ def test_duplicate_phase_is_an_error(tmp_path, capsys):
 
 def test_ledger_ids_are_read_in_order(tmp_path):
     ledger = _write_ledger(tmp_path)
-    assert refuse.read_ledger(str(ledger)) == (None, ["install", "guard"])
+    assert refuse.read_ledger(str(ledger)) == (
+        None,
+        [("install", "build"), ("guard", "build")],
+    )
 
 
 def test_the_repositorys_own_ledger_parses():
@@ -192,7 +195,14 @@ def test_the_repositorys_own_ledger_parses():
     shipped = pathlib.Path(__file__).resolve().parents[1] / "phases.yaml"
     repo, ids = refuse.read_ledger(str(shipped))
     assert repo is None
-    assert ids == ["git-init", "install", "guard", "release-notes"]
+    assert [name for name, _ in ids] == [
+        "git-init",
+        "install",
+        "guard",
+        "release-notes",
+    ]
+    # every phase in this repository's own ledger is due at the build gate
+    assert {due for _, due in ids} == {"build"}
 
 
 def test_diagnostics_go_to_stderr_and_stdout_stays_machine_readable(tmp_path, capsys):
@@ -274,7 +284,8 @@ def test_two_ledgers_claiming_one_repo_is_an_error(tmp_path, capsys):
 def test_a_ledger_declaring_repo_reads_it(tmp_path):
     ledger = tmp_path / "one.yaml"
     ledger.write_text("repo: hht_diary\nphases:\n  - id: build\n", encoding="utf-8")
-    assert refuse.read_ledger(str(ledger)) == ("hht_diary", ["build"])
+    # no due_by line, so the gate is None -- which means due at every gate
+    assert refuse.read_ledger(str(ledger)) == ("hht_diary", [("build", None)])
 
 
 def test_two_ledgers_without_a_repo_are_refused(tmp_path, capsys):
@@ -294,3 +305,160 @@ def test_two_ledgers_without_a_repo_are_refused(tmp_path, capsys):
     _record(evidence, "install", 0)
 
     assert _run(capsys, str(d), str(evidence))[0] == 2
+
+
+# ---------------------------------------------------------------------------
+# --gate. The ledger always carried due_by and this program always ignored it,
+# so a phase due at qa was demanded at build and a sponsor image could not pass
+# its own build gate.
+# ---------------------------------------------------------------------------
+
+
+def _gated_ledger(tmp_path):
+    d = tmp_path / "phases.d"
+    d.mkdir(exist_ok=True)
+    (d / "sponsor.yaml").write_text(
+        "repo: sponsor\n"
+        "phases:\n"
+        "  - id: compile\n    due_by: build\n"
+        "  - id: browser\n    due_by: qa\n"
+        "  - id: device\n    due_by: uat\n",
+        encoding="utf-8",
+    )
+    return d
+
+
+def test_due_by_is_read_off_the_ledger(tmp_path):
+    d = _gated_ledger(tmp_path)
+    repo, phases = refuse.read_ledger(str(d / "sponsor.yaml"))
+    assert repo == "sponsor"
+    assert phases == [("compile", "build"), ("browser", "qa"), ("device", "uat")]
+
+
+def test_a_later_phase_is_deferred_at_the_build_gate(tmp_path, capsys):
+    """The case that made the sponsor image unable to pass its own gate."""
+    d = _gated_ledger(tmp_path)
+    evidence = tmp_path / "evidence"
+    _record(evidence / "sponsor", "compile", 0)
+
+    code = refuse.main(["refuse", "--gate", "build", str(d), str(evidence)])
+    assert code == 0
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["gate"] == "build"
+    assert out["expected"] == ["sponsor/compile"]
+    assert out["deferred"] == ["sponsor/browser (due by qa)", "sponsor/device (due by uat)"]
+
+
+def test_the_same_phase_is_required_once_its_gate_arrives(tmp_path, capsys):
+    d = _gated_ledger(tmp_path)
+    evidence = tmp_path / "evidence"
+    _record(evidence / "sponsor", "compile", 0)
+
+    assert refuse.main(["refuse", "--gate", "qa", str(d), str(evidence)]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert "sponsor/browser" in out["refused"]
+    assert out["deferred"] == ["sponsor/device (due by uat)"]
+
+
+def test_an_earlier_phase_that_never_ran_is_refused_at_a_later_gate(tmp_path, capsys):
+    """The case a promotion actually turns on: a build phase missing at qa.
+
+    The other gate tests approach the filter from the "not yet" side -- a phase
+    due later is deferred, and demanded once its gate arrives. This is the other
+    side, and it is the one a promotion depends on: `compile` was due by build,
+    it never ran, and the gate being asked is qa. The answer must be a refusal.
+
+    The filter is written to skip only a phase whose due_by is LATER than the
+    gate, so this already works. What it does not have without this test is a
+    reason to keep working. "Skip what is not due yet" and "skip what is not due
+    exactly now" are one character apart in `>` versus `!=`, both read
+    plausibly, and the difference between them is a promotion gate that passes
+    an image whose build never happened -- the vacuous pass this whole program
+    exists to make impossible.
+    """
+    d = _gated_ledger(tmp_path)
+    evidence = tmp_path / "evidence"
+    # browser ran and passed; compile, which was due two gates ago, never ran.
+    _record(evidence / "sponsor", "browser", 0)
+
+    assert refuse.main(["refuse", "--gate", "qa", str(d), str(evidence)]) == 1
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["gate"] == "qa"
+    # Both are this gate's business: one because it is due now, one because it
+    # was due earlier and its being overdue does not stop it being required.
+    assert out["expected"] == ["sponsor/compile", "sponsor/browser"]
+    assert out["refused"] == ["sponsor/compile"]
+    assert out["deferred"] == ["sponsor/device (due by uat)"]
+    assert not out["passed"]
+    assert "did not run" in out["phases"]["sponsor/compile"]["reason"]
+    # And the phase that did run is reported as having passed, so the refusal
+    # is specific rather than a blanket failure of the gate.
+    assert out["phases"]["sponsor/browser"]["passed"]
+
+
+def test_without_a_gate_every_phase_is_still_required(tmp_path, capsys):
+    """Backward compatibility: callers that pass nothing get the old question."""
+    d = _gated_ledger(tmp_path)
+    evidence = tmp_path / "evidence"
+    _record(evidence / "sponsor", "compile", 0)
+
+    assert refuse.main(["refuse", str(d), str(evidence)]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["gate"] is None
+    assert out["deferred"] == []
+    assert set(out["refused"]) == {"sponsor/browser", "sponsor/device"}
+
+
+def test_an_unknown_gate_is_refused_rather_than_guessed(tmp_path, capsys):
+    d = _gated_ledger(tmp_path)
+    assert refuse.main(["refuse", "--gate", "staging", str(d)]) == 2
+    assert "is not a gate" in capsys.readouterr().err
+
+
+def test_an_unknown_due_by_in_the_ledger_is_an_error(tmp_path):
+    ledger = tmp_path / "bad.yaml"
+    ledger.write_text(
+        "phases:\n  - id: x\n    due_by: whenever\n", encoding="utf-8"
+    )
+    with pytest.raises(refuse.LedgerError, match="is not a gate"):
+        refuse.read_ledger(str(ledger))
+
+
+def test_a_gate_that_asks_about_nothing_is_not_a_pass(tmp_path, capsys):
+    """Every declared phase deferred means this gate asked about nothing.
+
+    read_ledger already refuses an empty ledger for exactly this reason. The
+    gate filter reached the same hole from the other side: expected empty,
+    refusals empty, exit 0 -- a vacuous pass on an image nobody checked.
+    """
+    d = tmp_path / "phases.d"
+    d.mkdir()
+    (d / "legs.yaml").write_text(
+        "repo: legs\nphases:\n  - id: e2e\n    due_by: qa\n  - id: mob\n    due_by: uat\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "evidence").mkdir()
+
+    assert refuse.main(["refuse", "--gate", "build", str(d), str(tmp_path / "evidence")]) == 2
+    assert "nothing here to pass" in capsys.readouterr().err
+
+
+def test_a_due_by_this_reader_cannot_parse_is_an_error(tmp_path):
+    """Falling through to None would mean 'due at every gate', silently."""
+    for body in ('    due_by: qa  # needs a deployed env\n', '    due_by: "qa"\n'):
+        ledger = tmp_path / "bad.yaml"
+        ledger.write_text("phases:\n  - id: b\n" + body, encoding="utf-8")
+        with pytest.raises(refuse.LedgerError, match="bare gate name"):
+            refuse.read_ledger(str(ledger))
+
+
+def test_a_field_that_is_not_due_by_is_still_carried_quietly(tmp_path):
+    """The stricter rule must not reject the fields it never cared about."""
+    ledger = tmp_path / "ok.yaml"
+    ledger.write_text(
+        "phases:\n  - id: b\n    due_by: qa\n    description: anything at all # even this\n",
+        encoding="utf-8",
+    )
+    assert refuse.read_ledger(str(ledger)) == (None, [("b", "qa")])
