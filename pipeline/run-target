@@ -16,15 +16,24 @@ difference between a log and something a report generator can read. A phase that
 captures output but produces no machine-readable results looks like it ran the
 tests and gives the traceability report nothing to consume.
 
-tomllib is in the standard library from Python 3.11, so this needs nothing
-installed -- which matters, because the dependency install is itself a phase and
-may be the one that failed.
+Each target owns a folder, `<output_root>/<name>` from the repository root
+(`output_root` under `[scanning.test]`, `.results` by default), and its
+`results` and `coverage` are paths inside that folder. The run is bracketed by
+`elspais fingerprint start` and `finish`: `start` empties the folder and prints
+it, the command receives it in `ELSPAIS_TARGET_OUTPUT`, and `finish` records the
+fingerprint of the inputs the run saw -- without one, elspais reads the results
+as stale. `ELSPAIS` names the elspais executable (default `elspais`).
+
+It reads the declaration with tomllib, in the standard library from Python
+3.11, and needs elspais on PATH (or named by `ELSPAIS`) for the fingerprint;
+it needs no requirement graph and no test dependency of its own.
 
 Usage: run-target <target-name> [repo-root]
 """
 
 from __future__ import annotations
 
+import glob
 import os
 import subprocess
 import sys
@@ -62,6 +71,18 @@ def targets_in(root: str) -> list[dict]:
     if not isinstance(targets, list) or not all(isinstance(x, dict) for x in targets):
         raise DeclarationError(f"{path}: [[scanning.test.targets]] is not a list of tables")
     return targets
+
+
+def fingerprint(step: str, name: str, root: str) -> subprocess.CompletedProcess:
+    """Run `elspais fingerprint <step> <name>` from the repository root."""
+    elspais = os.environ.get("ELSPAIS", "elspais")
+    return subprocess.run(
+        [elspais, "fingerprint", step, name],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def find(targets: list[dict], name: str) -> dict | None:
@@ -113,42 +134,74 @@ def main(argv: list[str]) -> int:
     print(f"  declared command: {command}", file=sys.stderr)
     print(f"  in:               {cwd}", file=sys.stderr)
 
-    # Clear the declared outputs first. Without this the check passes on a
-    # file the previous run left behind -- which is the common case, a rerun in
-    # a dirty workspace, and exactly the case it was written to catch.
-    for key in ("results", "coverage"):
-        rel = declared.get(key)
-        if not rel:
-            continue
-        stale = os.path.join(cwd, rel)
-        try:
-            os.remove(stale)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            print(f"run-target: cannot clear {rel}: {exc}", file=sys.stderr)
-            return 2
+    # `fingerprint start` empties the target's folder. Without that the check
+    # below passes on a file the previous run left behind -- which is the
+    # common case, a rerun in a dirty workspace, and exactly the case it was
+    # written to catch.
+    try:
+        started = fingerprint("start", name, root)
+    except OSError as exc:
+        print(f"run-target: cannot run elspais: {exc}", file=sys.stderr)
+        return 2
+    if started.returncode != 0:
+        print(
+            f"run-target: elspais fingerprint start {name} failed: {started.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 2
+    lines = started.stdout.strip().splitlines()
+    if not lines:
+        print(f"run-target: elspais fingerprint start {name} named no folder", file=sys.stderr)
+        return 2
+    folder = lines[-1]
+    print(f"  results folder:   {folder}", file=sys.stderr)
 
-    result = subprocess.run(command, shell=True, cwd=cwd)
+    result = subprocess.run(
+        command, shell=True, cwd=cwd, env={**os.environ, "ELSPAIS_TARGET_OUTPUT": folder}
+    )
+
+    finished = fingerprint("finish", name, root)
+    # `finish` reports inputs that changed during the run on stderr and still
+    # exits 0; that is worth seeing in the phase log either way.
+    if finished.stderr.strip():
+        print(finished.stderr.strip(), file=sys.stderr)
+    if finished.returncode != 0:
+        # The results exist but carry no fingerprint, so elspais reads them as
+        # stale: report it as a run that did not complete, not as a test failure.
+        print(
+            f"run-target: elspais fingerprint finish {name} failed",
+            file=sys.stderr,
+        )
+        return 2
 
     # Say whether the machine-readable outputs the declaration promises actually
     # landed. A green test run that produced no results file is a phase the
-    # traceability report cannot use, and nothing else would notice.
+    # traceability report cannot use, and nothing else would notice. `results`
+    # is a glob, as elspais reads it; `coverage` is one file.
+    missing = False
     for key in ("results", "coverage"):
         rel = declared.get(key)
         if not rel:
             continue
-        where = os.path.join(cwd, rel)
-        ok = os.path.isfile(where) and os.path.getsize(where) > 0
-        print(f"  {key:9}: {rel} {'written' if ok else 'MISSING'}", file=sys.stderr)
-        if not ok:
+        found = [
+            path
+            for path in glob.glob(os.path.join(folder, rel))
+            if os.path.isfile(path) and os.path.getsize(path) > 0
+        ]
+        print(f"  {key:9}: {rel} {'written' if found else 'MISSING'}", file=sys.stderr)
+        if not found:
             print(
                 f"run-target: the declaration promises {key} at {rel} and it is not there",
                 file=sys.stderr,
             )
-            return 1
+            missing = True
 
-    return result.returncode
+    # The command's own failure is the verdict when it has one: a test failure,
+    # or a command that could not run at all (127), says more than the absence
+    # of the results it would have written.
+    if result.returncode != 0:
+        return result.returncode
+    return 1 if missing else 0
 
 
 if __name__ == "__main__":

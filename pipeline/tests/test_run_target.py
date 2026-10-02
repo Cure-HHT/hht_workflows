@@ -14,6 +14,8 @@ import importlib.machinery
 import importlib.util
 import pathlib
 
+import pytest
+
 RT = pathlib.Path(__file__).resolve().parents[1] / "run-target"
 
 
@@ -28,19 +30,44 @@ def _load():
 
 rt = _load()
 
+# A stand-in for `elspais fingerprint`, keeping its contract: `start` empties
+# <root>/.results/<name> and prints it, `finish` writes the fingerprint and is
+# refused when no `start` began.
+FAKE_ELSPAIS = """#!/bin/sh
+set -eu
+[ "$1" = fingerprint ] || exit 64
+dir="$PWD/.results/$3"
+case "$2" in
+  start) rm -rf "$dir"; mkdir -p "$dir"; : > "$dir/.started"; echo "$dir" ;;
+  finish) [ -f "$dir/.started" ] || { echo "no run began" >&2; exit 1; }
+          rm "$dir/.started"; echo '{}' > "$dir/.elspais-run.json" ;;
+  *) exit 64 ;;
+esac
+"""
+
+
+@pytest.fixture(autouse=True)
+def fake_elspais(tmp_path_factory, monkeypatch):
+    bindir = tmp_path_factory.mktemp("bin")
+    exe = bindir / "elspais"
+    exe.write_text(FAKE_ELSPAIS, encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("ELSPAIS", str(exe))
+    return exe
+
 DECL = """
 [[scanning.test.targets]]
-name = "pkg/one"
+name = "pkg-one"
 cwd = "pkg/one"
-command = "sh -c 'mkdir -p coverage && echo x > coverage/machine.jsonl && echo y > coverage/lcov.info'"
-results = "coverage/machine.jsonl"
-coverage = "coverage/lcov.info"
+command = "sh -c 'pwd > \\"$ELSPAIS_TARGET_OUTPUT/ran-in\\" && echo x > \\"$ELSPAIS_TARGET_OUTPUT/machine.jsonl\\" && echo y > \\"$ELSPAIS_TARGET_OUTPUT/lcov.info\\"'"
+results = "machine.jsonl"
+coverage = "lcov.info"
 
 [[scanning.test.targets]]
-name = "pkg/silent"
+name = "pkg-silent"
 cwd = "pkg/silent"
 command = "true"
-results = "coverage/machine.jsonl"
+results = "machine.jsonl"
 """
 
 
@@ -53,13 +80,30 @@ def _repo(tmp_path):
 
 def test_the_declared_targets_are_read(tmp_path):
     names = [t["name"] for t in rt.targets_in(str(_repo(tmp_path)))]
-    assert names == ["pkg/one", "pkg/silent"]
+    assert names == ["pkg-one", "pkg-silent"]
 
 
 def test_a_target_runs_its_declared_command_in_its_declared_directory(tmp_path):
     root = _repo(tmp_path)
-    assert rt.main(["run-target", "pkg/one", str(root)]) == 0
-    assert (root / "pkg" / "one" / "coverage" / "machine.jsonl").read_text().strip() == "x"
+    assert rt.main(["run-target", "pkg-one", str(root)]) == 0
+    folder = root / ".results" / "pkg-one"
+    assert (folder / "ran-in").read_text().strip() == str(root / "pkg" / "one")
+    assert (folder / "machine.jsonl").read_text().strip() == "x"
+
+
+def test_a_run_records_its_fingerprint(tmp_path):
+    """Results without a fingerprint read as stale, so the run must finish one."""
+    root = _repo(tmp_path)
+    assert rt.main(["run-target", "pkg-one", str(root)]) == 0
+    assert (root / ".results" / "pkg-one" / ".elspais-run.json").is_file()
+
+
+def test_a_failed_fingerprint_start_is_not_a_test_failure(tmp_path, monkeypatch, capsys):
+    """No record could begin, so the tests never ran: status 2, not 1."""
+    root = _repo(tmp_path)
+    monkeypatch.setenv("ELSPAIS", "false")
+    assert rt.main(["run-target", "pkg-one", str(root)]) == 2
+    assert "fingerprint start" in capsys.readouterr().err
 
 
 def test_a_target_that_produced_no_results_FAILS(tmp_path):
@@ -70,12 +114,12 @@ def test_a_target_that_produced_no_results_FAILS(tmp_path):
     result.
     """
     root = _repo(tmp_path)
-    assert rt.main(["run-target", "pkg/silent", str(root)]) == 1
+    assert rt.main(["run-target", "pkg-silent", str(root)]) == 1
 
 
 def test_an_undeclared_target_is_refused(tmp_path):
     root = _repo(tmp_path)
-    assert rt.main(["run-target", "pkg/nope", str(root)]) == 2
+    assert rt.main(["run-target", "pkg-nope", str(root)]) == 2
 
 
 def test_a_missing_declaration_is_refused(tmp_path):
@@ -119,7 +163,8 @@ cwd = "."
 command = "true"
 results = "r.json"
 ''')
-    (root / "r.json").write_text('{"stale": true}')
+    (root / ".results" / "t").mkdir(parents=True)
+    (root / ".results" / "t" / "r.json").write_text('{"stale": true}')
     assert rt.main(["run-target", "t", str(root)]) == 1
     assert "MISSING" in capsys.readouterr().err
 
@@ -132,3 +177,34 @@ cwd = "nowhere"
 command = "true"
 ''')
     assert rt.main(["run-target", "t", str(root)]) == 2
+
+
+def test_a_results_glob_is_matched_as_elspais_reads_it(tmp_path):
+    root = _toml(tmp_path, '''
+[[scanning.test.targets]]
+name = "t"
+cwd = "."
+command = "sh -c 'mkdir -p \\"$ELSPAIS_TARGET_OUTPUT/pixel\\" && echo x > \\"$ELSPAIS_TARGET_OUTPUT/pixel/journey-results.xml\\"'"
+results = "*/journey-results.xml"
+''')
+    assert rt.main(["run-target", "t", str(root)]) == 0
+
+
+def test_a_command_that_cannot_run_keeps_its_own_status(tmp_path):
+    """127 says the command was not found; reporting the missing results as 1
+    would hide that the tests never started."""
+    root = _toml(tmp_path, '''
+[[scanning.test.targets]]
+name = "t"
+cwd = "."
+command = "no-such-runner-xyz"
+results = "r.json"
+''')
+    assert rt.main(["run-target", "t", str(root)]) == 127
+
+
+def test_a_start_that_names_no_folder_is_not_a_test_failure(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    monkeypatch.setenv("ELSPAIS", "true")
+    assert rt.main(["run-target", "pkg-one", str(root)]) == 2
+    assert "named no folder" in capsys.readouterr().err
