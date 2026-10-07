@@ -19,7 +19,7 @@ description: 'Scan repository history for committed secrets via gitleaks'
 
 inputs:
   gitleaks-version:
-    description: 'Gitleaks version (override default pin)'
+    description: 'Gitleaks version (override default pin). Must have a recorded digest in install-gitleaks/digests.'
     required: false
     default: '8.29.0'
   baseline-path:
@@ -32,23 +32,16 @@ runs:
   steps:
     # Caller must `actions/checkout@v4` with `fetch-depth: 0` before
     # invoking this action — gitleaks needs full history to scan.
+    # The install is install-gitleaks's script, reached through this action's
+    # own checkout (a composite action cannot `uses:` a sibling by relative
+    # path; that would resolve in the consumer's repository). One install
+    # path, one digest table: a version without a recorded digest is refused.
+    # Implements: HHT-OPS-ci-tool-download-integrity/A+B
     - name: Install gitleaks
       shell: bash
       env:
         GITLEAKS_VERSION: ${{ inputs.gitleaks-version }}
-      run: |
-        set -euo pipefail
-        for i in 1 2 3; do
-          if wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"; then
-            break
-          fi
-          echo "Download attempt $i failed, retrying..."
-          sleep 5
-        done
-        tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-        sudo mv gitleaks /usr/local/bin/
-        rm "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-        gitleaks version
+      run: '"${GITHUB_ACTION_PATH}/../install-gitleaks/install.sh" "$GITLEAKS_VERSION"'
 
     - name: Scan for secrets
       shell: bash

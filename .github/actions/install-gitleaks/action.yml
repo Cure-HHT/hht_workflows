@@ -1,0 +1,40 @@
+# install-gitleaks — composite action.
+#
+# Installs gitleaks from its GitHub release after checking the tarball against
+# the SHA-256 recorded for that version in this directory's `digests` file.
+# This is the one place the estate downloads gitleaks: secrets-scan uses it,
+# and so should any workflow that runs gitleaks itself.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file). Consumers SHA-pin:
+#   - uses: Cure-HHT/hht_workflows/.github/actions/install-gitleaks@<sha>
+#     with:
+#       version: ${{ env.GITLEAKS_VERSION }}
+#
+# A version with no recorded digest is refused. To move to a new gitleaks,
+# add its digest to `digests` here, release, and re-pin consumers.
+name: 'Install gitleaks (digest-verified)'
+description: 'Install a gitleaks release only if it matches the SHA-256 recorded for its version'
+inputs:
+  version:
+    description: 'gitleaks version, X.Y.Z (a leading v is accepted). Read it from the caller''s versions.env.'
+    required: true
+  sha256:
+    description: 'Optional: the digest the caller expects. If given it must equal the recorded digest; it cannot admit an unrecorded version.'
+    required: false
+    default: ''
+  install-dir:
+    description: 'Directory to install the gitleaks binary into'
+    required: false
+    default: '/usr/local/bin'
+runs:
+  using: 'composite'
+  steps:
+    # Implements: HHT-OPS-ci-tool-download-integrity/A+B
+    # Implements: HHT-OPS-composite-action-library/A
+    - name: Install gitleaks after verifying its digest
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        EXPECTED_SHA256: ${{ inputs.sha256 }}
+        INSTALL_DIR: ${{ inputs.install-dir }}
+      run: '"${GITHUB_ACTION_PATH}/install.sh" "$VERSION" "$EXPECTED_SHA256" "$INSTALL_DIR"'

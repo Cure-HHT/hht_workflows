@@ -81,6 +81,15 @@ repos:
         language: system
         types_or: [shell, yaml, dockerfile, makefile]
 
+      # Dogfood our own download-integrity hook, same `repo: local` +
+      # `language: system` rationale as no-or-true-guard above.
+      # Implements: HHT-OPS-ci-tool-download-integrity/C
+      - id: download-integrity
+        name: download-integrity
+        entry: download-integrity
+        language: system
+        files: '(^|/)(Dockerfile[^/]*|[^/]+\.Dockerfile)$|^\.github/(workflows/[^/]+\.ya?ml|actions/.+/action\.ya?ml|versions\.env)$|\.ya?ml\.template$'
+
       # Dogfood our own confidential-terms-scan hook at pre-push
       # (hooks/confidential-terms-scan/README.md). Same `repo: local` +
       # `language: system` rationale as no-or-true-guard above: for

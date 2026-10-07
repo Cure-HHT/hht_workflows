@@ -15,6 +15,9 @@ on:
       - 'hooks/release-notes-update/**'
       - 'hooks/no-or-true-guard/**'
       - 'hooks/confidential-terms-scan/**'
+      - 'hooks/download-integrity/**'
+      - '.github/actions/install-doppler-cli/**'
+      - '.github/actions/install-gitleaks/**'
       - '.github/actions/release-notes-publish/**'
       - '.github/actions/sponsor-base-preflight/**'
       - '.github/actions/elspais-federate/**'
@@ -75,6 +78,11 @@ jobs:
         run: |
           set -euo pipefail
           pytest hooks/confidential-terms-scan/tests/ -v
+      # Verifies: HHT-OPS-ci-tool-download-integrity/C
+      - name: Run download-integrity tests
+        run: |
+          set -euo pipefail
+          pytest hooks/download-integrity/tests/ -v
       - name: Run publish action tests
         run: |
           set -euo pipefail
@@ -143,16 +151,23 @@ jobs:
       # pandoc pinned to the same release the build-urs action installs: the
       # docx reference builder seeds from pandoc's default data file, so an
       # unpinned pandoc makes these assertions track the runner image.
+      # Implements: HHT-OPS-ci-tool-download-integrity/A+B
       - name: Install pandoc + urs-compile test deps
         run: |
           set -euo pipefail
-          # Read the pin from the build-urs action's default so this job and
-          # the action can never disagree about which pandoc they mean.
+          # Read the pin and its digest from the build-urs action's defaults so
+          # this job and the action can never disagree about which pandoc they
+          # mean, or about which bytes that is.
           PANDOC_VERSION="$(python3 -c "import yaml;print(yaml.safe_load(open('.github/actions/build-urs/action.yml'))['inputs']['pandoc-version']['default'])")"
+          PANDOC_SHA256="$(python3 -c "import yaml;print(yaml.safe_load(open('.github/actions/build-urs/action.yml'))['inputs']['pandoc-sha256']['default'])")"
           echo "pinned pandoc: ${PANDOC_VERSION}"
           deb="$(mktemp --suffix=.deb)"
           curl -fsSL -o "$deb" \
             "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+          if ! echo "${PANDOC_SHA256}  ${deb}" | sha256sum -c -; then
+            echo "::error::pandoc-${PANDOC_VERSION}-1-amd64.deb does not match build-urs's pandoc-sha256; refusing to install it" >&2
+            exit 1
+          fi
           sudo dpkg -i "$deb"
           rm -f "$deb"
           installed="$(pandoc --version | head -1 | awk '{print $2}')"
