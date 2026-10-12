@@ -316,6 +316,82 @@ fails — so it works on a bare runner and does not trip over a PEP 668
 externally-managed interpreter. Adding `setup-python` pins the interpreter
 and skips the install path entirely.
 
+## Sponsor Cloud Run deploy (deploy-cloud-run)
+
+[`.github/workflows/deploy-cloud-run.yml`](.github/workflows/deploy-cloud-run.yml)
+is the reusable deploy primitive a sponsor repository's portal flows end in: one
+digest-pinned image into one Cloud Run environment, canary first, traffic only
+after the candidate answers `/ready`, `/health` and its identity-config check.
+It names no sponsor, project or platform account; it reads them at run time
+from the caller:
+
+| Source | What it supplies |
+|---|---|
+| `sponsor.toml` (repository root) | sponsor id, Doppler project, repository, Artifact Registry repository, region, each environment's GCP project and optional portal domain |
+| `deployment/base-config.json` | platform constants only: `gar.host`, `gar.project`, `gcp.project_number`, `gcp.actions_sa_email` |
+| the bound GitHub environment's variables | `DOPPLER_RUNTIME_IDENTITY_ID` (written by the org administration repository) |
+| the environment's GCP project | its Cloud SQL instance (the one labelled for the sponsor and environment and managed by Terraform) and its VPC connector |
+
+The image path is accepted only under
+`<gar.host>/<gar.project>/<artifact_registry_repository>/`. The database and
+connector must be in the region `sponsor.toml` declares, the sponsor's
+data-residency choice; none, several, or one elsewhere refuses before
+anything changes.
+The revision authenticates to Doppler with its runtime identity; there is no
+stored-token path.
+
+The workflow declares no concurrency group and no dispatch trigger: the caller
+serialises per environment and owns the dispatch form. The
+`SLACK_APP_OATH_TOKEN` secret is required: without it the deploy refuses
+before anything is built or deployed. Deploy-outcome Slack
+posts route through the caller's `.github/slack-channels.yml`; the uat/prod
+email is sent only when the caller passes `representative-email`,
+`notification-sender` and `notification-service-account`.
+
+```yaml
+jobs:
+  deploy-dev:
+    permissions:
+      contents: read
+      id-token: write
+      packages: read   # the record lookup reads a GHCR package
+    uses: Cure-HHT/hht_workflows/.github/workflows/deploy-cloud-run.yml@<commit-sha>
+    with:
+      target-env: dev
+      image_path: ${{ needs.build.outputs.portal_image_ref }}
+    secrets:
+      SLACK_APP_OATH_TOKEN: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+```
+
+## Sponsor database reset and archives
+
+Three more reusable workflows a sponsor repository calls through thin wrappers.
+None of them names a sponsor; the reset and the build-artifact archive read the
+sponsor's identity from its `sponsor.toml`, and the deployment-log archive
+records the run the caller names:
+
+- [`.github/workflows/reset-db.yml`](.github/workflows/reset-db.yml) resets a
+  portal database in one non-production environment. Before a reviewer is
+  asked, it refuses `prod` and any `<name>-prod`, requires the target typed
+  again in `confirm`, and requires `sponsor.toml` to declare the target
+  environment and a region. After approval, in the environment-bound job, it
+  requires the environment's `DOPPLER_RUNTIME_IDENTITY_ID` and a VPC connector
+  in the declared region before anything is built. The job image is built from the caller's
+  `deployment/docker/db-reset-job` and runs in-VPC under the environment's
+  Doppler runtime identity. `RESET_JOB_SERVICE_ACCOUNT` (environment variable)
+  optionally names the account the job runs as.
+  Without the `SLACK_APP_OATH_TOKEN` secret the reset warns and runs without
+  its Slack posts.
+- [`.github/workflows/archive-deployment-logs.yml`](.github/workflows/archive-deployment-logs.yml)
+  archives one run's log and a deployment record; the caller states the
+  operation (`deploy`, `hotfix-deploy` or `manual`).
+- [`.github/workflows/archive-build-artifacts.yml`](.github/workflows/archive-build-artifacts.yml)
+  archives a commit's build reports with archive metadata.
+
+Both archives upload to the caller repository's `ARCHIVE_BUCKET` variable and
+verify the upload against the packaged checksum. With the variable unset the
+record is assembled but the run warns that nothing durable was written.
+
 ## Fresh-clone conformance (repo-bootstrap)
 
 Every covered repo owes a fresh clone a documented path from "just cloned" to

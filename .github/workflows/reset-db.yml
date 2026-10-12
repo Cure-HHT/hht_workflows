@@ -1,0 +1,356 @@
+# notify-failure: semantic-exempt - classifies its outcome as reset success /
+#   reset failure and routes each per environment through the caller's
+#   .github/slack-channels.yml, rather than a generic "the job failed". The
+#   CALLER carries the standard job.
+#   Implements: HHT-OPS-failure-notification-routing/A
+
+name: "[internal] Reset sponsor portal database"
+
+# Reusable reset of a sponsor portal's database in one non-production
+# environment. Destructive and irreversible.
+#
+# The portal never runs DDL: each deploy first runs a provisioning job that
+# creates the event store as the schema's owner role. A reset drops the
+# `portal` and `public` schemas and leaves an empty owner-held `portal` schema,
+# an owner-held `public` schema no other role may create in, and the runtime
+# role `portal_runtime` with the Doppler runtime password and CONNECT on the
+# database. The portal refuses the empty schema until the next deploy.
+#
+# The drop runs in-VPC, as a Cloud Run job inside the target project: the job
+# exchanges its runtime identity for a Doppler token, reads the environment's
+# database credentials, and connects to the Cloud SQL private IP over the VPC
+# connector. Database credentials never reach the runner.
+#
+# The job image is built from the caller's deployment/docker/db-reset-job and
+# pushed to the sponsor's own Artifact Registry repository. Identity, the
+# environment's project and the region come from the caller's sponsor.toml,
+# platform constants from its deployment/base-config.json, and the bound
+# GitHub environment's variables supply only DOPPLER_RUNTIME_IDENTITY_ID and,
+# optionally, RESET_JOB_SERVICE_ACCOUNT. The VPC connector is found in the
+# declared project and region. Nothing here names a sponsor.
+#
+# The caller owns dispatch and the per-environment concurrency group.
+on:
+  workflow_call:
+    inputs:
+      target-env:
+        description: "Environment to reset; must be declared in sponsor.toml and is never prod"
+        required: true
+        type: string
+      confirm:
+        description: "The target environment's name typed again"
+        required: true
+        type: string
+    secrets:
+      SLACK_APP_OATH_TOKEN:
+        description: "Slack bot token for reset-outcome notifications"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Every refusal that does not need the environment runs here, before a
+  # reviewer is asked to approve a reset that was going to refuse anyway.
+  resolve:
+    name: Refuse what cannot be reset
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sponsor_id: ${{ steps.identity.outputs.sponsor_id }}
+      doppler_project: ${{ steps.identity.outputs.doppler_project }}
+      declared_project: ${{ steps.identity.outputs.declared_project }}
+      region: ${{ steps.identity.outputs.region }}
+      doppler_audience: ${{ steps.identity.outputs.doppler_audience }}
+      job_image: ${{ steps.identity.outputs.job_image }}
+      registry_host: ${{ steps.identity.outputs.registry_host }}
+      gcp_project_number: ${{ steps.identity.outputs.gcp_project_number }}
+      gcp_sa_email: ${{ steps.identity.outputs.gcp_sa_email }}
+    steps:
+      # Matches bare `prod` or `<anything>-prod`, case-insensitively, so a
+      # caller that bypasses its own dispatch form still cannot reach
+      # production.
+      - name: Refuse production and require the typed confirmation
+        env:
+          TARGET_ENV: ${{ inputs.target-env }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          env_lc="${TARGET_ENV,,}"
+          if [[ "$env_lc" =~ ^(.+-)?prod$ ]]; then
+            echo "::error::Production resets are forbidden. target-env='${TARGET_ENV}'."
+            exit 1
+          fi
+          if [[ "$CONFIRM" != "$TARGET_ENV" ]]; then
+            echo "::error::Confirmation '${CONFIRM}' does not match target environment '${TARGET_ENV}'. Aborting."
+            exit 1
+          fi
+          echo "Confirmed destructive reset of '${TARGET_ENV}'."
+
+      # A reset is operator-triggered on a non-production environment and the
+      # operator is watching the run, so a missing token warns and the reset
+      # continues with its Slack steps skipped.
+      - name: Warn when no Slack token is configured
+        env:
+          SLACK_APP_OATH_TOKEN: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_APP_OATH_TOKEN}" ]; then
+            echo "::warning::The SLACK_APP_OATH_TOKEN secret is missing; this reset will not be announced in Slack."
+          fi
+
+      - name: Check out the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Implements: HHT-OPS-sponsor-name-is-data/B
+      - name: Read the sponsor identity
+        id: identity
+        env:
+          TARGET_ENV: ${{ inputs.target-env }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import tomllib
+
+          def fail(msg):
+              print(f"::error::{msg}")
+              sys.exit(1)
+
+          try:
+              with open("sponsor.toml", "rb") as fh:
+                  ident = tomllib.load(fh)
+          except FileNotFoundError:
+              fail("sponsor.toml is missing from the repository root; it declares the sponsor this repository resets.")
+          for key in ("id", "repository", "doppler_project", "artifact_registry_repository", "region"):
+              if not isinstance(ident.get(key), str) or not ident[key].strip():
+                  fail(f"sponsor.toml: {key} must be a non-empty string")
+          repo_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]
+          if ident["repository"] != repo_name:
+              fail(f"sponsor.toml declares repository '{ident['repository']}' but this run is in '{repo_name}'")
+          target = os.environ["TARGET_ENV"]
+          envs = ident.get("environments") or {}
+          if target not in envs or not isinstance(envs[target], dict):
+              fail(f"target environment '{target}' is not declared in sponsor.toml")
+          project = envs[target].get("gcp_project_id")
+          if not isinstance(project, str) or not project:
+              fail(f"sponsor.toml: environments.{target}.gcp_project_id is required")
+
+          with open("deployment/base-config.json") as fh:
+              base = json.load(fh)
+          def platform(path):
+              node = base
+              for part in path.split("."):
+                  node = node.get(part) if isinstance(node, dict) else None
+              if not isinstance(node, str) or not node:
+                  fail(f"deployment/base-config.json: {path} is required (platform constant)")
+              return node
+          host = platform("gar.host")
+          gar_project = platform("gar.project")
+          outputs = {
+              "sponsor_id": ident["id"],
+              "doppler_project": ident["doppler_project"],
+              "declared_project": project,
+              "region": ident["region"],
+              "doppler_audience": f"doppler-runtime:{ident['doppler_project']}:{target}",
+              "job_image": f"{host}/{gar_project}/{ident['artifact_registry_repository']}/db-reset-job:{os.environ['GITHUB_SHA'][:12]}",
+              "registry_host": host,
+              "gcp_project_number": platform("gcp.project_number"),
+              "gcp_sa_email": platform("gcp.actions_sa_email"),
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              for key, value in outputs.items():
+                  fh.write(f"{key}={value}\n")
+          print(f"Resetting the portal database of '{ident['id']}' in {target} ({project})")
+          PY
+
+  reset:
+    name: Reset portal database (${{ inputs.target-env }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    # The environment's protection rules hold the reset for approval where they
+    # require it, and the environment supplies its Doppler runtime identity.
+    environment: ${{ inputs.target-env }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET_ENV: ${{ inputs.target-env }}
+      DOPPLER_PROJECT: ${{ needs.resolve.outputs.doppler_project }}
+      JOB_IMAGE: ${{ needs.resolve.outputs.job_image }}
+      SPONSOR_ID: ${{ needs.resolve.outputs.sponsor_id }}
+      GCP_PROJECT_ID: ${{ needs.resolve.outputs.declared_project }}
+      GCP_REGION: ${{ needs.resolve.outputs.region }}
+      DOPPLER_RUNTIME_IDENTITY_ID: ${{ vars.DOPPLER_RUNTIME_IDENTITY_ID }}
+      DOPPLER_RUNTIME_AUDIENCE: ${{ needs.resolve.outputs.doppler_audience }}
+      RESET_JOB_SERVICE_ACCOUNT: ${{ vars.RESET_JOB_SERVICE_ACCOUNT }}
+      RESET_JOB_NAME: db-reset
+      # Without the Slack token the notify steps are skipped; the resolve job
+      # has already warned the operator.
+      SLACK_CONFIGURED: ${{ secrets.SLACK_APP_OATH_TOKEN != '' }}
+    steps:
+      # Implements: HHT-OPS-identity-over-keys/F
+      #   The job authenticates to Doppler with the environment's runtime
+      #   identity; there is no stored token to fall back to.
+      - name: Confirm the environment names its runtime identity
+        run: |
+          set -euo pipefail
+          if [ -z "${DOPPLER_RUNTIME_IDENTITY_ID:-}" ]; then
+            echo "::error::environment '$TARGET_ENV' has no DOPPLER_RUNTIME_IDENTITY_ID variable. The org administration repository writes it when it creates the identity."
+            exit 1
+          fi
+          echo "Resetting $DOPPLER_PROJECT/$TARGET_ENV in $GCP_PROJECT_ID ($GCP_REGION)"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load pinned versions
+        run: |
+          set -euo pipefail
+          if [ ! -f .github/versions.env ]; then
+            echo "::error::.github/versions.env is missing; it pins DOPPLER_CLI_VERSION for the reset job image."
+            exit 1
+          fi
+          set -a; source .github/versions.env; set +a
+          if [ -z "${DOPPLER_CLI_VERSION:-}" ]; then
+            echo "::error::.github/versions.env does not pin DOPPLER_CLI_VERSION."
+            exit 1
+          fi
+          echo "DOPPLER_CLI_VERSION=$DOPPLER_CLI_VERSION" >> "$GITHUB_ENV"
+
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate to Google Cloud
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: projects/${{ needs.resolve.outputs.gcp_project_number }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ${{ needs.resolve.outputs.gcp_sa_email }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+
+      # The connector carries the name the network module gives it and must be
+      # in the region sponsor.toml declares; the job reaches the database only
+      # through it.
+      # Implements: HHT-OPS-sponsor-name-is-data/B
+      - name: Locate the environment's VPC connector
+        run: |
+          set -euo pipefail
+          CONNECTOR="${SPONSOR_ID}-${TARGET_ENV}-vpc-con"
+          if ! gcloud compute networks vpc-access connectors describe "$CONNECTOR" \
+                --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format="value(name)" >/dev/null; then
+            echo "::error::VPC connector $CONNECTOR was not found in $GCP_PROJECT_ID region $GCP_REGION, the region sponsor.toml declares."
+            exit 1
+          fi
+          echo "VPC_CONNECTOR=$CONNECTOR" >> "$GITHUB_ENV"
+
+      - name: Build and push the reset job image
+        env:
+          REGISTRY_HOST: ${{ needs.resolve.outputs.registry_host }}
+        run: |
+          set -euo pipefail
+          if [ ! -f deployment/docker/db-reset-job/Dockerfile ]; then
+            echo "::error::deployment/docker/db-reset-job/Dockerfile is missing; the reset job image is built from it."
+            exit 1
+          fi
+          gcloud auth configure-docker "$REGISTRY_HOST" --quiet
+          docker build \
+            --build-arg "DOPPLER_VERSION=${DOPPLER_CLI_VERSION#v}" \
+            -t "$JOB_IMAGE" \
+            deployment/docker/db-reset-job
+          docker push "$JOB_IMAGE"
+
+      # In-VPC: the VPC connector reaches the Cloud SQL private IP, so the job
+      # needs no Cloud SQL Auth proxy and its account no cloudsql.client role.
+      # The entrypoint fetches the database credentials itself through the
+      # runtime identity.
+      - name: Deploy in-VPC reset job
+        run: |
+          set -euo pipefail
+          declare -a args=(
+            run jobs deploy "$RESET_JOB_NAME"
+            --image="$JOB_IMAGE"
+            --project="$GCP_PROJECT_ID"
+            --region="$GCP_REGION"
+            --task-timeout=5m
+            --max-retries=0
+            --vpc-connector="$VPC_CONNECTOR"
+            --set-env-vars="MODE=reset"
+            --set-env-vars="DOPPLER_PROJECT_ID=${DOPPLER_PROJECT}"
+            --set-env-vars="DOPPLER_CONFIG_NAME=${TARGET_ENV}"
+            --set-env-vars="DOPPLER_IDENTITY_ID=${DOPPLER_RUNTIME_IDENTITY_ID}"
+            --set-env-vars="DOPPLER_AUDIENCE=${DOPPLER_RUNTIME_AUDIENCE}"
+          )
+          if [ -n "${RESET_JOB_SERVICE_ACCOUNT}" ]; then
+            args+=(--service-account="$RESET_JOB_SERVICE_ACCOUNT")
+          fi
+          gcloud "${args[@]}"
+
+      - name: Execute reset job
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$RESET_JOB_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --wait
+
+      - name: Notify Slack on reset success
+        if: success() && env.SLACK_CONFIGURED == 'true'
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          event: reset-success
+          env: ${{ inputs.target-env }}
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+          text: ":broom: DB reset of ${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }} succeeded (${{ github.actor }})"
+          blocks: |
+            [
+              {"type":"section","text":{"type":"mrkdwn","text":":broom: *DB reset succeeded* (${{ github.actor }})"}},
+              {"type":"table","rows":[
+                [{"type":"raw_text","text":"env"},     {"type":"raw_text","text":"${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }}"}],
+                [{"type":"raw_text","text":"project"}, {"type":"raw_text","text":"${{ env.GCP_PROJECT_ID }}"}],
+                [{"type":"raw_text","text":"action"},  {"type":"raw_text","text":"in-VPC drop of schemas portal and public; empty owner-held portal schema and portal_runtime role left; a portal deploy must follow"}]
+              ]}
+            ]
+
+      - name: Notify Slack on reset failure
+        if: failure() && env.SLACK_CONFIGURED == 'true'
+        continue-on-error: true
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          event: reset-failure
+          env: ${{ inputs.target-env }}
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+          text: |
+            :rotating_light: *DB reset failed*: `${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }}`
+
+            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>
+            *Actor:* `${{ github.actor }}`
+
+            The portal DB may be partially reset; check the `db-reset` job execution before retrying.
+
+      - name: Summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## Portal DB reset - ${TARGET_ENV}"
+            echo ""
+            echo "- Target project: \`${GCP_PROJECT_ID}\`"
+            if [ "$JOB_STATUS" = "success" ]; then
+              echo "- Action: in-VPC job dropped \`portal\` and \`public\` and recreated both"
+              echo "  empty, owned by the owner role; the runtime role \`portal_runtime\`"
+              echo "  exists with CONNECT on the database."
+              echo "- Next: a portal deploy must follow. Its provisioning job creates the event"
+              echo "  store; until then the portal refuses to open the empty schema."
+            else
+              echo "- Result: the reset job ended \`${JOB_STATUS}\`. Inspect the failed step"
+              echo "  before retrying; the database may be untouched or partially reset."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

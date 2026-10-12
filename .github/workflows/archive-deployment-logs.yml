@@ -1,0 +1,198 @@
+name: "[internal] Archive deployment logs"
+
+# Reusable archival of one sponsor workflow run: its full log, its run
+# metadata and a deployment record, packaged with a checksum and uploaded to
+# the sponsor's archive bucket for seven-year retention.
+#
+# The caller is a thin dispatch wrapper in the sponsor repository, started by
+# the workflow that did the deploying. That workflow passes the run it wants
+# archived and states what operation it was; the operation is never inferred
+# from the run's name, because a called workflow's run carries its parent's
+# name.
+#
+# The archive bucket is the caller repository's ARCHIVE_BUCKET variable. Until
+# it is set the record is still assembled and checksummed, and the run says
+# loudly that nothing durable was written. Platform constants for the upload
+# identity come from the caller's deployment/base-config.json. Nothing here
+# names a sponsor. `workflow_call` only: the caller carries the standard
+# notify-failure job.
+on:
+  workflow_call:
+    inputs:
+      workflow_run_id:
+        description: "Workflow run ID to archive"
+        required: true
+        type: string
+      operation_type:
+        description: "What the archived run did (deploy | hotfix-deploy | manual)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  archive-logs:
+    name: Archive deployment logs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      ARCHIVE_BUCKET: ${{ vars.ARCHIVE_BUCKET }}
+    steps:
+      - name: Check out the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate the request
+        id: workflow
+        env:
+          RUN_ID: ${{ inputs.workflow_run_id }}
+          OPERATION_TYPE: ${{ inputs.operation_type }}
+        run: |
+          set -euo pipefail
+          case "$RUN_ID" in
+            ''|*[!0-9]*)
+              echo "::error::workflow_run_id must be a numeric run id, got '$RUN_ID'"
+              exit 1 ;;
+          esac
+          case "$OPERATION_TYPE" in
+            deploy|hotfix-deploy|manual) ;;
+            *)
+              echo "::error::operation_type must be deploy, hotfix-deploy or manual, got '$OPERATION_TYPE'; a record that cannot say what it records is not written."
+              exit 1 ;;
+          esac
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      # A run that dispatches its own archive is still finishing its last job
+      # when this starts. Wait briefly so the log and the recorded conclusion
+      # are complete; past the ceiling, archive what exists.
+      - name: Wait for the archived run to complete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.workflow.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 18); do
+            STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID" --jq .status)" || STATUS=unknown
+            if [ "$STATUS" = "completed" ]; then
+              echo "run $RUN_ID completed"
+              exit 0
+            fi
+            echo "run $RUN_ID status: $STATUS; waiting 10s (attempt $i/18)"
+            sleep 10
+          done
+          echo "::warning::run $RUN_ID not completed after 3min (tolerated: archiving partial logs)"
+
+      - name: Fetch the run's log and details
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.workflow.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run view "$RUN_ID" --log > deployment-log.txt
+          if [ "$(wc -c < deployment-log.txt)" -gt 50000000 ]; then
+            echo "Log exceeds 50MB, truncating"
+            head -c 50000000 deployment-log.txt > deployment-log-truncated.txt
+            mv deployment-log-truncated.txt deployment-log.txt
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID" > workflow-details.json
+
+      - name: Create and package the deployment record
+        env:
+          RUN_ID: ${{ steps.workflow.outputs.run_id }}
+          OPERATION_TYPE: ${{ inputs.operation_type }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg workflow_id     "$RUN_ID" \
+            --arg workflow_name   "$(jq -r '.name' workflow-details.json)" \
+            --arg operation_type  "$OPERATION_TYPE" \
+            --arg commit_sha      "$(jq -r '.head_sha' workflow-details.json)" \
+            --arg timestamp_start "$(jq -r '.created_at' workflow-details.json)" \
+            --arg timestamp_end   "$(jq -r '.updated_at' workflow-details.json)" \
+            --arg outcome         "$(jq -r '.conclusion' workflow-details.json)" \
+            --arg deployer        "$(jq -r '.actor.login' workflow-details.json)" \
+            --argjson retention   7 \
+            '{
+              artifact_type:   "deployment_log",
+              workflow_id:     $workflow_id,
+              workflow_name:   $workflow_name,
+              operation_type:  $operation_type,
+              commit_sha:      $commit_sha,
+              timestamp_start: $timestamp_start,
+              timestamp_end:   $timestamp_end,
+              outcome:         $outcome,
+              deployer:        $deployer,
+              retention_years: $retention
+            }' > deployment-record.json
+          cat deployment-record.json
+          RECORD_NAME="deployment-${RUN_ID}.tar.gz"
+          tar -czf "$RECORD_NAME" deployment-log.txt deployment-record.json workflow-details.json
+          sha256sum "$RECORD_NAME" > "${RECORD_NAME}.sha256"
+          cat "${RECORD_NAME}.sha256"
+          echo "RECORD_NAME=$RECORD_NAME" >> "$GITHUB_ENV"
+
+      - name: Read the upload identity
+        id: platform
+        if: env.ARCHIVE_BUCKET != ''
+        run: |
+          set -euo pipefail
+          num="$(jq -er '.gcp.project_number' deployment/base-config.json)"
+          sa="$(jq -er '.gcp.actions_sa_email' deployment/base-config.json)"
+          {
+            echo "provider=projects/${num}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+            echo "service_account=${sa}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate to Google Cloud
+        if: env.ARCHIVE_BUCKET != ''
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: ${{ steps.platform.outputs.provider }}
+          service_account: ${{ steps.platform.outputs.service_account }}
+
+      - name: Upload and verify
+        if: env.ARCHIVE_BUCKET != ''
+        run: |
+          set -euo pipefail
+          GS_PATH="gs://${ARCHIVE_BUCKET}/deployments/"
+          gcloud storage cp "$RECORD_NAME"          "$GS_PATH"
+          gcloud storage cp "${RECORD_NAME}.sha256" "$GS_PATH"
+          gcloud storage cp "${GS_PATH}${RECORD_NAME}" verify.tar.gz
+          want="$(sha256sum < "$RECORD_NAME" | cut -d' ' -f1)"
+          got="$(sha256sum < verify.tar.gz | cut -d' ' -f1)"
+          if [ "$want" != "$got" ]; then
+            echo "::error::uploaded record does not match what was packaged (want $want, got $got)"
+            exit 1
+          fi
+          echo "Uploaded and verified ${GS_PATH}${RECORD_NAME}"
+
+      - name: Report an unset archive bucket
+        if: env.ARCHIVE_BUCKET == ''
+        run: |
+          echo "::warning title=Nothing archived::ARCHIVE_BUCKET is not set on this repository, so ${RECORD_NAME} was assembled but not uploaded and dies with the runner."
+
+      - name: Log archival
+        if: always()
+        env:
+          RUN_ID: ${{ steps.workflow.outputs.run_id }}
+          OPERATION_TYPE: ${{ inputs.operation_type }}
+        run: |
+          {
+            echo "## Deployment log archival"
+            echo ""
+            echo "- Source workflow run: \`${RUN_ID}\`"
+            echo "- Operation: \`${OPERATION_TYPE}\`"
+            echo "- Record: \`${RECORD_NAME:-not created}\`"
+            if [ -n "$ARCHIVE_BUCKET" ]; then
+              echo "- Destination: \`gs://${ARCHIVE_BUCKET}/deployments/\`"
+            else
+              echo "- Destination: none (ARCHIVE_BUCKET unset; nothing durable written)"
+            fi
+            echo "- Retention target: 7 years"
+          } >> "$GITHUB_STEP_SUMMARY"
