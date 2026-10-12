@@ -29,6 +29,10 @@ die() {
 version="${1#v}"
 dest="${2:-/usr/local/bin}"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version '$1' is not X.Y.Z (a leading v is accepted)"
+# The action fetches the linux_amd64 asset only; anything else would install a
+# binary that cannot run, after verifying the wrong thing.
+arch="$(uname -m)"
+[ "$arch" = "x86_64" ] || die "supports Linux x86_64 only; this runner is $(uname -s) $arch"
 command -v gpg >/dev/null 2>&1 || die "gpg is required to verify the release signature"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,14 +65,15 @@ grep -Eq "^\[GNUPG:\] VALIDSIG .* ${DOPPLER_CLI_SIGNER_FPR}\$" <<<"$status" ||
 echo "install-doppler-cli: $asset signature verified (key ${DOPPLER_CLI_SIGNER_FPR})"
 
 tar -xzf "$work/$asset" -C "$work" doppler || die "$asset does not contain a doppler binary"
+# Check what the verified tarball holds before it reaches the install dir.
+reported="$("$work/doppler" --version 2>/dev/null | head -1)"
+case "$reported" in
+  *"$version"*) ;;
+  *) die "the binary in $asset reports '$reported', expected $version; not installing it" ;;
+esac
 if [ -w "$dest" ]; then
   install -m 0755 "$work/doppler" "$dest/doppler"
 else
   sudo install -m 0755 "$work/doppler" "$dest/doppler"
 fi
-
-installed="$("$dest/doppler" --version 2>/dev/null | head -1)"
-case "$installed" in
-  *"$version"*) echo "install-doppler-cli: installed doppler $installed at $dest/doppler" ;;
-  *) die "installed binary reports '$installed', expected $version" ;;
-esac
+echo "install-doppler-cli: installed doppler $reported at $dest/doppler"

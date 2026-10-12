@@ -12,7 +12,7 @@
 #
 # This installs the CLI only. Authenticating it is doppler-cli-oidc-auth.
 name: 'Install Doppler CLI (signature-verified)'
-description: 'Install a Doppler CLI release only after verifying Doppler''s signature on it'
+description: 'Install a Doppler CLI release only after verifying Doppler''s signature on it. Linux x86_64 runners only; fails on any other.'
 inputs:
   version:
     description: 'Doppler CLI version, X.Y.Z (a leading v is accepted). Read it from the caller''s versions.env; there is deliberately no default.'

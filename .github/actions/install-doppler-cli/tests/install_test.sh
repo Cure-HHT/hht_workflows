@@ -3,7 +3,8 @@
 #
 # A stand-in `curl` on PATH serves fixture files instead of the network, so
 # each refusal path can be driven: a tampered tarball, a signature made by some
-# other key, a key file swapped for another key, a malformed version. The happy
+# other key, a key file swapped for another key, a malformed version, a
+# non-x86_64 runner, a binary reporting another version. The happy
 # path uses a fixture signed by a throwaway key whose fingerprint the copy of
 # the script under test is pinned to; the real key and a real download are
 # exercised by the install-doppler-cli readiness job.
@@ -101,6 +102,28 @@ cp "$tmp/orig.sig" "$tmp/rel/$version/$asset.sig"
 if run "$good" "latest"; then bad "non X.Y.Z version is refused"; else ok "non X.Y.Z version is refused"; fi
 
 if run "$good" "1.2.3"; then bad "missing release is refused"; elif grep -q 'could not download' "$tmp/log"; then ok "missing release is refused"; else bad "missing release is refused (wrong reason)"; fi
+
+# A non-x86_64 runner is refused before anything is downloaded.
+mkdir -p "$tmp/armbin"
+cat >"$tmp/armbin/uname" <<'SHIM'
+#!/bin/sh
+if [ "$1" = "-m" ]; then echo aarch64; else echo Linux; fi
+SHIM
+chmod +x "$tmp/armbin/uname"
+if env -u GNUPGHOME PATH="$tmp/armbin:$tmp/bin:$PATH" DOPPLER_RELEASE_BASE_URL=https://fixture.invalid/download \
+  "$good/install.sh" "$version" "$tmp/out" >"$tmp/log" 2>&1; then
+  bad "non-x86_64 runner is refused"
+elif grep -q 'x86_64 only' "$tmp/log"; then ok "non-x86_64 runner is refused"; else bad "non-x86_64 runner is refused (wrong reason)"; cat "$tmp/log"; fi
+
+# A signed tarball whose binary reports another version never reaches the install dir.
+other_version=8.8.8
+other_asset="doppler_${other_version}_linux_amd64.tar.gz"
+mkdir -p "$tmp/rel/$other_version" "$tmp/build2"
+printf '#!/bin/sh\necho "v1.0.0"\n' >"$tmp/build2/doppler"
+chmod +x "$tmp/build2/doppler"
+tar -czf "$tmp/rel/$other_version/$other_asset" -C "$tmp/build2" doppler
+gpg --batch --yes -u signer@example.invalid --detach-sign -o "$tmp/rel/$other_version/$other_asset.sig" "$tmp/rel/$other_version/$other_asset"
+if run "$good" "$other_version"; then bad "binary reporting another version is not installed"; elif [ ! -e "$tmp/out/doppler" ] && grep -q 'not installing it' "$tmp/log"; then ok "binary reporting another version is not installed"; else bad "binary reporting another version is not installed (wrong reason)"; cat "$tmp/log"; fi
 
 : "$other_fpr"
 echo "$pass passed, $fail failed"

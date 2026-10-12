@@ -26,6 +26,12 @@ against a downloaded copy), release this repository, and re-pin consumers. The
 optional `sha256` input lets a caller assert the digest it expects; it must
 agree with `digests` and cannot admit an unrecorded version.
 
+## Runners
+
+Linux x86_64 only: the action fetches the linux amd64/x64 release asset. On any
+other architecture it fails before downloading anything, and it fails if `sha256sum` is missing. The binary's
+reported version is checked in the work directory, before it is installed.
+
 ## Tests
 
 `tests/install_test.sh` covers the refusal paths offline. The

@@ -24,6 +24,12 @@ Signature verification covers any Doppler release, so a version bump needs no
 change here. The release key expires on 2029-10-29; when Doppler rotates it,
 update `doppler-cli-release.asc` and the pinned fingerprint together.
 
+## Runners
+
+Linux x86_64 only: the action fetches the linux amd64/x64 release asset. On any
+other architecture it fails before downloading anything. The binary's
+reported version is checked in the work directory, before it is installed.
+
 ## Tests
 
 `tests/install_test.sh` drives every refusal path offline (tampered tarball,

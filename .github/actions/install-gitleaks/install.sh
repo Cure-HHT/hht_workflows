@@ -20,6 +20,11 @@ version="${1#v}"
 given="${2:-}"
 dest="${3:-/usr/local/bin}"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version '$1' is not X.Y.Z (a leading v is accepted)"
+# The action fetches the linux_x64 asset only; anything else would install a
+# binary that cannot run.
+arch="$(uname -m)"
+[ "$arch" = "x86_64" ] || die "supports Linux x86_64 only; this runner is $(uname -s) $arch"
+command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify the download"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 recorded="$(awk -v v="$version" '$1 == v { print $2 }' "$here/digests")"
@@ -41,13 +46,15 @@ actual="$(sha256sum "$work/$asset" | cut -d' ' -f1)"
 echo "install-gitleaks: $asset matches recorded SHA-256"
 
 tar -xzf "$work/$asset" -C "$work" gitleaks || die "$asset does not contain a gitleaks binary"
+# Check what the verified tarball holds before it reaches the install dir.
+reported="$("$work/gitleaks" version 2>/dev/null | head -1)"
+case "$reported" in
+  *"$version"*) ;;
+  *) die "the binary in $asset reports '$reported', expected $version; not installing it" ;;
+esac
 if [ -w "$dest" ]; then
   install -m 0755 "$work/gitleaks" "$dest/gitleaks"
 else
   sudo install -m 0755 "$work/gitleaks" "$dest/gitleaks"
 fi
-installed="$("$dest/gitleaks" version 2>/dev/null | head -1)"
-case "$installed" in
-  *"$version"*) echo "install-gitleaks: installed gitleaks $installed at $dest/gitleaks" ;;
-  *) die "installed binary reports '$installed', expected $version" ;;
-esac
+echo "install-gitleaks: installed gitleaks $reported at $dest/gitleaks"
