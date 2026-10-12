@@ -72,6 +72,34 @@ def test_non_numeric_run_id_is_refused(tmp_path, run_id):
     assert "numeric run id" in r.stdout
 
 
+BUILDS_VALIDATE = _run_body(BUILDS, "Validate the request")
+
+
+def _validate_builds(reports_run_id, deploy_run_id=""):
+    env = {**os.environ, "REPORTS_RUN_ID": reports_run_id, "DEPLOY_RUN_ID": deploy_run_id}
+    return subprocess.run(["bash", "-c", BUILDS_VALIDATE], env=env, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("deploy_run_id", ["", "456"])
+def test_build_archive_numeric_run_ids_are_accepted(deploy_run_id):
+    r = _validate_builds("123", deploy_run_id)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("run_id", ["", "12a", "../1"])
+def test_build_archive_non_numeric_reports_run_id_is_refused(run_id):
+    """A bad id would only miss the download, which is tolerated, and archive nothing."""
+    r = _validate_builds(run_id)
+    assert r.returncode != 0
+    assert "reports_run_id must be a numeric run id" in r.stdout
+
+
+def test_build_archive_non_numeric_deploy_run_id_is_refused():
+    r = _validate_builds("123", "../1")
+    assert r.returncode != 0
+    assert "deploy_run_id" in r.stdout
+
+
 # Verifies: HHT-OPS-sponsor-name-is-data/B
 def test_archive_sponsor_is_read_from_sponsor_toml(tmp_path):
     (tmp_path / "sponsor.toml").write_text('schema = 1\nid = "example"\n')

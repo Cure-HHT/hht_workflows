@@ -144,6 +144,8 @@ jobs:
           TARGET_ENV: ${{ inputs.target-env }}
           IMAGE_PATH: ${{ inputs.image_path }}
           SERVICE_NAME: ${{ inputs.service-name }}
+          VERIFY_SOURCE_PROJECT: ${{ inputs.verify_source_project }}
+          EXPECTED_DIGEST: ${{ inputs.expected_digest }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -226,6 +228,11 @@ jobs:
           pattern = re.escape(prefix) + r"[a-z0-9._/-]+@sha256:[a-f0-9]{64}"
           if not re.fullmatch(pattern, image):
               errors.append(f"image_path must be an immutable digest reference under {prefix}, got '{image}'")
+
+          # The post-approval recheck runs only when both halves are given; one
+          # without the other would silently skip it.
+          if bool(os.environ.get("VERIFY_SOURCE_PROJECT")) != bool(os.environ.get("EXPECTED_DIGEST")):
+              errors.append("verify_source_project and expected_digest must be given together or not at all")
           if errors:
               fail()
 
@@ -373,6 +380,9 @@ jobs:
       VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
       DOPPLER_RUNTIME_IDENTITY_ID: ${{ vars.DOPPLER_RUNTIME_IDENTITY_ID }}
       DOPPLER_RUNTIME_AUDIENCE: ${{ vars.DOPPLER_RUNTIME_AUDIENCE }}
+      # The Slack token is optional; without it the notify steps are skipped
+      # rather than failing a deploy that succeeded.
+      SLACK_CONFIGURED: ${{ secrets.SLACK_APP_OATH_TOKEN != '' }}
       # How long a portal boot waits for the database's boot lock. The revision
       # receives it as an env var, and the verify step waits this long plus a
       # catch-up margin.
@@ -426,12 +436,16 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$CLOUD_SQL_CONNECTION" =~ ^[a-z][a-z0-9-]*:([a-z0-9-]+):[a-z0-9-]+$ ]]; then
+          if [[ ! "$CLOUD_SQL_CONNECTION" =~ ^([a-z][a-z0-9-]*):([a-z0-9-]+):[a-z0-9-]+$ ]]; then
             echo "::error::CLOUD_SQL_CONNECTION '$CLOUD_SQL_CONNECTION' is not a <project>:<region>:<instance> connection name."
             exit 1
           fi
-          if [ "${BASH_REMATCH[1]}" != "$GCP_REGION" ]; then
-            echo "::error::CLOUD_SQL_CONNECTION is in region '${BASH_REMATCH[1]}' but GCP_REGION is '$GCP_REGION'."
+          if [ "${BASH_REMATCH[1]}" != "$GCP_PROJECT_ID" ]; then
+            echo "::error::CLOUD_SQL_CONNECTION is in project '${BASH_REMATCH[1]}' but GCP_PROJECT_ID is '$GCP_PROJECT_ID'."
+            exit 1
+          fi
+          if [ "${BASH_REMATCH[2]}" != "$GCP_REGION" ]; then
+            echo "::error::CLOUD_SQL_CONNECTION is in region '${BASH_REMATCH[2]}' but GCP_REGION is '$GCP_REGION'."
             exit 1
           fi
 
@@ -824,7 +838,7 @@ jobs:
       # bookmark keeps exactly one "live versions" entry per environment in the
       # routed channel.
       - name: Notify Slack on deploy success
-        if: success()
+        if: success() && env.SLACK_CONFIGURED == 'true'
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
           event: deploy-success
@@ -848,7 +862,7 @@ jobs:
       # cannot become the visible terminal failure; the step that failed stays
       # the attributed cause.
       - name: Notify Slack on deploy failure
-        if: failure()
+        if: failure() && env.SLACK_CONFIGURED == 'true'
         continue-on-error: true
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
@@ -929,6 +943,8 @@ jobs:
     permissions:
       contents: read
       id-token: write   # keyless cosign via GitHub OIDC -> Sigstore
+    env:
+      SLACK_CONFIGURED: ${{ secrets.SLACK_APP_OATH_TOKEN != '' }}
     steps:
       - name: Checkout (for slack-channels.yml routing)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -986,7 +1002,7 @@ jobs:
           cosign attest --yes --type cyclonedx --predicate sbom-cyclonedx.json "$IMAGE_PATH"
 
       - name: Notify Slack on attest failure
-        if: failure()
+        if: failure() && env.SLACK_CONFIGURED == 'true'
         continue-on-error: true
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:

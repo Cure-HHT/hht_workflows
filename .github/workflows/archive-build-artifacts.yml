@@ -70,6 +70,26 @@ jobs:
           print(f"Sponsor: {sponsor}")
           PY
 
+      # A run id that is not one would only make the download below miss, and
+      # that miss is tolerated; refuse it here so a typo cannot pass as a
+      # metadata-only archive.
+      - name: Validate the request
+        env:
+          REPORTS_RUN_ID: ${{ inputs.reports_run_id }}
+          DEPLOY_RUN_ID: ${{ inputs.deploy_run_id }}
+        run: |
+          set -euo pipefail
+          case "$REPORTS_RUN_ID" in
+            ''|*[!0-9]*)
+              echo "::error::reports_run_id must be a numeric run id, got '$REPORTS_RUN_ID'"
+              exit 1 ;;
+          esac
+          case "$DEPLOY_RUN_ID" in
+            *[!0-9]*)
+              echo "::error::deploy_run_id must be empty or a numeric run id, got '$DEPLOY_RUN_ID'"
+              exit 1 ;;
+          esac
+
       - name: Get version
         id: version
         run: |

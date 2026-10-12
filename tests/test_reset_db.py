@@ -195,3 +195,13 @@ def test_guards_run_before_the_environment_approval():
 
 def test_no_stored_doppler_token_is_read():
     assert "secrets.DOPPLER_TOKEN" not in TEXT
+
+
+def test_slack_notifications_are_skipped_without_a_token():
+    """The Slack secret is optional, so no notify step may run without it."""
+    spec = DOC["jobs"]["reset"]
+    assert spec["env"]["SLACK_CONFIGURED"] == "${{ secrets.SLACK_APP_OATH_TOKEN != '' }}"
+    notify = [s for s in spec["steps"] if "slack-notify" in s.get("uses", "")]
+    assert notify
+    for step in notify:
+        assert "env.SLACK_CONFIGURED == 'true'" in step["if"], step["name"]

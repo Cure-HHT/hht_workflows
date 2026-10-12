@@ -176,6 +176,9 @@ jobs:
       DOPPLER_RUNTIME_AUDIENCE: ${{ vars.DOPPLER_RUNTIME_AUDIENCE }}
       RESET_JOB_SERVICE_ACCOUNT: ${{ vars.RESET_JOB_SERVICE_ACCOUNT }}
       RESET_JOB_NAME: db-reset
+      # The Slack token is optional; without it the notify steps are skipped
+      # rather than failing a reset that succeeded.
+      SLACK_CONFIGURED: ${{ secrets.SLACK_APP_OATH_TOKEN != '' }}
     steps:
       # Implements: HHT-OPS-identity-over-keys/F
       #   The job authenticates to Doppler with the environment's runtime
@@ -278,7 +281,7 @@ jobs:
             --wait
 
       - name: Notify Slack on reset success
-        if: success()
+        if: success() && env.SLACK_CONFIGURED == 'true'
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
           event: reset-success
@@ -296,7 +299,7 @@ jobs:
             ]
 
       - name: Notify Slack on reset failure
-        if: failure()
+        if: failure() && env.SLACK_CONFIGURED == 'true'
         continue-on-error: true
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:

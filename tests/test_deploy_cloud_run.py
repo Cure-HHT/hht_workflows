@@ -181,6 +181,22 @@ def test_image_by_tag_refuses(identity):
     assert "image_path must be an immutable digest reference" in r.stdout
 
 
+@pytest.mark.parametrize(
+    "half",
+    [{"VERIFY_SOURCE_PROJECT": "example-proj-qa"}, {"EXPECTED_DIGEST": GOOD_IMAGE}],
+)
+def test_half_supplied_recheck_refuses(identity, half):
+    """One recheck input without the other would silently skip the recheck."""
+    r = identity(**half)
+    assert r.returncode != 0
+    assert "verify_source_project and expected_digest" in r.stdout
+
+
+def test_complete_recheck_inputs_pass(identity):
+    r = identity(VERIFY_SOURCE_PROJECT="example-proj-qa", EXPECTED_DIGEST=GOOD_IMAGE)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_unknown_service_refuses(identity):
     r = identity(SERVICE_NAME="diary-service")
     assert r.returncode != 0
@@ -257,6 +273,12 @@ def test_database_in_another_region_refuses(cross_check):
     r = cross_check(CLOUD_SQL_CONNECTION="example-proj-dev:region1:example-dev-db")
     assert r.returncode != 0
     assert "CLOUD_SQL_CONNECTION" in r.stdout
+
+
+def test_database_in_another_project_refuses(cross_check):
+    r = cross_check(CLOUD_SQL_CONNECTION="example-proj-uat:region9:example-uat-db")
+    assert r.returncode != 0
+    assert "CLOUD_SQL_CONNECTION is in project 'example-proj-uat'" in r.stdout
 
 
 def test_malformed_database_connection_refuses(cross_check):
@@ -347,3 +369,13 @@ def test_every_remote_action_is_pinned_by_commit():
             continue
         ref = m.group(1).split("@", 1)[1]
         assert re.fullmatch(r"[0-9a-f]{40}", ref), ln.strip()
+
+
+def test_slack_notifications_are_skipped_without_a_token():
+    """The Slack secret is optional, so no notify step may run without it."""
+    for job in ("deploy", "attest-image"):
+        spec = DOC["jobs"][job]
+        assert spec["env"]["SLACK_CONFIGURED"] == "${{ secrets.SLACK_APP_OATH_TOKEN != '' }}"
+        for step in spec["steps"]:
+            if "slack-notify" in step.get("uses", ""):
+                assert "env.SLACK_CONFIGURED == 'true'" in step["if"], step["name"]
