@@ -92,6 +92,31 @@ def _repo(tmp_path: pathlib.Path, changed: list[str], merge: bool = True) -> pat
     return repo
 
 
+def _repo_with_ops(tmp_path: pathlib.Path, base_files: list[str], ops: list[list[str]]) -> pathlib.Path:
+    """A merge-shaped repo whose base holds `base_files` and whose PR runs git `ops`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _write(repo, "README.md")
+    for rel in base_files:
+        # Identical content keeps rename detection maximally eager.
+        _write(repo, rel, "same content, long enough to be matched as a rename\n" * 5)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "checkout", "-q", "-b", "pr")
+    for op in ops:
+        if op[0] == "mv":
+            (repo / op[2]).parent.mkdir(parents=True, exist_ok=True)
+        _git(repo, *op)
+    _git(repo, "commit", "-q", "-m", "pr")
+    _git(repo, "checkout", "-q", "main")
+    _write(repo, "unrelated-on-main.txt")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "main moves on")
+    _git(repo, "merge", "-q", "--no-ff", "--no-edit", "pr")
+    return repo
+
+
 def _decide(repo: pathlib.Path, event: str = "pull_request") -> dict[str, str]:
     out = repo / "github_output"
     out.write_text("")
@@ -175,3 +200,26 @@ def test_the_workflow_still_reports_on_every_pull_request():
     assert triggers["pull_request"] in ({}, None), (
         "pull_request must stay unfiltered so every required context reports"
     )
+
+
+def test_a_file_moved_out_of_a_gated_directory_runs_that_job(tmp_path):
+    # Rename detection would list only docs/moved.py, and cosign-verify would
+    # report `skipped` for a change that removed one of its inputs.
+    src = ".github/actions/cosign-verify/helper.py"
+    repo = _repo_with_ops(tmp_path, [src], [["mv", src, "docs/moved.py"]])
+    values = _decide(repo)
+    assert values["cosign"] == "true"
+
+
+def test_a_file_moved_into_a_gated_directory_runs_that_job(tmp_path):
+    dst = "scripts/urs-compile/helper.py"
+    repo = _repo_with_ops(tmp_path, ["docs/helper.py"], [["mv", "docs/helper.py", dst]])
+    assert _decide(repo)["urs"] == "true"
+
+
+def test_a_pure_deletion_in_a_gated_directory_runs_that_job(tmp_path):
+    src = ".github/actions/sponsor-base-preflight/preflight.py"
+    repo = _repo_with_ops(tmp_path, [src], [["rm", "-q", src]])
+    values = _decide(repo)
+    assert values["preflight"] == "true"
+    assert {k for k, v in values.items() if v == "true"} == {"preflight"}
