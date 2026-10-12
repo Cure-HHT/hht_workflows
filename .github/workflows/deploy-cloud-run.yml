@@ -349,9 +349,9 @@ jobs:
     name: Deploy selected Cloud Run service
     needs: [resolve, verify-the-record]
     runs-on: ubuntu-latest
-    # Implements: HHT-OPS-environment-bound-deploy-identity/D
-    #   The deploy holds the target environment: its protection rules gate this
-    #   job, and its variables are the only source of per-environment facts.
+    # The environment binding gates this job on the target environment's
+    # protection rules, and its variables are the only source of
+    # per-environment facts.
     environment: ${{ inputs.approval_environment != '' && inputs.approval_environment || inputs.target-env }}
     permissions:
       contents: read

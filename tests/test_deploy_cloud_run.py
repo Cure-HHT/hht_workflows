@@ -318,7 +318,6 @@ def test_declares_no_concurrency_of_its_own():
         assert "concurrency" not in job
 
 
-# Verifies: HHT-OPS-environment-bound-deploy-identity/D
 def test_deploy_job_is_bound_to_a_deployment_environment():
     deploy = DOC["jobs"]["deploy"]
     assert "environment" in deploy
