@@ -27,6 +27,9 @@ on:
       - '.github/actions/cloud-run-resolve-serving-digest/**'
       - '.github/workflows/promote-template.yml'
       - '.github/workflows/deploy-cloud-run.yml'
+      - '.github/workflows/reset-db.yml'
+      - '.github/workflows/archive-deployment-logs.yml'
+      - '.github/workflows/archive-build-artifacts.yml'
       # The urs-compile suite had no CI runner at all: a pre-existing
       # failure sat unnoticed because nothing ever executed it.
       - 'scripts/urs-compile/**'
@@ -140,6 +143,13 @@ jobs:
         run: |
           set -euo pipefail
           pytest tests/test_deploy_cloud_run.py -v
+      # The reset's production refusal, typed confirmation and environment
+      # cross-check, and the archives' refusal to write a record that cannot
+      # say what it records.
+      - name: Run reset-db and archive workflow tests
+        run: |
+          set -euo pipefail
+          pytest tests/test_reset_db.py tests/test_archive_workflows.py -v
       # The refusal program the pipeline image carries. Its load-bearing case is
       # that an ABSENT verdict refuses: a missing result means the step never
       # ran, and reading that as a pass is how a gate reports success for work

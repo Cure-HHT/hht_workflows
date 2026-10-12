@@ -37,6 +37,8 @@ scripts/publish/tests
 .github/actions/cloud-run-resolve-serving-digest/tests
 tests/test_promote_template.py
 tests/test_deploy_cloud_run.py
+tests/test_reset_db.py
+tests/test_archive_workflows.py
 bootstrap/tests
 scripts/oq-compile/test_oq_compile'
 

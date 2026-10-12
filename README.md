@@ -355,6 +355,30 @@ jobs:
       SLACK_APP_OATH_TOKEN: ${{ secrets.SLACK_APP_OATH_TOKEN }}
 ```
 
+## Sponsor database reset and archives
+
+Three more reusable workflows a sponsor repository calls through thin wrappers,
+each reading the sponsor's identity from its `sponsor.toml` and naming no
+sponsor itself:
+
+- [`.github/workflows/reset-db.yml`](.github/workflows/reset-db.yml) resets a
+  portal database in one non-production environment. It refuses `prod` and
+  any `<name>-prod`, requires the target typed again in `confirm`, and checks
+  the bound environment's variables against `sponsor.toml` before a reviewer
+  is asked. The job image is built from the caller's
+  `deployment/docker/db-reset-job` and runs in-VPC under the environment's
+  Doppler runtime identity. `RESET_JOB_SERVICE_ACCOUNT` (environment variable)
+  optionally names the account the job runs as.
+- [`.github/workflows/archive-deployment-logs.yml`](.github/workflows/archive-deployment-logs.yml)
+  archives one run's log and a deployment record; the caller states the
+  operation (`deploy`, `hotfix-deploy` or `manual`).
+- [`.github/workflows/archive-build-artifacts.yml`](.github/workflows/archive-build-artifacts.yml)
+  archives a commit's build reports with archive metadata.
+
+Both archives upload to the caller repository's `ARCHIVE_BUCKET` variable and
+verify the upload against the packaged checksum. With the variable unset the
+record is assembled but the run warns that nothing durable was written.
+
 ## Fresh-clone conformance (repo-bootstrap)
 
 Every covered repo owes a fresh clone a documented path from "just cloned" to
