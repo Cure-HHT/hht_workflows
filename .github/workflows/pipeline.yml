@@ -130,13 +130,14 @@ jobs:
           print("refuse refused for both reasons, and said which was which")
           PY
 
+      - name: Install gitleaks
+        uses: ./.github/actions/install-gitleaks
+        with:
+          version: ${{ env.GITLEAKS_VERSION }}
+
       - name: The layer scan can actually fail
         run: |
           set -euo pipefail
-
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
-          gitleaks version
 
           docker build -f .github/fixtures/pipeline-leak/Dockerfile \
             -t pipeline-leak:local .github/fixtures/pipeline-leak
@@ -178,11 +179,14 @@ jobs:
                 --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
                 -t pipeline:local -
 
+      - name: Install gitleaks
+        uses: ./.github/actions/install-gitleaks
+        with:
+          version: ${{ env.GITLEAKS_VERSION }}
+
       - name: Scan every layer before publishing
         run: |
           set -euo pipefail
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
           ./scripts/pipeline/scan-layers.sh pipeline:local
 
       - name: Publish

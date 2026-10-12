@@ -1,0 +1,34 @@
+# download-integrity-check — composite action.
+#
+# Runs the download-integrity pre-commit hook against every file in the
+# consumer repo. The CI-side counterpart to the local hook
+# (hooks/download-integrity/): a bypassed local hook (--no-verify), a
+# contributor without pre-commit installed, or a bot-authored PR would
+# otherwise land an unverified download with the hook never having run.
+# Requires the consumer repo to have `download-integrity` configured as a hook
+# in its own `.pre-commit-config.yaml` (see hooks/download-integrity/README.md
+# "Usage in a consumer repo").
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file). Consumers SHA-pin:
+#   - uses: Cure-HHT/hht_workflows/.github/actions/download-integrity-check@<sha>
+name: 'download-integrity'
+description: 'Run the download-integrity pre-commit hook against all files in CI'
+runs:
+  using: 'composite'
+  steps:
+    # Caller must `actions/checkout` before invoking this action.
+    - name: Install pre-commit
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install --user "pre-commit==4.6.0"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    # Implements: HHT-OPS-ci-tool-download-integrity/C
+    - name: Run download-integrity
+      shell: bash
+      run: |
+        set -euo pipefail
+        # pre-commit's own output is the failure signal: it separates real
+        # findings (the hook prints file:line and the reason) from
+        # configuration errors such as a missing hook id.
+        pre-commit run download-integrity --all-files --show-diff-on-failure

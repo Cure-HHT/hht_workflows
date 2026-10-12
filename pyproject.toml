@@ -18,11 +18,16 @@ description = "Cure-HHT-specific pre-commit hooks distributed from cure-hht/hht_
 # which is 3.11+. On 3.10 it exits 2 with "needs Python 3.11+" -- so the
 # declared floor was one release below the one the code actually needs.
 requires-python = ">=3.11"
+# download-integrity reads workflows as YAML: the job graph, not a grep, decides
+# which step a download belongs to. Pinned for the same reason as the test
+# extras below.
+dependencies = ["PyYAML==6.0.3"]
 
 [project.scripts]
 release-notes-update = "release_notes_update.__main__:main"
 no-or-true-guard = "no_or_true_guard.__main__:main"
 confidential-terms-scan = "confidential_terms_scan.__main__:main"
+download-integrity = "download_integrity.__main__:main"
 
 [project.optional-dependencies]
 # Pinned, not floated. The purpose is control of what may enter a build --
@@ -47,4 +52,4 @@ test = [
 # second hook, drop its package into hooks/<name>/ and add the path to `where`
 # plus a new [project.scripts] entry above.
 [tool.setuptools.packages.find]
-where = ["hooks/release-notes-update", "hooks/no-or-true-guard", "hooks/confidential-terms-scan"]
+where = ["hooks/release-notes-update", "hooks/no-or-true-guard", "hooks/confidential-terms-scan", "hooks/download-integrity"]

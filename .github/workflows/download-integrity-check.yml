@@ -1,0 +1,64 @@
+# download-integrity — emits a check named exactly "download-integrity" so it's
+# discoverable by the Validation Summary aggregate.
+#
+# This is hht_workflows's own consumption of the canonical composite action
+# at .github/actions/download-integrity-check/ (CI-side counterpart to the
+# local pre-commit dogfooding already configured in .pre-commit-config.yaml).
+# Other Cure-HHT repos consume the same logic by
+# `uses: Cure-HHT/hht_workflows/.github/actions/download-integrity-check@<ref>`.
+#
+# Only this repo's own wrapper needs the "Install this repo" step below:
+# the download-integrity hook here is `repo: local` + `language: system`
+# (see .pre-commit-config.yaml for why), which execs whatever's already on
+# PATH rather than installing anything itself — same reason tools/setup-repo.sh
+# does this for local dev. Consumer repos reference download-integrity via
+# the HOSTED repo (`repo: https://github.com/Cure-HHT/hht_workflows`),
+# which pre-commit installs correctly on its own; they don't need this step.
+
+name: download-integrity
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+concurrency:
+  group: download-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: download-integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0; required for ./.github/actions resolution
+      - name: Install this repo (for the local download-integrity hook's PATH resolution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/download-integrity-check
+
+  # Implements: HHT-OPS-failure-notification-routing/A
+  #   The standard job, verbatim — notify-failure-lint checks it literally.
+  #   `name:` is set so this reports as "Notify failure" and does not collide
+  #   with any other check context.
+  notify-failure:
+    name: Notify failure
+    needs: [check]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+        with:
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}

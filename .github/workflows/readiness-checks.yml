@@ -83,15 +83,11 @@ jobs:
         # the readiness check exercises the action against the same CLI
         # version downstream consumers run in production. Bump path: bump
         # in hht_admin/.github/versions.env first, then update this inline
-        # pin to match.
-        env:
-          DOPPLER_CLI_VERSION: v3.75.1
-        run: |
-          set -euo pipefail
-          curl -Ls --tlsv1.2 --proto "=https" --retry 3 \
-            https://cli.doppler.com/install.sh \
-            | sudo sh -s -- --version "${DOPPLER_CLI_VERSION#v}"
-          doppler --version
+        # pin to match. Installed through install-doppler-cli, which checks
+        # Doppler's release signature instead of piping install.sh to sudo.
+        uses: ./.github/actions/install-doppler-cli
+        with:
+          version: v3.75.1
       - name: Mint Doppler CLI token via doppler-cli-oidc-auth
         # Reuse the existing readiness identity if a CLI-specific one is
         # not provisioned. The action only needs the identity ID; project
@@ -883,6 +879,65 @@ jobs:
           if [ "$failed" -ne 0 ]; then exit 1; fi
           echo "Linter correctly rejected all three non-conforming fixtures."
 
+  install-doppler-cli:
+    # Verifies: HHT-OPS-ci-tool-download-integrity/A+B
+    #   The real release installs after its signature verifies against the
+    #   pinned Doppler CLI key; the offline suite drives every refusal path
+    #   (tampered tarball, other key, swapped key file, bad version).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Refusal paths (offline)
+        run: bash .github/actions/install-doppler-cli/tests/install_test.sh
+      - name: Install a real release via the action
+        uses: ./.github/actions/install-doppler-cli
+        with:
+          version: v3.75.1
+      - name: Assert the installed CLI is the requested version
+        run: |
+          set -euo pipefail
+          doppler --version | grep -q '3.75.1'
+
+  install-gitleaks:
+    # Verifies: HHT-OPS-ci-tool-download-integrity/A+B
+    #   The real release installs after matching its recorded digest; a
+    #   caller digest that disagrees is refused; the offline suite drives the
+    #   rest (changed tarball, unrecorded version, bad version).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Refusal paths (offline)
+        run: bash .github/actions/install-gitleaks/tests/install_test.sh
+      - name: Install a real release via the action
+        uses: ./.github/actions/install-gitleaks
+        with:
+          version: 8.29.0
+      - name: Assert the installed scanner is the requested version
+        run: |
+          set -euo pipefail
+          gitleaks version | grep -qx '8.29.0'
+      - name: A disagreeing caller digest is refused (negative case)
+        id: wrong-digest
+        continue-on-error: true
+        uses: ./.github/actions/install-gitleaks
+        with:
+          version: 8.29.0
+          sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+          install-dir: ${{ runner.temp }}
+      - name: Assert the negative case failed
+        env:
+          OUTCOME: ${{ steps.wrong-digest.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::install-gitleaks accepted a digest that disagrees with its record (outcome: $OUTCOME)"
+            exit 1
+          fi
+
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.
@@ -907,6 +962,8 @@ jobs:
       - doppler-cli-oidc-auth
       - doppler-oidc-auth
       - gcp-wif-auth
+      - install-doppler-cli
+      - install-gitleaks
       - no-op
       - notify-failure-lint-readiness
       - notify-failure-readiness
