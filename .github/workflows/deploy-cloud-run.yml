@@ -20,10 +20,12 @@ name: "[internal] Deploy Cloud Run service"
 #   - the caller's deployment/base-config.json (the Sponsor Build
 #     Configuration): platform constants only -- the registry host and project,
 #     and the workload identity project number and service account;
-#   - the variables of the GitHub environment the deploy job is bound to,
-#     written there by the sponsor's Terraform: GCP_PROJECT_ID, GCP_REGION,
-#     CLOUD_SQL_CONNECTION, VPC_CONNECTOR, DOPPLER_RUNTIME_IDENTITY_ID and
-#     DOPPLER_RUNTIME_AUDIENCE. Adding an environment needs no edit here.
+#   - the variables of the GitHub environment the deploy job is bound to:
+#     GCP_PROJECT_ID, GCP_REGION, CLOUD_SQL_CONNECTION, VPC_CONNECTOR and
+#     DOPPLER_RUNTIME_AUDIENCE, written there by the sponsor's Terraform, and
+#     DOPPLER_RUNTIME_IDENTITY_ID, written there by the org administration
+#     repository that creates the identity. Adding an environment needs no
+#     edit here.
 #
 # Image paths are computed from the identity and the platform constants, never
 # read from configuration, so a build configuration carrying identity cannot

@@ -325,7 +325,7 @@ from the caller:
 |---|---|
 | `sponsor.toml` (repository root) | sponsor id, Doppler project, repository, Artifact Registry repository, each environment's GCP project and optional portal domain |
 | `deployment/base-config.json` | platform constants only: `gar.host`, `gar.project`, `gcp.project_number`, `gcp.actions_sa_email` |
-| the bound GitHub environment's variables | `GCP_PROJECT_ID`, `GCP_REGION`, `CLOUD_SQL_CONNECTION`, `VPC_CONNECTOR`, `DOPPLER_RUNTIME_IDENTITY_ID`, `DOPPLER_RUNTIME_AUDIENCE` |
+| the bound GitHub environment's variables | `GCP_PROJECT_ID`, `GCP_REGION`, `CLOUD_SQL_CONNECTION`, `VPC_CONNECTOR`, `DOPPLER_RUNTIME_AUDIENCE` (written by the sponsor's Terraform); `DOPPLER_RUNTIME_IDENTITY_ID` (written by the org administration repository) |
 
 The image path is accepted only under
 `<gar.host>/<gar.project>/<artifact_registry_repository>/`, and the
