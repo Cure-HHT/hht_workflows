@@ -134,6 +134,7 @@ def latest_runs(workflow_runs: Iterable[dict]) -> list[dict]:
     return list(best.values())
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
              check_name: str, ignore_workflows: Iterable[str]) -> Evaluation:
     ignore_workflows = set(ignore_workflows)
@@ -543,6 +544,7 @@ def _append(path: str | None, text: str) -> None:
             fh.write(text + "\n")
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = _now, log=print) -> int:
     repo = env["GITHUB_REPOSITORY"]

@@ -71,6 +71,7 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # Implements: HHT-OPS-composite-action-library/A+F
     - name: Evaluate and publish Validation Summary
       id: gate
       shell: bash
