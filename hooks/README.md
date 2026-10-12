@@ -10,6 +10,7 @@ id, entry point, and stage.
 | --- | --- | --- |
 | [`release-notes-update`](release-notes-update/) | pre-commit | Maintain per-PR release-notes fragments and consolidate them into `RELEASE_NOTES.md` |
 | [`no-or-true-guard`](no-or-true-guard/) | pre-commit | Block the `\|\| true` / `\|\| :` shell short-circuit fallback |
+| [`download-integrity`](download-integrity/) | pre-commit | Refuse a Dockerfile, workflow, composite action or workflow template that downloads a file without verifying it against a recorded digest or pinned signing key |
 | [`confidential-terms-scan`](confidential-terms-scan/) | pre-push | Scan added content, file/dir names, and branch name for confidential terms fetched at scan time from the consumer's `scan-*` Doppler project |
 
 Consumer repos reference these hooks in their `.pre-commit-config.yaml` as

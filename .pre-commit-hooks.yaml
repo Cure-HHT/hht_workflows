@@ -42,5 +42,5 @@
   description: Refuse a Dockerfile, workflow, composite action or workflow template that downloads a file without verifying it against a recorded digest or pinned signing key. See hooks/download-integrity/README.md.
   entry: download-integrity
   language: python
-  files: '(^|/)(Dockerfile[^/]*|[^/]+\.Dockerfile)$|^\.github/(workflows/[^/]+\.ya?ml|actions/.+/action\.ya?ml|versions\.env)$|\.ya?ml\.template$'
+  files: '(?i)(^|/)((docker|container)file[^/]*|[^/]+\.(docker|container)file)$|^\.github/(workflows/[^/]+\.ya?ml|actions/.+/action\.ya?ml|versions\.env)$|\.ya?ml\.template$'
   minimum_pre_commit_version: "2.21.0"

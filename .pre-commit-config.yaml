@@ -1,8 +1,8 @@
 # Pre-commit hooks for cure-hht/hht_workflows.
 #
 # This repo is the canonical home for shared Cure-HHT-specific hooks
-# (the `hooks/` directory: release-notes-update, no-or-true-guard, and
-# confidential-terms-scan). Other Cure-HHT repos pull their hook list from
+# (the `hooks/` directory: release-notes-update, no-or-true-guard,
+# confidential-terms-scan, and download-integrity). Other Cure-HHT repos pull their hook list from
 # a mix of public pre-commit-hooks repos and `hooks/` here.
 #
 # Setup:
@@ -88,7 +88,7 @@ repos:
         name: download-integrity
         entry: download-integrity
         language: system
-        files: '(^|/)(Dockerfile[^/]*|[^/]+\.Dockerfile)$|^\.github/(workflows/[^/]+\.ya?ml|actions/.+/action\.ya?ml|versions\.env)$|\.ya?ml\.template$'
+        files: '(?i)(^|/)((docker|container)file[^/]*|[^/]+\.(docker|container)file)$|^\.github/(workflows/[^/]+\.ya?ml|actions/.+/action\.ya?ml|versions\.env)$|\.ya?ml\.template$'
 
       # Dogfood our own confidential-terms-scan hook at pre-push
       # (hooks/confidential-terms-scan/README.md). Same `repo: local` +

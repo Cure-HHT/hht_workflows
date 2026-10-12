@@ -443,7 +443,7 @@ This repo and its consumers standardize on the
 Hook configuration is in `.pre-commit-config.yaml`; thin wrappers in
 `.githooks/` invoke the framework via `core.hooksPath`. Cure-HHT-specific
 hooks live in `hooks/` (`release-notes-update`, `no-or-true-guard`,
-`confidential-terms-scan`) and are shared to consumer repos via the
+`confidential-terms-scan`, `download-integrity`) and are shared to consumer repos via the
 `.pre-commit-hooks.yaml` manifest at the repo root.
 
 ### Setup
@@ -467,6 +467,7 @@ and exits.
 - `rhysd/actionlint` — GitHub Actions YAML validation
 - `no-or-true-guard` — blocks the `|| true` / `|| :` shell short-circuit fallback
 - `confidential-terms-scan` — pre-push confidential-terms scan (dogfoods the shared hook)
+- `download-integrity` — refuses a build definition that downloads a file without verifying it (dogfoods the shared hook)
 
 ### Manual run
 
