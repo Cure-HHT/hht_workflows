@@ -1,7 +1,8 @@
 # Validation Summary gate -- composite action (event-driven).
 #
-# Publishes the org ruleset's required "Validation Summary" check as a
-# check run created through the Checks API, re-evaluated each time a pull
+# Publishes the org ruleset's required "Validation Summary" context as a
+# COMMIT STATUS (not a check run: checks created by workflow_run-triggered
+# jobs do not count toward rulesets), re-evaluated each time a pull
 # request workflow finishes, instead of holding a runner that polls. One
 # evaluation reads the head commit's check runs and workflow runs once
 # (re-reading at most `relist-attempts` times while the listing lags the
@@ -20,13 +21,14 @@
 # consumers whose pin predates this one.
 
 name: 'Validation Summary Gate'
-description: 'Evaluate every check run on a pull request head commit once, and publish the result as the "Validation Summary" check run'
+description: 'Evaluate every check run on a pull request head commit once, and publish the result as the "Validation Summary" commit status'
 
 inputs:
   check-name:
     description: >
-      Name of the check run to publish. Must equal the context the branch
-      ruleset requires. Check runs with this name are never counted.
+      Commit-status context to publish. Must equal the context the branch
+      ruleset requires. Check runs with this name are never counted, and
+      commit statuses are never read, so the gate cannot count itself.
     required: false
     default: 'Validation Summary'
   base-branch:
@@ -57,8 +59,8 @@ inputs:
     default: '20'
   github-token:
     description: >
-      Token with checks:write, pull-requests:write, actions:read and
-      contents:read. The default GITHUB_TOKEN of a workflow_run/check_run
+      Token with statuses:write, checks:read, pull-requests:write,
+      actions:read and contents:read. The default GITHUB_TOKEN of a workflow_run/check_run
       workflow carries base-repository permissions, fork PRs included.
     required: false
     default: ${{ github.token }}

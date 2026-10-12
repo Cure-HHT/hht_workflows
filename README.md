@@ -57,7 +57,7 @@ ruleset's required status checks:
 | --- | --- |
 | [`validate-pr-title`](.github/actions/validate-pr-title/) | `Validate PR Title` |
 | [`secrets-scan`](.github/actions/secrets-scan/) | `Security - Check for Secrets` |
-| [`validation-summary-gate`](.github/actions/validation-summary-gate/) | `Validation Summary` (event-driven; published as a check run) |
+| [`validation-summary-gate`](.github/actions/validation-summary-gate/) | `Validation Summary` (event-driven; published as a commit status) |
 | [`validation-summary`](.github/actions/validation-summary/) | `Validation Summary` (polling; superseded by `validation-summary-gate`, kept for existing pins) |
 
 Each of these is paired with a thin wrapper workflow that dogfoods it
@@ -147,8 +147,8 @@ jobs:
 
 `Validation Summary` is not a job in a `pull_request` workflow: a workflow
 triggered by `workflow_run` and `check_run` evaluates the PR head commit each
-time another workflow finishes and publishes a check run of that name through
-the Checks API. Copy the wrapper from
+time another workflow finishes and publishes a commit status of that context
+(checks created by `workflow_run` jobs do not count toward rulesets). Copy the wrapper from
 [`validation-summary-gate/README.md`](.github/actions/validation-summary-gate/README.md#usage)
 — it must be on the default branch to run, and its job is deliberately not
 named `Validation Summary`. Moving off the polling `validation-summary.yml`

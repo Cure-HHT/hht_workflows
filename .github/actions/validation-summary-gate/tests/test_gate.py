@@ -56,13 +56,12 @@ class FakeGitHub:
     """Serves canned API state. `states` is a list of (check_runs, workflow_runs)
     returned by successive read_state calls; the last one repeats."""
 
-    def __init__(self, states, prs=None, comments=None, gate_runs=None,
+    def __init__(self, states, prs=None, comments=None,
                  annotations=None, jobs=None):
         self.states = list(states)
         self.reads = 0
         self.prs = prs if prs is not None else [{"number": 7, "head": {"sha": SHA}}]
         self.comments = comments or []
-        self.gate_runs = gate_runs or []
         self.annotations = annotations or {}
         self.jobs = jobs or {}
         self.calls = []
@@ -76,8 +75,6 @@ class FakeGitHub:
         if path.endswith("/pulls"):
             return [p for p in self.prs]
         if path.endswith(f"/commits/{SHA}/check-runs"):
-            if params and params.get("check_name"):
-                return list(self.gate_runs)
             checks = self._state()[0]
             return list(checks)
         if path.endswith("/actions/runs"):
@@ -134,11 +131,15 @@ def run_gate(tmp_path, fake, event_name="workflow_run", event=None, sleeps=None,
 
 
 def published(fake):
-    """The body of the last check-run create/update."""
+    """The body of the last commit status posted."""
     for method, path, body in reversed(fake.calls):
-        if method in ("POST", "PATCH") and "/check-runs" in path:
+        if method == "POST" and path == f"repos/{REPO}/statuses/{SHA}":
             return body
     return None
+
+
+def bot(cid, body):
+    return {"id": cid, "body": body, "user": {"login": "github-actions[bot]"}}
 
 
 # --------------------------------------------------------------------------
@@ -198,8 +199,7 @@ def test_self_named_checks_are_ignored():
     # itself.
     ev = ev_of([cr(1, "Build"),
                 cr(2, "Validation Summary", status="in_progress", conclusion=None),
-                cr(3, "Validation Summary", conclusion="failure",
-                   external_id=gate.GATE_EXTERNAL_ID)],
+                cr(3, "Validation Summary", conclusion="failure")],
                [wr(500, "Build"), wr(501, "Validation Summary", status="in_progress", suite=2)])
     assert ev.verdict == "success"
     assert [i.name for i in ev.items] == ["Build"]
@@ -264,6 +264,60 @@ def test_external_app_check_in_progress_is_pending():
     assert ev.verdict == "pending"
 
 
+def test_run_with_startup_failure_and_no_checks_fails():
+    # A workflow with a YAML error never creates a job, so no check run says
+    # it failed; the run itself does.
+    ev = ev_of([cr(1, "Build")],
+               [wr(500, "Build"), wr(501, "Broken", conclusion="startup_failure", suite=2)])
+    assert ev.verdict == "failure"
+    assert [i.name for i in ev.of("failed")] == ["workflow: Broken"]
+
+
+def test_run_that_failed_with_zero_jobs_fails():
+    ev = ev_of([cr(1, "Build")],
+               [wr(500, "Build"), wr(501, "Lint", conclusion="failure", suite=2)])
+    assert ev.verdict == "failure"
+
+
+def test_failed_run_whose_failing_job_is_listed_is_not_double_counted():
+    ev = ev_of([cr(1, "Lint", conclusion="failure", suite=2)],
+               [wr(501, "Lint", conclusion="failure", suite=2)])
+    assert [i.name for i in ev.of("failed")] == ["Lint"]
+
+
+def test_run_cancelled_with_no_checks_is_pending():
+    ev = ev_of([cr(1, "Build")],
+               [wr(500, "Build"), wr(501, "Lint", conclusion="cancelled", suite=2)])
+    assert ev.verdict == "pending" and ev.only_cancelled_pending
+
+
+def test_same_job_name_in_two_workflows_is_two_checks():
+    # Two workflows in one consuming repository, validate-build-paths.yml and
+    # validate-permissions-matrix.yml, both have a job called `check`. B's
+    # failure must not hide behind A's pass.
+    ev = ev_of([cr(10, "check", conclusion="failure", suite=1),
+                cr(20, "check", conclusion="success", suite=2)],
+               [wr(500, "Validate build paths allowlist", conclusion="failure", suite=1,
+                   workflow_id=1),
+                wr(501, "Validate permissions matrix", suite=2, workflow_id=2)])
+    assert ev.verdict == "failure"
+    assert [i.name for i in ev.of("failed")] == ["Validate build paths allowlist / check"]
+
+
+def test_newer_run_of_the_same_workflow_supersedes_its_older_checks():
+    ev = ev_of([cr(10, "check", conclusion="failure", suite=1),
+                cr(20, "check", conclusion="success", suite=2)],
+               [wr(500, "W", conclusion="failure", suite=1, workflow_id=1),
+                wr(510, "W", suite=2, workflow_id=1)])
+    assert ev.verdict == "success"
+
+
+def test_check_of_an_unknown_suite_is_keyed_by_suite():
+    ev = ev_of([cr(10, "scan", conclusion="failure", suite=70, app="other"),
+                cr(20, "scan", conclusion="success", suite=71, app="other")])
+    assert ev.verdict == "failure"
+
+
 # --------------------------------------------------------------------------
 # trigger parsing
 # --------------------------------------------------------------------------
@@ -297,24 +351,25 @@ def test_malformed_sha_is_refused():
 # run(): effects
 # --------------------------------------------------------------------------
 
-def test_success_publishes_completed_success_and_clears_comments(tmp_path):
+def test_success_posts_success_status_and_clears_comments(tmp_path):
     fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])],
-                      comments=[{"id": 11, "body": gate.COMMENT_MARKER + "\nold"},
-                                {"id": 12, "body": "<!-- validation-summary -->\nolder"},
-                                {"id": 13, "body": "<!-- ci-gate-summary -->\noldest"},
-                                {"id": 14, "body": "unrelated"}])
+                      comments=[bot(11, gate.COMMENT_MARKER + "\nold"),
+                                bot(12, "<!-- validation-summary -->\nolder"),
+                                bot(13, "<!-- ci-gate-summary -->\noldest"),
+                                bot(14, "unrelated")])
     rc, logs, out = run_gate(tmp_path, fake)
     assert rc == 0
     body = published(fake)
-    assert body["status"] == "completed" and body["conclusion"] == "success"
-    assert body["name"] == "Validation Summary"
-    assert body["head_sha"] == SHA and body["external_id"] == gate.GATE_EXTERNAL_ID
+    assert body["state"] == "success" and body["context"] == "Validation Summary"
+    assert body["target_url"] == "https://github.com/Cure-HHT/example/actions/runs/42"
+    assert len(body["description"]) <= 140
+    assert not [c for c in fake.writes() if "/check-runs" in c[1]]   # no check run
     deleted = sorted(p for m, p, _ in fake.writes("DELETE"))
     assert deleted == [f"repos/{REPO}/issues/comments/{i}" for i in (11, 12, 13)]
     assert "verdict=success" in out
 
 
-def test_failure_publishes_failure_and_comment_payload(tmp_path):
+def test_failure_posts_failure_status_and_comment_payload(tmp_path):
     fake = FakeGitHub(
         [([cr(1, "Build"), cr(2, "Lint", conclusion="failure"),
            cr(3, "Tests", conclusion="failure")], [wr(500, "Build")])],
@@ -325,10 +380,10 @@ def test_failure_publishes_failure_and_comment_payload(tmp_path):
         jobs={3: {"steps": [{"name": "Run tests", "conclusion": "failure"},
                             {"name": "Upload", "conclusion": "skipped"}]}})
     rc, logs, out = run_gate(tmp_path, fake)
-    assert rc == 0      # the verdict is the check run, not this job's status
+    assert rc == 0      # the verdict is the commit status, not this job's status
     body = published(fake)
-    assert body["conclusion"] == "failure"
-    assert body["output"]["title"] == "2 of 3 check(s) failed"
+    assert body["state"] == "failure"
+    assert body["description"] == "2 of 3 check(s) failed: Lint, Tests"
     posts = [b for m, p, b in fake.writes("POST") if p.endswith("/issues/7/comments")]
     assert len(posts) == 1
     comment = posts[0]["body"]
@@ -342,50 +397,56 @@ def test_failure_publishes_failure_and_comment_payload(tmp_path):
 
 def test_failure_updates_the_existing_comment_and_collapses_duplicates(tmp_path):
     fake = FakeGitHub([([cr(2, "Lint", conclusion="failure")], [])],
-                      comments=[{"id": 12, "body": "<!-- validation-summary -->\nlegacy"},
-                                {"id": 11, "body": gate.COMMENT_MARKER + "\ncurrent"}])
+                      comments=[bot(12, "<!-- validation-summary -->\nlegacy"),
+                                bot(11, gate.COMMENT_MARKER + "\ncurrent")])
     run_gate(tmp_path, fake)
     assert [p for m, p, _ in fake.writes("PATCH") if "/issues/" in p] == \
         [f"repos/{REPO}/issues/comments/11"]
     assert [p for m, p, _ in fake.writes("DELETE")] == [f"repos/{REPO}/issues/comments/12"]
 
 
-def test_in_progress_publishes_in_progress_with_what_it_waits_for(tmp_path):
+def test_comments_by_anyone_else_are_never_touched(tmp_path):
+    # On a public repo anyone can post a comment that starts with the marker.
+    planted = {"id": 21, "body": gate.COMMENT_MARKER + "\nplanted",
+               "user": {"login": "someone"}}
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])], comments=[planted])
+    run_gate(tmp_path, fake)
+    assert fake.writes("DELETE") == [] and fake.writes("PATCH") == []
+    fake = FakeGitHub([([cr(2, "Lint", conclusion="failure")], [])], comments=[planted])
+    run_gate(tmp_path, fake)
+    assert fake.writes("PATCH") == [] and fake.writes("DELETE") == []
+    assert [p for m, p, _ in fake.writes("POST") if "/issues/" in p] == \
+        [f"repos/{REPO}/issues/7/comments"]
+
+
+def test_in_progress_posts_pending_with_what_it_waits_for(tmp_path):
     fake = FakeGitHub([([cr(1, "Build", suite=1),
                          cr(2, "Tests", status="in_progress", conclusion=None, suite=2)],
                         [wr(500, "Build", suite=1),
                          wr(501, "Tests", status="in_progress", conclusion=None, suite=2)])],
-                      comments=[{"id": 11, "body": gate.COMMENT_MARKER + "\nfailed before"}])
+                      comments=[bot(11, gate.COMMENT_MARKER + "\nfailed before")])
     rc, logs, out = run_gate(tmp_path, fake)
     body = published(fake)
-    assert body["status"] == "in_progress" and "conclusion" not in body
-    assert "waiting on 1 check(s)" in body["output"]["summary"]
-    assert "| :hourglass: Tests | in_progress |" in body["output"]["summary"]
+    assert body["state"] == "pending"
+    assert body["description"] == "Waiting for: Tests"
     assert not [c for c in fake.writes() if "/issues/" in c[1]]   # comment left alone
     assert "verdict=pending" in out
+    summary = (tmp_path / "summary.md").read_text()
+    assert "| :hourglass: Tests | in_progress |" in summary
 
 
-def test_in_progress_gate_run_is_updated_in_place(tmp_path):
-    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])],
-                      gate_runs=[cr(70, "Validation Summary", status="in_progress",
-                                    conclusion=None, external_id=gate.GATE_EXTERNAL_ID),
-                                 cr(60, "Validation Summary", status="in_progress",
-                                    conclusion=None)])  # the polling job: not ours
-    run_gate(tmp_path, fake)
-    assert [p for m, p, _ in fake.writes() if "/check-runs" in p] == \
-        [f"repos/{REPO}/check-runs/70"]
-
-
-def test_completed_gate_run_is_never_reopened(tmp_path):
-    # A new state after a verdict gets a NEW check run, so the newest check
-    # run of the name is always the current one.
-    fake = FakeGitHub([([cr(1, "Build"), cr(2, "Tests", status="queued", conclusion=None)],
-                        [wr(500, "Build")])],
-                      gate_runs=[cr(70, "Validation Summary",
-                                    external_id=gate.GATE_EXTERNAL_ID)])
-    run_gate(tmp_path, fake)
-    writes = [(m, p) for m, p, _ in fake.writes() if "/check-runs" in p]
-    assert writes == [("POST", f"repos/{REPO}/check-runs")]
+def test_pending_description_is_truncated_to_140(tmp_path):
+    checks = [cr(i, f"a-rather-long-check-name-number-{i}", status="queued",
+                 conclusion=None, suite=i) for i in range(1, 15)]
+    runs = [wr(500 + i, f"W{i}", status="queued", conclusion=None, suite=i)
+            for i in range(1, 15)]
+    fake = FakeGitHub([(checks, runs)])
+    event = {"action": "completed",
+             "workflow_run": {"id": 999, "name": "Build", "event": "pull_request",
+                              "head_sha": SHA, "check_suite_id": 99}}
+    run_gate(tmp_path, fake, event=event, INPUT_RELIST_ATTEMPTS="0")
+    desc = published(fake)["description"]
+    assert len(desc) <= 140 and desc.startswith("Waiting for: ")
 
 
 def test_commit_that_is_not_an_open_pr_head_is_left_alone(tmp_path):
@@ -412,7 +473,7 @@ def test_fork_pr_is_matched_by_head_sha_not_by_event_pull_requests(tmp_path):
              "workflow_run": {"id": 500, "name": "Build", "event": "pull_request",
                               "head_sha": SHA, "check_suite_id": 1, "pull_requests": []}}
     run_gate(tmp_path, fake, event=event)
-    assert published(fake)["conclusion"] == "success"
+    assert published(fake)["state"] == "success"
 
 
 def test_external_check_run_event_is_evaluated(tmp_path):
@@ -422,8 +483,23 @@ def test_external_check_run_event_is_evaluated(tmp_path):
     event = {"action": "completed",
              "check_run": {"id": 2, "name": "SonarCloud Code Analysis", "head_sha": SHA,
                            "app": {"slug": "sonarqubecloud"}, "check_suite": {"id": 77}}}
-    rc, logs, out = run_gate(tmp_path, fake, event_name="check_run", event=event)
-    assert published(fake)["conclusion"] == "success"
+    run_gate(tmp_path, fake, event_name="check_run", event=event)
+    assert published(fake)["state"] == "success"
+
+
+def test_pending_on_another_apps_check_carries_rerun_guidance(tmp_path):
+    # check_run may not fire for it (GitHub skips suites whose head SHA is
+    # associated with GitHub Actions), so say how to un-stick it.
+    fake = FakeGitHub([([cr(1, "Build"), cr(2, "SonarCloud Code Analysis", suite=77,
+                                             status="in_progress", conclusion=None,
+                                             app="sonarqubecloud")],
+                        [wr(500, "Build")])])
+    run_gate(tmp_path, fake)
+    body = published(fake)
+    assert body["state"] == "pending" and len(body["description"]) <= 140
+    assert body["description"].endswith("(if stuck, re-run the Validation Summary Gate workflow)")
+    assert "Re-run the latest **Validation Summary Gate**" in \
+        (tmp_path / "summary.md").read_text()
 
 
 # --------------------------------------------------------------------------
@@ -444,7 +520,7 @@ def test_race_relist_reaches_final_verdict(tmp_path):
     fake = FakeGitHub([lagging, caught_up])
     run_gate(tmp_path, fake, sleeps=slept)
     assert slept == [20.0]
-    assert published(fake)["conclusion"] == "success"
+    assert published(fake)["state"] == "success"
 
 
 def test_race_relist_is_bounded(tmp_path):
@@ -455,7 +531,9 @@ def test_race_relist_is_bounded(tmp_path):
     run_gate(tmp_path, fake, sleeps=slept, INPUT_RELIST_ATTEMPTS="3",
              INPUT_RELIST_INTERVAL_SECONDS="20")
     assert slept == [20.0, 20.0, 20.0]
-    assert published(fake)["status"] == "in_progress"   # never a pass
+    body = published(fake)
+    assert body["state"] == "pending"   # never a pass
+    assert "re-run the Validation Summary Gate" in body["description"]
 
 
 def test_genuinely_running_check_does_not_trigger_relist(tmp_path):
@@ -480,12 +558,11 @@ def test_requested_event_publishes_pending_without_relisting(tmp_path):
              "workflow_run": {"id": 510, "name": "PR Metadata", "event": "pull_request",
                               "head_sha": SHA, "check_suite_id": 3}}
     slept = []
-    fake = FakeGitHub([state], gate_runs=[cr(70, "Validation Summary",
-                                             external_id=gate.GATE_EXTERNAL_ID)])
+    fake = FakeGitHub([state])
     run_gate(tmp_path, fake, event=event, sleeps=slept)
     assert slept == []
     body = published(fake)
-    assert body["status"] == "in_progress" and body["head_sha"] == SHA
+    assert body["state"] == "pending"
 
 
 def test_requested_event_relists_when_its_run_is_not_listed_yet(tmp_path):
@@ -500,7 +577,7 @@ def test_requested_event_relists_when_its_run_is_not_listed_yet(tmp_path):
     fake = FakeGitHub([before, after])
     run_gate(tmp_path, fake, event=event, sleeps=slept)
     assert slept == [20.0]
-    assert published(fake)["status"] == "in_progress"
+    assert published(fake)["state"] == "pending"
 
 
 def test_cancelled_with_no_rerun_becomes_a_failure_after_the_relist(tmp_path):
@@ -512,8 +589,8 @@ def test_cancelled_with_no_rerun_becomes_a_failure_after_the_relist(tmp_path):
     run_gate(tmp_path, fake, sleeps=slept)
     assert slept == [20.0, 20.0, 20.0]
     body = published(fake)
-    assert body["conclusion"] == "failure"
-    assert "cancelled and not re-run: Tests" in body["output"]["title"]
+    assert body["state"] == "failure"
+    assert "cancelled and not re-run: Tests" in body["description"]
 
 
 def test_cancelled_then_rerun_appears_during_relist(tmp_path):
@@ -523,12 +600,13 @@ def test_cancelled_then_rerun_appears_during_relist(tmp_path):
     rerun = ([cr(1, "Build", suite=1), cr(2, "Tests", conclusion="cancelled", suite=2),
               cr(3, "Tests", conclusion="success", suite=3)],
              [wr(500, "Build", suite=1),
+              wr(501, "Tests", conclusion="cancelled", suite=2, workflow_id=4),
               wr(502, "Tests", conclusion="success", suite=3, workflow_id=4)])
     slept = []
     fake = FakeGitHub([cancelled, rerun])
     run_gate(tmp_path, fake, sleeps=slept)
     assert slept == [20.0]
-    assert published(fake)["conclusion"] == "success"
+    assert published(fake)["state"] == "success"
 
 
 def test_api_error_fails_closed(tmp_path):
@@ -541,7 +619,42 @@ def test_api_error_fails_closed(tmp_path):
     rc, logs, out = run_gate(tmp_path, fake)
     assert rc == 1
     body = published(fake)
-    assert body["conclusion"] == "failure" and "evaluation error" in body["output"]["title"]
+    assert body["state"] == "error" and "re-run the Validation Summary Gate" in body["description"]
+
+
+def test_run_cancelled_with_no_checks_becomes_failure_once_abandoned(tmp_path):
+    state = ([cr(1, "Build", suite=1)],
+             [wr(500, "Build", suite=1), wr(501, "Lint", conclusion="cancelled", suite=2)])
+    slept = []
+    fake = FakeGitHub([state])
+    run_gate(tmp_path, fake, sleeps=slept)
+    assert slept == [20.0, 20.0, 20.0]
+    body = published(fake)
+    assert body["state"] == "failure" and "workflow: Lint" in body["description"]
+
+
+def test_pulls_outage_fails_closed_with_an_error_status(tmp_path):
+    class NoPulls(FakeGitHub):
+        def paginate(self, path, params=None, key=None):
+            if path.endswith("/pulls"):
+                raise RuntimeError("GET pulls -> HTTP 503")
+            return super().paginate(path, params, key)
+    fake = NoPulls([([cr(1, "Build")], [])])
+    rc, logs, out = run_gate(tmp_path, fake)
+    assert rc == 1
+    assert published(fake)["state"] == "error"
+
+
+def test_publish_failure_is_reported_and_fails_the_job(tmp_path):
+    class NoPost(FakeGitHub):
+        def post(self, path, body):
+            self.calls.append(("POST", path, body))
+            raise RuntimeError("POST -> HTTP 500")
+    fake = NoPost([([cr(1, "Build")], [wr(500, "Build")])])
+    rc, logs, out = run_gate(tmp_path, fake)
+    assert rc == 1
+    assert [b["state"] for m, p, b in fake.calls if m == "POST"] == ["success", "error"]
+    assert any("could not publish the error status" in line for line in logs)
 
 
 # --------------------------------------------------------------------------

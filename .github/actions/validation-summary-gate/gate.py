@@ -6,25 +6,39 @@ The caller is a workflow triggered by `workflow_run` (every PR workflow
 finishing, plus the start of the workflows that re-run on `edited`) and by
 `check_run: completed` (check runs posted by GitHub Apps other than
 GitHub Actions). Each firing reads the commit's check runs and workflow
-runs ONCE, decides, and publishes a check run named "Validation Summary"
-on the commit through the Checks API. Nothing waits on a runner: the next
+runs ONCE, decides, and publishes the verdict as a COMMIT STATUS with
+context "Validation Summary". Nothing waits on a runner: the next
 completion is the next evaluation.
 
-Semantics carried over unchanged from the polling gate it replaces
-(.github/actions/validation-summary): every check run on the head commit
-counts except those named like the gate itself; the newest check run of
-each name wins; skipped and neutral are passing; cancelled means "waiting
-for a re-run"; the gate fails, and upserts one PR comment naming the
-failed checks with their annotations, once every check has completed and
-any failed. Differences, each fail-closed:
+Why a commit status and not a check run: GitHub counts checks created by
+workflow jobs toward a ruleset only when the run was triggered by push,
+pull_request, pull_request_review, pull_request_target, deployment or
+deployment_status ("Troubleshooting required status checks"), and
+workflow_run is not on that list. Commit statuses carry no such
+restriction, and a required context is satisfied by either kind -- when
+both exist under one name, both must pass.
 
-- timed_out, action_required, startup_failure and stale count as failed.
-  The polling gate counted only `failure` and let the others pass.
+Semantics carried over from the polling gate it replaces
+(.github/actions/validation-summary): every check run on the head commit
+counts except those named like the gate; the newest check run of each job
+wins; skipped and neutral are passing; cancelled means "waiting for a
+re-run"; the gate fails, and upserts one PR comment naming the failed
+checks with their annotations, once every check has completed and any
+failed. Commit statuses are not read at all, as before, so the gate's own
+status can never feed back into its verdict. Differences, each fail-closed:
+
+- timed_out, action_required, startup_failure, stale and any unknown
+  conclusion count as failed. The polling gate counted only `failure`.
+- "Newest of each name" is decided per workflow: two workflows that both
+  have a job called `check` are two checks, not one.
 - A workflow run still queued, in progress, waiting, or awaiting approval
-  on the commit is pending even before its jobs have created check runs.
-- A cancelled check with no re-run anywhere in sight is reported as a
-  failure instead of being waited on until a timeout. The polling gate
-  reached the same verdict, after its 30 (or 185) minute budget.
+  is pending even before its jobs have created check runs.
+- A workflow run that ended badly (startup_failure, failure, timed_out --
+  e.g. a YAML error that never created a job) is a failure even with no
+  check runs; one cancelled with no check runs is a cancelled item.
+- A cancelled check or run with no re-run anywhere in sight is reported as
+  a failure after a bounded re-read instead of being waited on until a
+  timeout. The polling gate reached the same verdict after its budget.
 
 Runs of the `dynamic` event (GitHub's Copilot code-review agent) are not
 counted: they are triggered by a review request, not by the pull request
@@ -50,15 +64,12 @@ from typing import Callable, Iterable
 API_VERSION = "2022-11-28"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-# The gate's own check runs carry this external_id so it can find and update
-# them while another check run of the same name (the old polling job, during
-# the transition) exists on the same commit.
-GATE_EXTERNAL_ID = "validation-summary-gate"
-
 # The current PR-comment marker (pr-comment-upsert convention), then the two
 # earlier generations. A failure upserts the current one; a pass removes all.
+# Only comments written by this identity are ever touched.
 COMMENT_MARKER = "<!-- pr-comment-upsert:validation-summary -->"
 LEGACY_COMMENT_MARKERS = ("<!-- validation-summary -->", "<!-- ci-gate-summary -->")
+COMMENT_AUTHOR = "github-actions[bot]"
 
 OK_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 FAILED_CONCLUSIONS = frozenset(
@@ -70,7 +81,16 @@ PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 _NOISE = re.compile(
     r"Process completed with exit code|^Unexpected failure|^Failed during:")
 
-SUMMARY_LIMIT = 60000   # Checks API output.summary maximum is 65535.
+SUMMARY_LIMIT = 60000       # PR comment bodies are capped at 65536.
+DESCRIPTION_LIMIT = 140     # commit status descriptions longer than this are refused
+
+RERUN_HINT = "if stuck, re-run the Validation Summary Gate workflow"
+RERUN_GUIDANCE = (
+    "If this stays pending after every check above has finished, the event "
+    "that should have re-evaluated it did not arrive (GitHub does not fire "
+    "`check_run` for a check suite whose head SHA is associated with GitHub "
+    "Actions, and listings can lag). Re-run the latest **Validation Summary "
+    "Gate** workflow run from the Actions tab; it re-reads every check.")
 
 
 # --------------------------------------------------------------------------
@@ -99,39 +119,52 @@ class Evaluation:
         return [i for i in self.items if i.state == state]
 
     @property
-    def counted(self) -> list[Item]:
-        """Items that are check runs (workflow-run placeholders excluded)."""
-        return [i for i in self.items if i.check_id is not None]
-
-    @property
     def only_cancelled_pending(self) -> bool:
         return (self.verdict == "pending" and not self.of("pending")
                 and bool(self.of("cancelled")))
 
+    @property
+    def external_pending(self) -> bool:
+        return any(i.state == "pending" and i.check_id is not None
+                   and i.app not in ("", "github-actions") for i in self.items)
 
-def latest_per_name(check_runs: Iterable[dict]) -> list[dict]:
-    """Newest check run of each name.
 
-    Decided by id (ids increase with creation) rather than by API order, which
-    the polling gate assumed to be newest-first.
-    """
-    best: dict[str, dict] = {}
-    for cr in check_runs:
-        cur = best.get(cr["name"])
-        if cur is None or cr["id"] > cur["id"]:
-            best[cr["name"]] = cr
-    return sorted(best.values(), key=lambda c: c["name"])
+def _run_key(run: dict) -> tuple:
+    return (run.get("workflow_id") or run.get("name"), run.get("event"))
 
 
 def latest_runs(workflow_runs: Iterable[dict]) -> list[dict]:
     """Newest run of each (workflow, event) on the commit."""
     best: dict[tuple, dict] = {}
     for run in workflow_runs:
-        key = (run.get("workflow_id") or run.get("name"), run.get("event"))
+        key = _run_key(run)
         cur = best.get(key)
         if cur is None or run["id"] > cur["id"]:
             best[key] = run
     return list(best.values())
+
+
+def latest_per_job(check_runs: Iterable[dict], workflow_runs: Iterable[dict]) -> list[tuple]:
+    """Newest check run of each (workflow, name), as (check_run, workflow_name).
+
+    The workflow is found through the check run's suite. Deduplicating by name
+    alone would let workflow A's passing `check` hide workflow B's failing
+    `check`. A check whose suite belongs to no listed workflow run (another
+    GitHub App's) is keyed by its suite. Newest is decided by id (ids increase
+    with creation), not by API order.
+    """
+    suite_to_run = {r.get("check_suite_id"): r for r in workflow_runs
+                    if r.get("check_suite_id") is not None}
+    best: dict[tuple, tuple] = {}
+    for cr in check_runs:
+        suite = (cr.get("check_suite") or {}).get("id")
+        run = suite_to_run.get(suite)
+        group = ("workflow",) + _run_key(run) if run else ("suite", suite)
+        key = (group, cr["name"])
+        cur = best.get(key)
+        if cur is None or cr["id"] > cur[0]["id"]:
+            best[key] = (cr, (run or {}).get("name") or "")
+    return sorted(best.values(), key=lambda t: (t[0]["name"], t[1]))
 
 
 # Implements: HHT-OPS-composite-action-library/A
@@ -148,17 +181,23 @@ def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
         if cr["name"] != check_name
         and (cr.get("check_suite") or {}).get("id") not in ignored_suites
     ]
+    jobs = latest_per_job(relevant, workflow_runs)
+    name_count: dict[str, int] = {}
+    for cr, _ in jobs:
+        name_count[cr["name"]] = name_count.get(cr["name"], 0) + 1
+
     items: list[Item] = []
-    suites_with_pending: set = set()
-    for cr in latest_per_name(relevant):
+    for cr, wf_name in jobs:
         status, conclusion = cr.get("status"), cr.get("conclusion")
-        item = Item(name=cr["name"], state="ok", status="",
+        name = cr["name"]
+        if name_count[name] > 1 and wf_name:
+            name = f"{wf_name} / {name}"
+        item = Item(name=name, state="ok", status="",
                     url=cr.get("html_url") or "", check_id=cr["id"],
                     app=((cr.get("app") or {}).get("slug") or ""),
                     suite_id=(cr.get("check_suite") or {}).get("id"))
         if status != "completed":
             item.state, item.status = "pending", status or "queued"
-            suites_with_pending.add(item.suite_id)
         elif conclusion == "cancelled":
             item.state, item.status = "cancelled", "Cancelled, awaiting re-run"
         elif conclusion in FAILED_CONCLUSIONS:
@@ -170,28 +209,44 @@ def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
             item.state, item.status = "failed", str(conclusion)
         items.append(item)
 
+    by_suite: dict = {}
+    for i in items:
+        by_suite.setdefault(i.suite_id, set()).add(i.state)
     for run in latest_runs(workflow_runs):
         if run.get("name") in ignore_workflows or run.get("event") in IGNORED_RUN_EVENTS:
             continue
         status, conclusion = run.get("status"), run.get("conclusion")
+        suite_states = by_suite.get(run.get("check_suite_id"), set())
+        base = Item(name=f"workflow: {run.get('name')}", state="pending", status="",
+                    url=run.get("html_url") or "", suite_id=run.get("check_suite_id"))
         if status != "completed":
-            label = status or "queued"
+            if "pending" in suite_states:
+                continue    # already listed through its pending check runs
+            base.status = status or "queued"
         elif conclusion == "action_required":
-            label = "awaiting approval"
-        else:
+            base.status = "awaiting approval"
+        elif conclusion in OK_CONCLUSIONS:
             continue
-        if run.get("check_suite_id") in suites_with_pending:
-            continue    # already listed through its pending check runs
-        items.append(Item(name=f"workflow: {run.get('name')}", state="pending",
-                          status=label, url=run.get("html_url") or "",
-                          suite_id=run.get("check_suite_id")))
+        elif conclusion == "cancelled":
+            if suite_states & {"cancelled", "pending", "failed"}:
+                continue    # its own check runs already say so
+            base.state, base.status = "cancelled", "Run cancelled, awaiting re-run"
+        else:
+            # failure / timed_out / startup_failure / stale / unknown. A run that
+            # never created a job (a YAML error) has no check run to fail.
+            if "failed" in suite_states:
+                continue
+            base.state, base.status = "failed", f"Run {conclusion}"
+            base.detail = ("workflow run ended without a failing job "
+                           "(e.g. invalid workflow file)")
+        items.append(base)
 
     pending = [i for i in items if i.state in ("pending", "cancelled")]
     failed = [i for i in items if i.state == "failed"]
     if pending:
         return Evaluation("pending", items,
                           f"waiting on {len(pending)} check(s)")
-    if not [i for i in items if i.check_id is not None]:
+    if not [i for i in items if i.check_id is not None] and not failed:
         return Evaluation("pending", items, "no check runs reported yet")
     if failed:
         return Evaluation("failure", items,
@@ -241,9 +296,30 @@ def _cell(text: str) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
 
 
-def render(ev: Evaluation, sha: str) -> tuple[str, str]:
-    """(title, markdown summary) for the check run, the step summary and the
-    PR comment. The table matches the polling gate's comment."""
+def _truncate(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def describe(ev: Evaluation, stuck_hint: bool = False) -> str:
+    """The commit-status description: <= 140 characters."""
+    if ev.verdict == "pending":
+        waiting = [i.name for i in ev.items if i.state in ("pending", "cancelled")]
+        text = "Waiting for: " + (", ".join(waiting) if waiting else ev.reason)
+        if stuck_hint:
+            hint = f" ({RERUN_HINT})"
+            return _truncate(text, DESCRIPTION_LIMIT - len(hint)) + hint
+        return _truncate(text, DESCRIPTION_LIMIT)
+    if ev.verdict == "failure":
+        names = [i.name for i in ev.of("failed")] or [i.name for i in ev.of("cancelled")]
+        return _truncate(f"{ev.reason}: {', '.join(names)}" if names and ":" not in ev.reason
+                         else ev.reason, DESCRIPTION_LIMIT)
+    return _truncate(ev.reason, DESCRIPTION_LIMIT)
+
+
+def render(ev: Evaluation, sha: str, stuck_hint: bool = False) -> tuple[str, str]:
+    """(title, markdown summary) for the step summary and the PR comment.
+    The table matches the polling gate's comment."""
     failed = ev.of("failed")
     if ev.verdict == "failure":
         cancelled = ev.of("cancelled")
@@ -252,16 +328,14 @@ def render(ev: Evaluation, sha: str) -> tuple[str, str]:
         if cancelled and not failed:
             head = (f"## Validation Summary: {len(cancelled)} check(s) "
                     f"cancelled and not re-run")
-        title = ev.reason
     elif ev.verdict == "pending":
         waiting = [i for i in ev.items if i.state in ("pending", "cancelled")]
         head = f"## Validation Summary: waiting on {len(waiting)} check(s)"
         if failed:
             head += f" ({len(failed)} already failed)"
-        title = ev.reason
     else:
         head = f"## Validation Summary: {ev.reason}"
-        title = ev.reason
+    title = ev.reason
 
     rows = []
     order = {"failed": 0, "cancelled": 1, "pending": 2, "ok": 3}
@@ -275,13 +349,13 @@ def render(ev: Evaluation, sha: str) -> tuple[str, str]:
             rows.append(f"| :hourglass: {_cell(i.name)} | {_cell(i.status)} | |")
         else:
             rows.append(f"| :white_check_mark: {_cell(i.name)} | {_cell(i.status)} | |")
-    body = "\n".join([
-        head, "",
-        f"Commit `{sha[:7]}`", "",
-        "| Check | Status | Details |",
-        "|-------|--------|---------|",
-        *rows,
-    ])
+    parts = [head, "", f"Commit `{sha[:7]}`", "",
+             "| Check | Status | Details |",
+             "|-------|--------|---------|",
+             *rows]
+    if ev.verdict == "pending" and stuck_hint:
+        parts += ["", RERUN_GUIDANCE]
+    body = "\n".join(parts)
     if len(body) > SUMMARY_LIMIT:
         body = body[:SUMMARY_LIMIT] + "\n\n_(truncated)_"
     return title[:1000], body
@@ -306,6 +380,8 @@ def failure_detail(annotations: list[dict], failed_steps: list[str]) -> str:
     if failed_steps:
         return "Failed step(s): " + ", ".join(failed_steps)
     return ""
+
+
 
 
 # --------------------------------------------------------------------------
@@ -336,6 +412,8 @@ def parse_trigger(event_name: str, event: dict, ignore_workflows: Iterable[str])
     if not SHA_RE.match(trig["sha"]):
         return None, f"head sha {trig['sha']!r} is not a commit sha"
     return trig, None
+
+
 
 
 # --------------------------------------------------------------------------
@@ -403,6 +481,8 @@ class GitHub:
         return self._request("DELETE", self._url(path))[0]
 
 
+
+
 # --------------------------------------------------------------------------
 # Effects
 # --------------------------------------------------------------------------
@@ -430,12 +510,20 @@ def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
                          sleep: Callable[[float], None], log=print):
     """Evaluate, re-listing up to `attempts` more times while the listing
     visibly lags the triggering event. Bounded: never more than
-    attempts * interval seconds of waiting."""
+    attempts * interval seconds of waiting.
+
+    Returns (evaluation, stuck): `stuck` is True when the result is pending
+    and nothing guarantees another event will re-evaluate it -- the re-reads
+    ran out while the listing still lagged, or what remains pending is
+    another app's check run.
+    """
+    stale = False
     for n in range(attempts + 1):
         checks, runs = read_state(gh, repo, sha)
         ev = evaluate(checks, runs, check_name=check_name,
                       ignore_workflows=ignore_workflows)
-        if n == attempts or not looks_stale(ev, runs, trigger):
+        stale = looks_stale(ev, runs, trigger)
+        if n == attempts or not stale:
             break
         log(f"listing lags the triggering event; re-listing in {interval:.0f}s "
             f"({n + 1}/{attempts})")
@@ -446,12 +534,15 @@ def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
                   + ", ".join(i.name for i in cancelled))
         if failed:
             reason = (f"{len(failed)} of {len(ev.items)} check(s) failed; " + reason)
-        ev = Evaluation("failure", ev.items, reason[:900])
-    return ev
+        return Evaluation("failure", ev.items, reason[:900]), False
+    stuck = ev.verdict == "pending" and (stale or ev.external_pending)
+    return ev, stuck
 
 
 def add_failure_details(gh, repo: str, ev: Evaluation) -> None:
     for item in ev.of("failed"):
+        if item.check_id is None:
+            continue    # a workflow run with no jobs has nothing to annotate
         try:
             annotations = gh.paginate(f"repos/{repo}/check-runs/{item.check_id}/annotations")
         except RuntimeError:
@@ -467,43 +558,37 @@ def add_failure_details(gh, repo: str, ev: Evaluation) -> None:
         item.detail = failure_detail(annotations, steps)
 
 
-def publish_check_run(gh, repo: str, sha: str, check_name: str, ev: Evaluation,
-                      title: str, summary: str, details_url: str, now: str) -> dict:
-    """Create or update the gate's check run.
-
-    An in-progress gate run is updated in place. Once completed it is never
-    reopened: a changed state gets a NEW check run, so the newest check run of
-    this name on the commit is always the gate's latest verdict.
-    """
-    existing = gh.paginate(f"repos/{repo}/commits/{sha}/check-runs",
-                           {"check_name": check_name, "filter": "all"},
-                           key="check_runs")
-    mine = [c for c in existing if c.get("external_id") == GATE_EXTERNAL_ID]
-    current = max(mine, key=lambda c: c["id"]) if mine else None
-    body: dict = {"name": check_name, "details_url": details_url,
-                  "external_id": GATE_EXTERNAL_ID,
-                  "output": {"title": title, "summary": summary}}
-    if ev.verdict == "pending":
-        body["status"] = "in_progress"
-    else:
-        body.update(status="completed", conclusion=ev.verdict, completed_at=now)
-    if current is not None and current.get("status") != "completed":
-        return gh.patch(f"repos/{repo}/check-runs/{current['id']}", body)
-    return gh.post(f"repos/{repo}/check-runs",
-                   {**body, "head_sha": sha, "started_at": now})
+STATE_FOR_VERDICT = {"pending": "pending", "success": "success",
+                     "failure": "failure", "error": "error"}
 
 
-def _marked(body: str) -> bool:
-    return any(body.startswith(m) for m in (COMMENT_MARKER, *LEGACY_COMMENT_MARKERS))
+def publish_status(gh, repo: str, sha: str, context: str, state: str,
+                   description: str, target_url: str) -> dict:
+    """Set the commit status `context` on `sha`. The newest status of a
+    context is the one GitHub uses, so every call simply posts."""
+    return gh.post(f"repos/{repo}/statuses/{sha}", {
+        "state": STATE_FOR_VERDICT[state],
+        "context": context,
+        "description": _truncate(description, DESCRIPTION_LIMIT),
+        "target_url": target_url,
+    })
+
+
+def _ours(comment: dict) -> bool:
+    body = comment.get("body") or ""
+    author = (comment.get("user") or {}).get("login")
+    return author == COMMENT_AUTHOR and any(
+        body.startswith(m) for m in (COMMENT_MARKER, *LEGACY_COMMENT_MARKERS))
 
 
 def sync_comment(gh, repo: str, pr: int, ev: Evaluation, body: str, log=print) -> None:
     """Failure: upsert one comment. Success: remove every generation of it.
-    Pending: leave whatever is there."""
+    Pending: leave whatever is there. Only comments this gate's identity
+    wrote are touched: anyone can post a comment that starts with a marker."""
     if ev.verdict == "pending":
         return
     comments = gh.paginate(f"repos/{repo}/issues/{pr}/comments")
-    ours = [c for c in comments if _marked(c.get("body") or "")]
+    ours = [c for c in comments if _ours(c)]
     if ev.verdict == "failure":
         keep = next((c for c in ours if c["body"].startswith(COMMENT_MARKER)),
                     ours[0] if ours else None)
@@ -526,7 +611,7 @@ def sync_comment(gh, repo: str, pr: int, ev: Evaluation, body: str, log=print) -
 def _delete_comment(gh, repo: str, cid: int, log) -> None:
     try:
         gh.delete(f"repos/{repo}/issues/comments/{cid}")
-    except RuntimeError as exc:   # cosmetic; the verdict is the check run
+    except RuntimeError as exc:   # cosmetic; the verdict is the commit status
         log(f"::warning::could not delete Validation Summary comment {cid}: {exc}")
 
 
@@ -568,33 +653,37 @@ def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
     log(f"Triggered by {trigger['kind']} {trigger.get('action')} of "
         f"{trigger.get('name')!r} on {sha[:7]}")
 
-    prs = open_prs_for(gh, repo, sha, base)
-    if not prs:
-        log(f"{sha[:7]} is not the head of an open pull request into {base}; nothing to do.")
-        return 0
-
     try:
-        ev = evaluate_with_relist(gh, repo, sha, trigger, check_name=check_name,
-                                  ignore_workflows=ignore, attempts=attempts,
-                                  interval=interval, sleep=sleep, log=log)
+        prs = open_prs_for(gh, repo, sha, base)
+        if not prs:
+            log(f"{sha[:7]} is not the head of an open pull request into {base}; "
+                f"nothing to do.")
+            return 0
+        ev, stuck = evaluate_with_relist(
+            gh, repo, sha, trigger, check_name=check_name, ignore_workflows=ignore,
+            attempts=attempts, interval=interval, sleep=sleep, log=log)
         if ev.verdict == "failure":
             add_failure_details(gh, repo, ev)
-    except RuntimeError as exc:
-        # Fail closed and say so: a gate that cannot read the commit's checks
-        # must not leave an earlier pass standing as the newest verdict.
+        title, summary = render(ev, sha, stuck_hint=stuck)
+        stamp = now()
+        publish_status(gh, repo, sha, check_name, ev.verdict,
+                       describe(ev, stuck_hint=stuck), details_url)
+        for pr in prs:
+            sync_comment(gh, repo, pr, ev, comment_body(summary, details_url, stamp), log=log)
+    except Exception as exc:  # noqa: BLE001 -- fail closed on anything
+        # A gate that cannot read or publish must not leave an earlier pass
+        # standing as the newest verdict.
         log(f"::error::Validation Summary could not evaluate {sha[:7]}: {exc}")
-        ev = Evaluation("failure", [], "gate evaluation error -- re-run the "
-                        "'Validation Summary Gate' workflow run")
-        publish_check_run(gh, repo, sha, check_name, ev, ev.reason,
-                          f"## Validation Summary: could not evaluate\n\n`{exc}`",
-                          details_url, now())
+        try:
+            publish_status(gh, repo, sha, check_name, "error",
+                           "Gate could not evaluate; re-run the Validation Summary "
+                           "Gate workflow", details_url)
+        except Exception as exc2:  # noqa: BLE001
+            log(f"::error::could not publish the error status either: {exc2}")
+        _append(env.get("GITHUB_STEP_SUMMARY"),
+                f"## Validation Summary: could not evaluate\n\n`{exc}`")
         return 1
 
-    title, summary = render(ev, sha)
-    stamp = now()
-    publish_check_run(gh, repo, sha, check_name, ev, title, summary, details_url, stamp)
-    for pr in prs:
-        sync_comment(gh, repo, pr, ev, comment_body(summary, details_url, stamp), log=log)
     log(f"Validation Summary on {sha[:7]}: {ev.verdict} -- {ev.reason}")
     _append(env.get("GITHUB_STEP_SUMMARY"), summary)
     _append(env.get("GITHUB_OUTPUT"), f"verdict={ev.verdict}")
