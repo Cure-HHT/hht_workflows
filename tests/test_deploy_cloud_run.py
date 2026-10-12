@@ -371,11 +371,35 @@ def test_every_remote_action_is_pinned_by_commit():
         assert re.fullmatch(r"[0-9a-f]{40}", ref), ln.strip()
 
 
-def test_slack_notifications_are_skipped_without_a_token():
-    """The Slack secret is optional, so no notify step may run without it."""
-    for job in ("deploy", "attest-image"):
-        spec = DOC["jobs"][job]
-        assert spec["env"]["SLACK_CONFIGURED"] == "${{ secrets.SLACK_APP_OATH_TOKEN != '' }}"
-        for step in spec["steps"]:
-            if "slack-notify" in step.get("uses", ""):
-                assert "env.SLACK_CONFIGURED == 'true'" in step["if"], step["name"]
+def _slack_check(token):
+    env = {**os.environ, "SLACK_APP_OATH_TOKEN": token}
+    return subprocess.run(["bash", "-c", _run_body(TEXT, "Require the Slack token")], env=env, capture_output=True, text=True)
+
+
+def test_missing_slack_token_refuses():
+    r = _slack_check("")
+    assert r.returncode == 1
+    assert "::error::" in r.stdout
+    assert "SLACK_APP_OATH_TOKEN" in r.stdout
+
+
+def test_present_slack_token_passes():
+    r = _slack_check("xoxb-example")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_slack_token_is_checked_before_anything_else():
+    """A deploy without its notification channel must refuse before any job
+    builds or deploys, not leave a deployed revision behind a red run."""
+    first_jobs = [name for name, job in DOC["jobs"].items() if "needs" not in job]
+    assert first_jobs == ["resolve"]
+    first_step = DOC["jobs"]["resolve"]["steps"][0]
+    assert first_step["name"] == "Require the Slack token"
+    assert first_step["env"]["SLACK_APP_OATH_TOKEN"] == "${{ secrets.SLACK_APP_OATH_TOKEN }}"
+    assert DOC[True]["workflow_call"]["secrets"]["SLACK_APP_OATH_TOKEN"]["required"] is True
+
+
+def test_slack_notifications_are_not_gated_on_the_token():
+    """The token is guaranteed by the first step, so no notify step may be
+    skipped for its absence."""
+    assert "SLACK_CONFIGURED" not in TEXT

@@ -197,8 +197,33 @@ def test_no_stored_doppler_token_is_read():
     assert "secrets.DOPPLER_TOKEN" not in TEXT
 
 
+def _slack_check(token):
+    env = {**os.environ, "SLACK_APP_OATH_TOKEN": token}
+    return subprocess.run(["bash", "-c", _run_body(TEXT, "Warn when no Slack token is configured")], env=env, capture_output=True, text=True)
+
+
+def test_missing_slack_token_warns_and_continues():
+    """An operator-triggered non-production reset proceeds without Slack, but
+    says so where the operator is watching."""
+    r = _slack_check("")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "::warning::" in r.stdout
+    assert "SLACK_APP_OATH_TOKEN" in r.stdout
+
+
+def test_present_slack_token_is_silent():
+    r = _slack_check("xoxb-example")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "::warning::" not in r.stdout
+
+
+def test_slack_warning_is_raised_before_the_approval():
+    names = [s["name"] for s in DOC["jobs"]["resolve"]["steps"]]
+    assert "Warn when no Slack token is configured" in names
+    assert DOC[True]["workflow_call"]["secrets"]["SLACK_APP_OATH_TOKEN"]["required"] is False
+
+
 def test_slack_notifications_are_skipped_without_a_token():
-    """The Slack secret is optional, so no notify step may run without it."""
     spec = DOC["jobs"]["reset"]
     assert spec["env"]["SLACK_CONFIGURED"] == "${{ secrets.SLACK_APP_OATH_TOKEN != '' }}"
     notify = [s for s in spec["steps"] if "slack-notify" in s.get("uses", "")]

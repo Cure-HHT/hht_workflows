@@ -104,7 +104,7 @@ on:
     secrets:
       SLACK_APP_OATH_TOKEN:
         description: "Slack bot token for deploy-outcome notifications"
-        required: false
+        required: true
 
 permissions:
   contents: read
@@ -128,6 +128,19 @@ jobs:
       gcp_project_number: ${{ steps.identity.outputs.gcp_project_number }}
       gcp_sa_email: ${{ steps.identity.outputs.gcp_sa_email }}
     steps:
+      # A deploy always announces its outcome, so a missing token refuses here,
+      # before anything is built or deployed, rather than after a revision is
+      # already serving.
+      - name: Require the Slack token
+        env:
+          SLACK_APP_OATH_TOKEN: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_APP_OATH_TOKEN}" ]; then
+            echo "::error::The SLACK_APP_OATH_TOKEN secret is missing; a deploy must be able to announce its outcome."
+            exit 1
+          fi
+
       - name: Check out the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -380,9 +393,6 @@ jobs:
       VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
       DOPPLER_RUNTIME_IDENTITY_ID: ${{ vars.DOPPLER_RUNTIME_IDENTITY_ID }}
       DOPPLER_RUNTIME_AUDIENCE: ${{ vars.DOPPLER_RUNTIME_AUDIENCE }}
-      # The Slack token is optional; without it the notify steps are skipped
-      # rather than failing a deploy that succeeded.
-      SLACK_CONFIGURED: ${{ secrets.SLACK_APP_OATH_TOKEN != '' }}
       # How long a portal boot waits for the database's boot lock. The revision
       # receives it as an env var, and the verify step waits this long plus a
       # catch-up margin.
@@ -838,7 +848,7 @@ jobs:
       # bookmark keeps exactly one "live versions" entry per environment in the
       # routed channel.
       - name: Notify Slack on deploy success
-        if: success() && env.SLACK_CONFIGURED == 'true'
+        if: success()
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
           event: deploy-success
@@ -862,7 +872,7 @@ jobs:
       # cannot become the visible terminal failure; the step that failed stays
       # the attributed cause.
       - name: Notify Slack on deploy failure
-        if: failure() && env.SLACK_CONFIGURED == 'true'
+        if: failure()
         continue-on-error: true
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
@@ -943,8 +953,6 @@ jobs:
     permissions:
       contents: read
       id-token: write   # keyless cosign via GitHub OIDC -> Sigstore
-    env:
-      SLACK_CONFIGURED: ${{ secrets.SLACK_APP_OATH_TOKEN != '' }}
     steps:
       - name: Checkout (for slack-channels.yml routing)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1002,7 +1010,7 @@ jobs:
           cosign attest --yes --type cyclonedx --predicate sbom-cyclonedx.json "$IMAGE_PATH"
 
       - name: Notify Slack on attest failure
-        if: failure() && env.SLACK_CONFIGURED == 'true'
+        if: failure()
         continue-on-error: true
         uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:

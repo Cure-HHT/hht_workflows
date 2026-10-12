@@ -335,7 +335,9 @@ The revision authenticates to Doppler with its runtime identity; there is no
 stored-token path.
 
 The workflow declares no concurrency group and no dispatch trigger: the caller
-serialises per environment and owns the dispatch form. Deploy-outcome Slack
+serialises per environment and owns the dispatch form. The
+`SLACK_APP_OATH_TOKEN` secret is required: without it the deploy refuses
+before anything is built or deployed. Deploy-outcome Slack
 posts route through the caller's `.github/slack-channels.yml`; the uat/prod
 email is sent only when the caller passes `representative-email`,
 `notification-sender` and `notification-service-account`.
@@ -369,6 +371,8 @@ sponsor itself:
   `deployment/docker/db-reset-job` and runs in-VPC under the environment's
   Doppler runtime identity. `RESET_JOB_SERVICE_ACCOUNT` (environment variable)
   optionally names the account the job runs as.
+  Without the `SLACK_APP_OATH_TOKEN` secret the reset warns and runs without
+  its Slack posts.
 - [`.github/workflows/archive-deployment-logs.yml`](.github/workflows/archive-deployment-logs.yml)
   archives one run's log and a deployment record; the caller states the
   operation (`deploy`, `hotfix-deploy` or `manual`).
