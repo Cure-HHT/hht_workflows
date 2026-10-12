@@ -36,6 +36,7 @@ hooks/confidential-terms-scan/tests
 scripts/publish/tests
 .github/actions/cloud-run-resolve-serving-digest/tests
 tests/test_promote_template.py
+tests/test_readiness_path_gate.py
 bootstrap/tests
 scripts/oq-compile/test_oq_compile'
 
