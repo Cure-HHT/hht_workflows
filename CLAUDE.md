@@ -32,7 +32,7 @@ Workflows trigger on both `pull_request` and (limited) `push: branches: [main]`.
 
 ### Validation Summary is a meta-check
 
-`validation-summary` polls all other check runs on the PR head commit, waits up to 30 minutes for them to finalize, and emits a single PASS/FAIL plus an upserted PR comment. It is the aggregate required-context the org ruleset depends on so the list of "real" required checks can evolve without touching org config every time. Its trigger types **must** mirror those of every check it supervises (notably `edited` for PR-title re-validation on title/body edits).
+`validation-summary-gate` publishes the aggregate required context `Validation Summary` the org ruleset depends on, so the list of "real" required checks can evolve without touching org config every time. It is event-driven: `validation-summary-gate.yml` (default branch only, `workflow_run` on every workflow plus `check_run`) evaluates the PR head commit once per completion and creates the check run through the Checks API, instead of holding a runner that polls. Its `workflows: ["**", "!Validation Summary Gate"]` filter covers every workflow, so a new PR workflow needs no wiring; the job `if:` lists only the workflows that re-run on `edited` (notably `Validate PR Title`), so an edit turns the gate back to pending at once. The polling action `validation-summary` and its wrapper remain only until the transition described in the gate's README completes.
 
 ### Release-notes pipeline (deterministic half — PR 1)
 

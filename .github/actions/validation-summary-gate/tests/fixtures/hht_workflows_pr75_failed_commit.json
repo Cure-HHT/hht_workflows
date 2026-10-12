@@ -1,0 +1,523 @@
+{
+ "source": "read-only GET of api.github.com, fields the gate reads only",
+ "repo": "Cure-HHT/hht_workflows",
+ "pr": 75,
+ "head_sha": "bdb1e8ec4a81c63992954d15d3011975b5ed01d3",
+ "polling_gate_state": "failure",
+ "polling_gate_conclusion": "failure",
+ "expected_verdict": "failure",
+ "check_runs": [
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106900535641",
+   "id": 106900535641,
+   "name": "Notify failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861811876
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773024259/job/106899907296",
+   "id": 106899907296,
+   "name": "Notify failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810471
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023846/job/106899349659",
+   "id": 106899349659,
+   "name": "Notify failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810446
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023829/job/106899254476",
+   "id": 106899254476,
+   "name": "Notify failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810446
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023829/job/106899254122",
+   "id": 106899254122,
+   "name": "Build, publish, then refuse",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810425
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023825/job/106899248784",
+   "id": 106899248784,
+   "name": "Notify failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810760
+   },
+   "conclusion": "skipped",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023930/job/106899195646",
+   "id": 106899195646,
+   "name": "Notify failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810637
+   },
+   "conclusion": "failure",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023892/job/106899141988",
+   "id": 106899141988,
+   "name": "Validation Summary",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810425
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023825/job/106899141636",
+   "id": 106899141636,
+   "name": "no-or-true-guard",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810568
+   },
+   "conclusion": "failure",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023884/job/106899141494",
+   "id": 106899141494,
+   "name": "notify-failure-presence",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861811876
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773024259/job/106899137605",
+   "id": 106899137605,
+   "name": "Repo Bootstrap / Fresh clone",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899137509",
+   "id": 106899137509,
+   "name": "build-urs",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810596
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023878/job/106899137015",
+   "id": 106899137015,
+   "name": "Validate PR Title",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136798",
+   "id": 106899136798,
+   "name": "confidential-terms-scan",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136724",
+   "id": 106899136724,
+   "name": "confidential-terms-gate",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136653",
+   "id": 106899136653,
+   "name": "doppler-cli-oidc-auth",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136646",
+   "id": 106899136646,
+   "name": "sponsor-base-preflight",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136636",
+   "id": 106899136636,
+   "name": "release-notes-publish",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136616",
+   "id": 106899136616,
+   "name": "notify-failure",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136554",
+   "id": 106899136554,
+   "name": "doppler-oidc-auth",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136497",
+   "id": 106899136497,
+   "name": "no-op",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136492",
+   "id": 106899136492,
+   "name": "build-oq",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810471
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023846/job/106899136424",
+   "id": 106899136424,
+   "name": "Release Notes Tests",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810446
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023829/job/106899136334",
+   "id": 106899136334,
+   "name": "Negative controls",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "failure",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136319",
+   "id": 106899136319,
+   "name": "gcp-wif-auth",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810760
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023930/job/106899136138",
+   "id": 106899136138,
+   "name": "Security - Check for Secrets",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899136075",
+   "id": 106899136075,
+   "name": "notify-failure-lint",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810471
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023846/job/106899136044",
+   "id": 106899136044,
+   "name": "oq-compile tests",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810446
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023829/job/106899135852",
+   "id": 106899135852,
+   "name": "Mechanism unit tests",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 96861810112
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728/job/106899135767",
+   "id": 106899135767,
+   "name": "cosign-verify",
+   "status": "completed"
+  }
+ ],
+ "workflow_runs": [
+  {
+   "check_suite_id": 96861811876,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773024259",
+   "id": 35773024259,
+   "name": "Repo Bootstrap",
+   "status": "completed",
+   "workflow_id": 319158052
+  },
+  {
+   "check_suite_id": 96861810112,
+   "conclusion": "failure",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023728",
+   "id": 35773023728,
+   "name": "Readiness Checks",
+   "status": "completed",
+   "workflow_id": 275556900
+  },
+  {
+   "check_suite_id": 96861810637,
+   "conclusion": "failure",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023892",
+   "id": 35773023892,
+   "name": "Validation Summary",
+   "status": "completed",
+   "workflow_id": 273878354
+  },
+  {
+   "check_suite_id": 96861810568,
+   "conclusion": "failure",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023884",
+   "id": 35773023884,
+   "name": "notify-failure presence",
+   "status": "completed",
+   "workflow_id": 320114214
+  },
+  {
+   "check_suite_id": 96861810596,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023878",
+   "id": 35773023878,
+   "name": "Validate PR Title",
+   "status": "completed",
+   "workflow_id": 273878353
+  },
+  {
+   "check_suite_id": 96861810760,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023930",
+   "id": 35773023930,
+   "name": "Security - Check for Secrets",
+   "status": "completed",
+   "workflow_id": 273875268
+  },
+  {
+   "check_suite_id": 96861810425,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023825",
+   "id": 35773023825,
+   "name": "no-or-true-guard",
+   "status": "completed",
+   "workflow_id": 309047136
+  },
+  {
+   "check_suite_id": 96861810446,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023829",
+   "id": 35773023829,
+   "name": "Pipeline",
+   "status": "completed",
+   "workflow_id": 364526982
+  },
+  {
+   "check_suite_id": 96861810471,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/hht_workflows/actions/runs/35773023846",
+   "id": 35773023846,
+   "name": "Release Notes Tests",
+   "status": "completed",
+   "workflow_id": 276871996
+  }
+ ]
+}

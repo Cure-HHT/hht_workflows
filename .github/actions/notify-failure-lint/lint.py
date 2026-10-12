@@ -188,12 +188,34 @@ def _check_no_enumeration_lookup(filename, jobs):
     return violations
 
 
+# The one `workflow_run.workflows` filter that is not an enumeration: every
+# workflow (`**`), optionally minus the workflow itself by its own `name:`.
+# GitHub's `workflows` filter takes glob patterns (docs: "Using filters" /
+# section-specifying-workflows), so "all workflows" needs no names; the only
+# name allowed is the file's own, which this check reads from the same file,
+# so it cannot go stale unnoticed. Anything else is a list of names someone
+# must maintain, which is what rule C forbids.
+_ALL_WORKFLOWS = ("**",)
+
+
+def _is_all_workflows_filter(workflows, own_name):
+    if not isinstance(workflows, list) or not workflows:
+        return False
+    positives = [w for w in workflows if not str(w).startswith("!")]
+    negatives = [str(w)[1:] for w in workflows if str(w).startswith("!")]
+    if positives != list(_ALL_WORKFLOWS):
+        return False
+    return all(own_name and n == own_name for n in negatives)
+
+
 def _check_no_workflow_enumeration(filename, wf):
     """Assertion C, decided syntactically on `on.workflow_run.workflows`.
 
     Evaluated for EVERY workflow, before the covered-trigger decision: the
     defect this rule exists to catch lived in a workflow_run-only workflow,
-    which rule A never looks at.
+    which rule A never looks at. A filter selecting every workflow (`**`,
+    optionally `!<this workflow's own name>`) names no other workflow and so
+    is not an enumeration.
 
     Implements: HHT-OPS-failure-notification-routing/F
     """
@@ -202,11 +224,14 @@ def _check_no_workflow_enumeration(filename, wf):
         return []
     trigger = on.get("workflow_run")
     if isinstance(trigger, dict) and "workflows" in trigger:
+        if _is_all_workflows_filter(trigger.get("workflows"), wf.get("name")):
+            return []
         return [f"{filename}: `on.workflow_run.workflows` is a hand-maintained "
-                f"enumeration of workflow display names. It is matched exactly, "
-                f"supports no wildcard, and reports nothing when an entry stops "
-                f"matching — announce failure from inside each workflow with the "
-                f"standard notify-failure job instead"]
+                f"enumeration of workflow display names; an entry that stops "
+                f"matching reports nothing. Announce failure from inside each "
+                f"workflow with the standard notify-failure job instead. The "
+                f"only accepted filter is every workflow: [\"**\"], optionally "
+                f"followed by \"!<this workflow's own name>\""]
     return []
 
 

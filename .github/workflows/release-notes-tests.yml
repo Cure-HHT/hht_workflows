@@ -28,6 +28,8 @@ on:
       # cloud-run-resolve-serving-digest was added with a test suite but never
       # added here, so a post-merge change to the action ran no tests on main.
       - '.github/actions/cloud-run-resolve-serving-digest/**'
+      - '.github/actions/validation-summary-gate/**'
+      - '.github/actions/notify-failure-lint/**'
       - '.github/workflows/promote-template.yml'
       - '.github/workflows/deploy-cloud-run.yml'
       - '.github/workflows/reset-db.yml'
@@ -140,6 +142,11 @@ jobs:
       # Verifies: HSI-OPS-promotion-gate-qa/D. The source-health gate refuses on
       # states a live project will not produce on demand — a healthy service
       # cannot be asked to report `degraded` just to watch the refusal.
+      - name: Run validation-summary-gate tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/validation-summary-gate
+          PYTHONPATH=. pytest tests/ -v
       - name: Run promote-template source-health tests
         run: |
           set -euo pipefail

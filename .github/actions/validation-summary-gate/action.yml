@@ -1,0 +1,84 @@
+# Validation Summary gate -- composite action (event-driven).
+#
+# Publishes the org ruleset's required "Validation Summary" check as a
+# check run created through the Checks API, re-evaluated each time a pull
+# request workflow finishes, instead of holding a runner that polls. One
+# evaluation reads the head commit's check runs and workflow runs once
+# (re-reading at most `relist-attempts` times while the listing lags the
+# event that fired it), decides, publishes, and exits.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file). The logic and its
+# semantics are documented in gate.py; tests are in tests/.
+#
+# The caller is a workflow on the DEFAULT branch triggered by
+# `workflow_run` and `check_run` -- see README.md for the wrapper. It never
+# checks out or runs pull-request code: everything it needs comes from the
+# GitHub API, and the only value taken from the event is the head commit
+# sha, validated as 40 hex characters.
+#
+# The polling action .github/actions/validation-summary stays in place for
+# consumers whose pin predates this one.
+
+name: 'Validation Summary Gate'
+description: 'Evaluate every check run on a pull request head commit once, and publish the result as the "Validation Summary" check run'
+
+inputs:
+  check-name:
+    description: >
+      Name of the check run to publish. Must equal the context the branch
+      ruleset requires. Check runs with this name are never counted.
+    required: false
+    default: 'Validation Summary'
+  base-branch:
+    description: >
+      Only pull requests into this branch are gated; a commit that is not the
+      current head of an open pull request into it is left alone.
+    required: false
+    default: 'main'
+  ignore-workflows:
+    description: >
+      Newline-separated workflow names whose runs and check runs are never
+      counted: the gate's own workflow and, during the transition, the
+      polling workflow that also reports "Validation Summary".
+    required: false
+    default: |
+      Validation Summary
+      Validation Summary Gate
+  relist-attempts:
+    description: >
+      How many times to re-read the checks when the listing visibly lags the
+      event that fired this evaluation (the triggering run still reads as
+      unfinished). Bounds the wait at relist-attempts x relist-interval-seconds.
+    required: false
+    default: '3'
+  relist-interval-seconds:
+    description: Seconds between those re-reads.
+    required: false
+    default: '20'
+  github-token:
+    description: >
+      Token with checks:write, pull-requests:write, actions:read and
+      contents:read. The default GITHUB_TOKEN of a workflow_run/check_run
+      workflow carries base-repository permissions, fork PRs included.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  verdict:
+    description: '`success`, `failure` or `pending`; empty when the event was not for an open pull request head.'
+    value: ${{ steps.gate.outputs.verdict }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Evaluate and publish Validation Summary
+      id: gate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_CHECK_NAME: ${{ inputs.check-name }}
+        INPUT_BASE_BRANCH: ${{ inputs.base-branch }}
+        INPUT_IGNORE_WORKFLOWS: ${{ inputs.ignore-workflows }}
+        INPUT_RELIST_ATTEMPTS: ${{ inputs.relist-attempts }}
+        INPUT_RELIST_INTERVAL_SECONDS: ${{ inputs.relist-interval-seconds }}
+      run: python3 "$GITHUB_ACTION_PATH/gate.py"
