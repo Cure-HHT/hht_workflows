@@ -22,10 +22,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request supersedes the lint of the older one.
+concurrency:
+  group: notify-presence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   notify-failure-presence:
     name: notify-failure-presence
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

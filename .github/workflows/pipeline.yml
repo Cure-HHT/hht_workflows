@@ -39,9 +39,14 @@ env:
   # collapsing that one needs the wider cleanup rather than a line here.
   GITLEAKS_VERSION: 8.29.0
 
+# A pull request's verdict only has to describe its tip, so a newer push
+# cancels the older run. A push to main must never be cancelled: it publishes
+# `commit-<sha>`, and a commit whose run was dropped has no image. Each main or
+# dispatch run therefore gets a group of its own -- a shared group would still
+# let GitHub discard a pending main run when a third one queues behind it.
 concurrency:
-  group: pipeline-${{ github.ref }}
-  cancel-in-progress: false
+  group: pipeline-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The mechanism's own unit suite, in the workflow that depends on it.
