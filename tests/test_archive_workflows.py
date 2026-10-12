@@ -5,6 +5,7 @@ that would write a wrong or empty record: a run id that is not one, an
 operation the caller did not state, and a sponsor read from anywhere but
 sponsor.toml. Steps are extracted verbatim and run against fixtures.
 """
+import json
 import os
 import pathlib
 import subprocess
@@ -132,3 +133,28 @@ def test_archives_are_called_only(text):
 @pytest.mark.parametrize("text", [LOGS, BUILDS])
 def test_upload_is_verified_against_the_packaged_checksum(text):
     assert 'if [ "$want" != "$got" ]' in text
+
+
+def _package(tmp_path, reports_present):
+    env = {
+        **os.environ,
+        "SPONSOR": "example",
+        "VERSION": "1.2.3",
+        "SOURCE_RUN_ID": "42",
+        "DEPLOYER": "someone",
+        "REPORTS_PRESENT": reports_present,
+        "GITHUB_RUN_ID": "43",
+        "GITHUB_SHA": "0" * 40,
+        "GITHUB_ENV": str(tmp_path / "github_env"),
+    }
+    r = subprocess.run(
+        ["bash", "-c", _run_body(BUILDS, "Create and package the archive")],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    return json.loads((tmp_path / "metadata.json").read_text())
+
+
+@pytest.mark.parametrize("flag,expected", [("true", True), ("false", False)])
+def test_reports_present_is_recorded_as_a_boolean(tmp_path, flag, expected):
+    assert _package(tmp_path, flag)["reports_present"] is expected

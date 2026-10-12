@@ -267,3 +267,36 @@ def test_resolve_job_exposes_the_declared_region_and_audience():
     outputs = DOC["jobs"]["resolve"]["outputs"]
     assert outputs["region"] == "${{ steps.identity.outputs.region }}"
     assert outputs["doppler_audience"] == "${{ steps.identity.outputs.doppler_audience }}"
+
+
+def _summary(tmp_path, status):
+    summary = tmp_path / "summary.md"
+    env = {
+        **os.environ,
+        "TARGET_ENV": "dev",
+        "GCP_PROJECT_ID": "example-dev",
+        "JOB_STATUS": status,
+        "GITHUB_STEP_SUMMARY": str(summary),
+    }
+    r = subprocess.run(["bash", "-c", _run_body(TEXT, "Summary")], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return summary.read_text()
+
+
+def test_summary_reports_the_reset_on_success(tmp_path):
+    text = _summary(tmp_path, "success")
+    assert "dropped" in text
+    assert "deploy must follow" in text
+
+
+@pytest.mark.parametrize("status", ["failure", "cancelled"])
+def test_summary_does_not_claim_a_reset_that_did_not_finish(tmp_path, status):
+    text = _summary(tmp_path, status)
+    assert "dropped" not in text
+    assert status in text
+    assert "failed step" in text
+
+
+def test_summary_is_given_the_job_status():
+    step = next(s for s in DOC["jobs"]["reset"]["steps"] if s.get("name") == "Summary")
+    assert step["env"]["JOB_STATUS"] == "${{ job.status }}"

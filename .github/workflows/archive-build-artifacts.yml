@@ -131,7 +131,7 @@ jobs:
             --arg version         "$VERSION" \
             --arg timestamp       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg deployer        "$DEPLOYER" \
-            --arg reports_present "$REPORTS_PRESENT" \
+            --argjson reports_present "$REPORTS_PRESENT" \
             --argjson retention   7 \
             '{
               artifact_type:   $artifact_type,

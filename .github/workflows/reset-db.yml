@@ -336,14 +336,21 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
             echo "## Portal DB reset - ${TARGET_ENV}"
             echo ""
             echo "- Target project: \`${GCP_PROJECT_ID}\`"
-            echo "- Action: in-VPC job dropped \`portal\` and \`public\` and recreated both"
-            echo "  empty, owned by the owner role; the runtime role \`portal_runtime\`"
-            echo "  exists with CONNECT on the database."
-            echo "- Next: a portal deploy must follow. Its provisioning job creates the event"
-            echo "  store; until then the portal refuses to open the empty schema."
+            if [ "$JOB_STATUS" = "success" ]; then
+              echo "- Action: in-VPC job dropped \`portal\` and \`public\` and recreated both"
+              echo "  empty, owned by the owner role; the runtime role \`portal_runtime\`"
+              echo "  exists with CONNECT on the database."
+              echo "- Next: a portal deploy must follow. Its provisioning job creates the event"
+              echo "  store; until then the portal refuses to open the empty schema."
+            else
+              echo "- Result: the reset job ended \`${JOB_STATUS}\`. Inspect the failed step"
+              echo "  before retrying; the database may be untouched or partially reset."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
