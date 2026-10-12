@@ -22,12 +22,12 @@ name: "[internal] Reset sponsor portal database"
 # connector. Database credentials never reach the runner.
 #
 # The job image is built from the caller's deployment/docker/db-reset-job and
-# pushed to the sponsor's own Artifact Registry repository. Identity comes from
-# the caller's sponsor.toml, platform constants from its
-# deployment/base-config.json, and per-environment facts from the bound GitHub
-# environment's variables (GCP_PROJECT_ID, GCP_REGION, VPC_CONNECTOR,
-# DOPPLER_RUNTIME_IDENTITY_ID, DOPPLER_RUNTIME_AUDIENCE, and optionally
-# RESET_JOB_SERVICE_ACCOUNT). Nothing here names a sponsor.
+# pushed to the sponsor's own Artifact Registry repository. Identity, the
+# environment's project and the region come from the caller's sponsor.toml,
+# platform constants from its deployment/base-config.json, and the bound
+# GitHub environment's variables supply only DOPPLER_RUNTIME_IDENTITY_ID and,
+# optionally, RESET_JOB_SERVICE_ACCOUNT. The VPC connector is found in the
+# declared project and region. Nothing here names a sponsor.
 #
 # The caller owns dispatch and the per-environment concurrency group.
 on:
@@ -61,6 +61,8 @@ jobs:
       sponsor_id: ${{ steps.identity.outputs.sponsor_id }}
       doppler_project: ${{ steps.identity.outputs.doppler_project }}
       declared_project: ${{ steps.identity.outputs.declared_project }}
+      region: ${{ steps.identity.outputs.region }}
+      doppler_audience: ${{ steps.identity.outputs.doppler_audience }}
       job_image: ${{ steps.identity.outputs.job_image }}
       registry_host: ${{ steps.identity.outputs.registry_host }}
       gcp_project_number: ${{ steps.identity.outputs.gcp_project_number }}
@@ -125,7 +127,7 @@ jobs:
                   ident = tomllib.load(fh)
           except FileNotFoundError:
               fail("sponsor.toml is missing from the repository root; it declares the sponsor this repository resets.")
-          for key in ("id", "repository", "doppler_project", "artifact_registry_repository"):
+          for key in ("id", "repository", "doppler_project", "artifact_registry_repository", "region"):
               if not isinstance(ident.get(key), str) or not ident[key].strip():
                   fail(f"sponsor.toml: {key} must be a non-empty string")
           repo_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]
@@ -154,6 +156,8 @@ jobs:
               "sponsor_id": ident["id"],
               "doppler_project": ident["doppler_project"],
               "declared_project": project,
+              "region": ident["region"],
+              "doppler_audience": f"doppler-runtime:{ident['doppler_project']}:{target}",
               "job_image": f"{host}/{gar_project}/{ident['artifact_registry_repository']}/db-reset-job:{os.environ['GITHUB_SHA'][:12]}",
               "registry_host": host,
               "gcp_project_number": platform("gcp.project_number"),
@@ -170,22 +174,20 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     # The environment's protection rules hold the reset for approval where they
-    # require it, and its variables are the only source of per-environment
-    # facts.
+    # require it, and the environment supplies its Doppler runtime identity.
     environment: ${{ inputs.target-env }}
     permissions:
       contents: read
       id-token: write
     env:
       TARGET_ENV: ${{ inputs.target-env }}
-      DECLARED_PROJECT: ${{ needs.resolve.outputs.declared_project }}
       DOPPLER_PROJECT: ${{ needs.resolve.outputs.doppler_project }}
       JOB_IMAGE: ${{ needs.resolve.outputs.job_image }}
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_REGION: ${{ vars.GCP_REGION }}
-      VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
+      SPONSOR_ID: ${{ needs.resolve.outputs.sponsor_id }}
+      GCP_PROJECT_ID: ${{ needs.resolve.outputs.declared_project }}
+      GCP_REGION: ${{ needs.resolve.outputs.region }}
       DOPPLER_RUNTIME_IDENTITY_ID: ${{ vars.DOPPLER_RUNTIME_IDENTITY_ID }}
-      DOPPLER_RUNTIME_AUDIENCE: ${{ vars.DOPPLER_RUNTIME_AUDIENCE }}
+      DOPPLER_RUNTIME_AUDIENCE: ${{ needs.resolve.outputs.doppler_audience }}
       RESET_JOB_SERVICE_ACCOUNT: ${{ vars.RESET_JOB_SERVICE_ACCOUNT }}
       RESET_JOB_NAME: db-reset
       # Without the Slack token the notify steps are skipped; the resolve job
@@ -195,20 +197,11 @@ jobs:
       # Implements: HHT-OPS-identity-over-keys/F
       #   The job authenticates to Doppler with the environment's runtime
       #   identity; there is no stored token to fall back to.
-      - name: Confirm the environment matches the sponsor identity
+      - name: Confirm the environment names its runtime identity
         run: |
           set -euo pipefail
-          missing=""
-          for v in GCP_PROJECT_ID GCP_REGION VPC_CONNECTOR \
-                   DOPPLER_RUNTIME_IDENTITY_ID DOPPLER_RUNTIME_AUDIENCE; do
-            if [ -z "${!v:-}" ]; then missing="$missing $v"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::environment '$TARGET_ENV' is missing variables:$missing. They are written by the sponsor's Terraform; apply it for this environment."
-            exit 1
-          fi
-          if [ "$GCP_PROJECT_ID" != "$DECLARED_PROJECT" ]; then
-            echo "::error::environment variables name project '$GCP_PROJECT_ID' but sponsor.toml declares '$DECLARED_PROJECT' for '$TARGET_ENV'. Refusing to reset."
+          if [ -z "${DOPPLER_RUNTIME_IDENTITY_ID:-}" ]; then
+            echo "::error::environment '$TARGET_ENV' has no DOPPLER_RUNTIME_IDENTITY_ID variable. The org administration repository writes it when it creates the identity."
             exit 1
           fi
           echo "Resetting $DOPPLER_PROJECT/$TARGET_ENV in $GCP_PROJECT_ID ($GCP_REGION)"
@@ -241,6 +234,21 @@ jobs:
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+
+      # The connector carries the name the network module gives it and must be
+      # in the region sponsor.toml declares; the job reaches the database only
+      # through it.
+      # Implements: HHT-OPS-sponsor-name-is-data/B
+      - name: Locate the environment's VPC connector
+        run: |
+          set -euo pipefail
+          CONNECTOR="${SPONSOR_ID}-${TARGET_ENV}-vpc-con"
+          if ! gcloud compute networks vpc-access connectors describe "$CONNECTOR" \
+                --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format="value(name)" >/dev/null; then
+            echo "::error::VPC connector $CONNECTOR was not found in $GCP_PROJECT_ID region $GCP_REGION, the region sponsor.toml declares."
+            exit 1
+          fi
+          echo "VPC_CONNECTOR=$CONNECTOR" >> "$GITHUB_ENV"
 
       - name: Build and push the reset job image
         env:
@@ -305,7 +313,7 @@ jobs:
               {"type":"section","text":{"type":"mrkdwn","text":":broom: *DB reset succeeded* (${{ github.actor }})"}},
               {"type":"table","rows":[
                 [{"type":"raw_text","text":"env"},     {"type":"raw_text","text":"${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }}"}],
-                [{"type":"raw_text","text":"project"}, {"type":"raw_text","text":"${{ vars.GCP_PROJECT_ID }}"}],
+                [{"type":"raw_text","text":"project"}, {"type":"raw_text","text":"${{ env.GCP_PROJECT_ID }}"}],
                 [{"type":"raw_text","text":"action"},  {"type":"raw_text","text":"in-VPC drop of schemas portal and public; empty owner-held portal schema and portal_runtime role left; a portal deploy must follow"}]
               ]}
             ]

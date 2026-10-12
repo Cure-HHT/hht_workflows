@@ -15,17 +15,18 @@ name: "[internal] Deploy Cloud Run service"
 # in the caller's context, and every value comes from one of three places:
 #
 #   - the caller's sponsor.toml (the Sponsor Identity Declaration): sponsor id,
-#     Doppler project, repository, Artifact Registry repository, and the GCP
-#     project and portal domain each environment is declared with;
+#     Doppler project, repository, Artifact Registry repository, region, and
+#     the GCP project and portal domain each environment is declared with;
 #   - the caller's deployment/base-config.json (the Sponsor Build
 #     Configuration): platform constants only -- the registry host and project,
 #     and the workload identity project number and service account;
-#   - the variables of the GitHub environment the deploy job is bound to:
-#     GCP_PROJECT_ID, GCP_REGION, CLOUD_SQL_CONNECTION, VPC_CONNECTOR and
-#     DOPPLER_RUNTIME_AUDIENCE, written there by the sponsor's Terraform, and
-#     DOPPLER_RUNTIME_IDENTITY_ID, written there by the org administration
-#     repository that creates the identity. Adding an environment needs no
-#     edit here.
+#   - the variable DOPPLER_RUNTIME_IDENTITY_ID of the GitHub environment the
+#     deploy job is bound to, written there by the org administration
+#     repository that creates the identity.
+#
+# The environment's database and VPC connector are found in its declared
+# project at deploy time, and must be in the declared region: the sponsor's
+# data-residency choice. Adding an environment needs no edit here.
 #
 # Image paths are computed from the identity and the platform constants, never
 # read from configuration, so a build configuration carrying identity cannot
@@ -122,6 +123,8 @@ jobs:
       sponsor_id: ${{ steps.identity.outputs.sponsor_id }}
       doppler_project: ${{ steps.identity.outputs.doppler_project }}
       declared_project: ${{ steps.identity.outputs.declared_project }}
+      region: ${{ steps.identity.outputs.region }}
+      doppler_audience: ${{ steps.identity.outputs.doppler_audience }}
       portal_domain: ${{ steps.identity.outputs.portal_domain }}
       record_repository: ${{ steps.identity.outputs.record_repository }}
       gar_project: ${{ steps.identity.outputs.gar_project }}
@@ -185,7 +188,7 @@ jobs:
               errors.append(f"sponsor.toml is not valid TOML: {exc}")
               fail()
 
-          for key in ("id", "repository", "doppler_project", "artifact_registry_repository"):
+          for key in ("id", "repository", "doppler_project", "artifact_registry_repository", "region"):
               value = ident.get(key)
               if not isinstance(value, str) or not value.strip():
                   errors.append(f"sponsor.toml: {key} must be a non-empty string")
@@ -254,6 +257,8 @@ jobs:
               "sponsor_id": ident["id"],
               "doppler_project": ident["doppler_project"],
               "declared_project": project,
+              "region": ident["region"],
+              "doppler_audience": f"doppler-runtime:{ident['doppler_project']}:{target}",
               "portal_domain": env_decl.get("portal_domain", ""),
               "record_repository": f"ghcr.io/{owner}/{ident['repository'].lower()}/pipeline",
               "gar_project": gar_project,
@@ -372,8 +377,7 @@ jobs:
     needs: [resolve, verify-the-record]
     runs-on: ubuntu-latest
     # The environment binding gates this job on the target environment's
-    # protection rules, and its variables are the only source of
-    # per-environment facts.
+    # protection rules and supplies its Doppler runtime identity.
     environment: ${{ inputs.approval_environment != '' && inputs.approval_environment || inputs.target-env }}
     permissions:
       contents: read
@@ -387,12 +391,10 @@ jobs:
       DECLARED_PROJECT: ${{ needs.resolve.outputs.declared_project }}
       GCP_SA_EMAIL: ${{ needs.resolve.outputs.gcp_sa_email }}
       WIF_PROVIDER: projects/${{ needs.resolve.outputs.gcp_project_number }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_REGION: ${{ vars.GCP_REGION }}
-      CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
-      VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
+      GCP_PROJECT_ID: ${{ needs.resolve.outputs.declared_project }}
+      GCP_REGION: ${{ needs.resolve.outputs.region }}
       DOPPLER_RUNTIME_IDENTITY_ID: ${{ vars.DOPPLER_RUNTIME_IDENTITY_ID }}
-      DOPPLER_RUNTIME_AUDIENCE: ${{ vars.DOPPLER_RUNTIME_AUDIENCE }}
+      DOPPLER_RUNTIME_AUDIENCE: ${{ needs.resolve.outputs.doppler_audience }}
       # How long a portal boot waits for the database's boot lock. The revision
       # receives it as an env var, and the verify step waits this long plus a
       # catch-up margin.
@@ -417,55 +419,20 @@ jobs:
         uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
           service: ${{ inputs.service-name }}
-          region: ${{ vars.GCP_REGION }}
+          region: ${{ env.GCP_REGION }}
           project: ${{ inputs.verify_source_project }}
           expected_digest: ${{ inputs.expected_digest }}
 
-      # The environment's variables are written by Terraform and sponsor.toml
-      # is written by hand; they must agree before either is trusted. An
-      # approval environment carrying another environment's variables, or a
-      # variable left empty, stops the deploy here.
       # Implements: HHT-OPS-identity-over-keys/F
       #   Every deployable environment names its own Doppler runtime identity;
       #   there is no stored-token path to fall back to.
-      - name: Confirm the environment matches the sponsor identity
+      - name: Confirm the environment names its runtime identity
         run: |
           set -euo pipefail
-          missing=""
-          for v in GCP_PROJECT_ID GCP_REGION CLOUD_SQL_CONNECTION VPC_CONNECTOR \
-                   DOPPLER_RUNTIME_IDENTITY_ID DOPPLER_RUNTIME_AUDIENCE; do
-            if [ -z "${!v:-}" ]; then missing="$missing $v"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::environment '$TARGET_ENV' is missing variables:$missing. They are written by the sponsor's Terraform; apply it for this environment."
+          if [ -z "${DOPPLER_RUNTIME_IDENTITY_ID:-}" ]; then
+            echo "::error::environment '$TARGET_ENV' has no DOPPLER_RUNTIME_IDENTITY_ID variable. The org administration repository writes it when it creates the identity."
             exit 1
           fi
-
-          if [ "$GCP_PROJECT_ID" != "$DECLARED_PROJECT" ]; then
-            echo "::error::environment variables name project '$GCP_PROJECT_ID' but sponsor.toml declares '$DECLARED_PROJECT' for '$TARGET_ENV'. Refusing to deploy."
-            exit 1
-          fi
-
-          if [[ ! "$CLOUD_SQL_CONNECTION" =~ ^([a-z][a-z0-9-]*):([a-z0-9-]+):[a-z0-9-]+$ ]]; then
-            echo "::error::CLOUD_SQL_CONNECTION '$CLOUD_SQL_CONNECTION' is not a <project>:<region>:<instance> connection name."
-            exit 1
-          fi
-          if [ "${BASH_REMATCH[1]}" != "$GCP_PROJECT_ID" ]; then
-            echo "::error::CLOUD_SQL_CONNECTION is in project '${BASH_REMATCH[1]}' but GCP_PROJECT_ID is '$GCP_PROJECT_ID'."
-            exit 1
-          fi
-          if [ "${BASH_REMATCH[2]}" != "$GCP_REGION" ]; then
-            echo "::error::CLOUD_SQL_CONNECTION is in region '${BASH_REMATCH[2]}' but GCP_REGION is '$GCP_REGION'."
-            exit 1
-          fi
-
-          echo "Resolved target:"
-          echo "  environment:    $TARGET_ENV"
-          echo "  project:        $GCP_PROJECT_ID ($GCP_REGION)"
-          echo "  db-connection:  $CLOUD_SQL_CONNECTION"
-          echo "  vpc-connector:  $VPC_CONNECTOR"
-          echo "  doppler:        $DOPPLER_PROJECT/$TARGET_ENV"
-          echo "  image:          $IMAGE_PATH"
 
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -492,25 +459,57 @@ jobs:
             --project="$GAR_PROJECT" \
             --format="table(image_summary.digest,image_summary.fully_qualified_digest,package,tags)"
 
-      - name: Validate target project resources exist
+      # The database and connector are found in the declared project, never
+      # read from configuration, and must be in the region sponsor.toml
+      # declares. The database is the one Terraform labels for this sponsor
+      # and environment; the connector carries the name the network module
+      # gives it. Anything else -- none, several, or one elsewhere -- refuses.
+      # Implements: HHT-OPS-sponsor-name-is-data/B
+      - name: Locate the environment's database and VPC connector
         run: |
           set -euo pipefail
-          INSTANCE_PROJECT="${CLOUD_SQL_CONNECTION%%:*}"
-          INSTANCE_NAME="${CLOUD_SQL_CONNECTION##*:}"
-
-          echo "Validating target project exists..."
           gcloud projects describe "$GCP_PROJECT_ID" --format="value(projectId)" >/dev/null
 
-          echo "Validating VPC connector exists in target project..."
-          gcloud compute networks vpc-access connectors describe "$VPC_CONNECTOR" \
-            --project="$GCP_PROJECT_ID" \
-            --region="$GCP_REGION" \
-            --format="value(name)" >/dev/null
+          if ! LISTED="$(gcloud sql instances list --project="$GCP_PROJECT_ID" \
+                --filter="settings.userLabels.sponsor=$SPONSOR_ID AND settings.userLabels.environment=$TARGET_ENV AND settings.userLabels.managed_by=terraform" \
+                --format=json)"; then
+            echo "::error::could not list Cloud SQL instances in $GCP_PROJECT_ID, so '$TARGET_ENV' has no known database. Check the deploy service account's cloudsql.instances.list permission."
+            exit 1
+          fi
+          COUNT="$(jq 'length' <<<"$LISTED")"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::no Cloud SQL instance in $GCP_PROJECT_ID is labelled for sponsor '$SPONSOR_ID', environment '$TARGET_ENV', managed by Terraform. Apply the sponsor's Terraform for this environment."
+            exit 1
+          fi
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::error::more than one Cloud SQL instance in $GCP_PROJECT_ID is labelled for '$TARGET_ENV' ($(jq -r '[.[].name] | join(", ")' <<<"$LISTED")); refusing to guess which one serves it."
+            exit 1
+          fi
+          INSTANCE_REGION="$(jq -r '.[0].region' <<<"$LISTED")"
+          CONNECTION="$(jq -r '.[0].connectionName' <<<"$LISTED")"
+          if [ "$INSTANCE_REGION" != "$GCP_REGION" ]; then
+            echo "::error::the database for '$TARGET_ENV' ($CONNECTION) is in $INSTANCE_REGION, but sponsor.toml declares $GCP_REGION. Refusing to deploy outside the sponsor's region."
+            exit 1
+          fi
 
-          echo "Validating Cloud SQL instance exists..."
-          gcloud sql instances describe "$INSTANCE_NAME" \
-            --project="$INSTANCE_PROJECT" \
-            --format="value(name,state)" >/dev/null
+          CONNECTOR="${SPONSOR_ID}-${TARGET_ENV}-vpc-con"
+          if ! gcloud compute networks vpc-access connectors describe "$CONNECTOR" \
+                --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format="value(name)" >/dev/null; then
+            echo "::error::VPC connector $CONNECTOR was not found in $GCP_PROJECT_ID region $GCP_REGION, the region sponsor.toml declares."
+            exit 1
+          fi
+
+          {
+            echo "CLOUD_SQL_CONNECTION=$CONNECTION"
+            echo "VPC_CONNECTOR=$CONNECTOR"
+          } >> "$GITHUB_ENV"
+          echo "Resolved target:"
+          echo "  environment:    $TARGET_ENV"
+          echo "  project:        $GCP_PROJECT_ID ($GCP_REGION)"
+          echo "  db-connection:  $CONNECTION"
+          echo "  vpc-connector:  $CONNECTOR"
+          echo "  doppler:        $DOPPLER_PROJECT/$TARGET_ENV"
+          echo "  image:          $IMAGE_PATH"
 
       # Implements: HHT-OPS-identity-over-keys/F
       #   The revision gets the identity to exchange, never a token. DOPPLER_TOKEN
@@ -645,11 +644,11 @@ jobs:
         uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
           service: ${{ inputs.service-name }}
-          region: ${{ vars.GCP_REGION }}
-          project: ${{ vars.GCP_PROJECT_ID }}
+          region: ${{ env.GCP_REGION }}
+          project: ${{ env.GCP_PROJECT_ID }}
           image: ${{ inputs.image_path }}
-          cloudsql_instances: ${{ vars.CLOUD_SQL_CONNECTION }}
-          vpc_connector: ${{ vars.VPC_CONNECTOR }}
+          cloudsql_instances: ${{ env.CLOUD_SQL_CONNECTION }}
+          vpc_connector: ${{ env.VPC_CONNECTOR }}
           update_env_vars: ${{ steps.envvars.outputs.update_env_vars }}
           remove_env_vars: ${{ steps.envvars.outputs.remove_env_vars }}
 
@@ -781,8 +780,8 @@ jobs:
         uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-migrate-traffic@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
         with:
           service: ${{ inputs.service-name }}
-          region: ${{ vars.GCP_REGION }}
-          project: ${{ vars.GCP_PROJECT_ID }}
+          region: ${{ env.GCP_REGION }}
+          project: ${{ env.GCP_PROJECT_ID }}
           revision: ${{ steps.canary.outputs.revision_name }}
 
       # Reporting, not verification: any lookup failure degrades to "unknown"

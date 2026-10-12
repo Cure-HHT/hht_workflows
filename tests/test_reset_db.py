@@ -45,7 +45,8 @@ def _run_body(text: str, step_name: str) -> str:
 
 GUARD = _run_body(TEXT, "Refuse production and require the typed confirmation")
 IDENTITY = _run_body(TEXT, "Read the sponsor identity")
-CROSS_CHECK = _run_body(TEXT, "Confirm the environment matches the sponsor identity")
+RUNTIME_IDENTITY = _run_body(TEXT, "Confirm the environment names its runtime identity")
+LOCATE = _run_body(TEXT, "Locate the environment's VPC connector")
 
 SPONSOR_TOML = """\
 schema = 1
@@ -56,6 +57,7 @@ req_namespace = "EXA"
 linking_code_prefix = "EX"
 doppler_project = "example-runtime"
 artifact_registry_repository = "example-images"
+region = "europe-west9"
 
 [environments.dev]
 gcp_project_id = "example-proj-dev"
@@ -128,6 +130,8 @@ def test_reset_identity_is_read_from_sponsor_toml(tmp_path):
     assert r.outputs["sponsor_id"] == "example"
     assert r.outputs["doppler_project"] == "example-runtime"
     assert r.outputs["declared_project"] == "example-proj-dev"
+    assert r.outputs["region"] == "europe-west9"
+    assert r.outputs["doppler_audience"] == "doppler-runtime:example-runtime:dev"
     assert r.outputs["job_image"] == (
         "region9-docker.pkg.dev/platform-artifacts/example-images/db-reset-job:" + "e" * 12
     )
@@ -146,41 +150,66 @@ def test_identity_of_another_repository_is_refused(tmp_path):
     assert "declares repository 'hht_diary_example'" in r.stdout
 
 
-def _cross(**overrides):
+def test_missing_region_is_refused(tmp_path):
+    r = _identity(tmp_path, toml=SPONSOR_TOML.replace('region = "europe-west9"\n', ""))
+    assert r.returncode != 0
+    assert "region must be a non-empty string" in r.stdout
+
+
+# Verifies: HHT-OPS-identity-over-keys/F
+def test_environment_without_a_runtime_identity_is_refused():
+    env = {**os.environ, "TARGET_ENV": "dev", "DOPPLER_RUNTIME_IDENTITY_ID": ""}
+    r = subprocess.run(["bash", "-c", RUNTIME_IDENTITY], env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "DOPPLER_RUNTIME_IDENTITY_ID" in r.stdout
+
+
+def _locate(tmp_path, connector_found):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gcloud = bin_dir / "gcloud"
+    gcloud.write_text(f"""#!/usr/bin/env bash
+case "$*" in
+  "compute networks vpc-access connectors describe example-dev-vpc-con"*"--region=europe-west9"*)
+    {"exit 0" if connector_found else "echo NOT_FOUND >&2; exit 1"} ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+""")
+    gcloud.chmod(0o755)
+    env_file = tmp_path / "github_env"
+    env_file.write_text("")
     env = {
         **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "TARGET_ENV": "dev",
-        "DECLARED_PROJECT": "example-proj-dev",
+        "SPONSOR_ID": "example",
         "GCP_PROJECT_ID": "example-proj-dev",
-        "GCP_REGION": "region9",
-        "VPC_CONNECTOR": "example-dev-vpc-con",
-        "DOPPLER_RUNTIME_IDENTITY_ID": "00000000-0000-0000-0000-000000000001",
-        "DOPPLER_RUNTIME_AUDIENCE": "doppler-runtime:example:dev",
-        **overrides,
+        "GCP_REGION": "europe-west9",
+        "GITHUB_ENV": str(env_file),
     }
-    return subprocess.run(["bash", "-c", CROSS_CHECK], env=env, capture_output=True, text=True)
+    proc = subprocess.run(["bash", "-c", LOCATE], env=env, capture_output=True, text=True)
+    proc.env = env_file.read_text()  # type: ignore[attr-defined]
+    return proc
 
 
-def test_consistent_environment_passes():
-    r = _cross()
+# Verifies: HHT-OPS-sponsor-name-is-data/B
+def test_connector_in_the_declared_region_is_used(tmp_path):
+    r = _locate(tmp_path, connector_found=True)
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "VPC_CONNECTOR=example-dev-vpc-con" in r.env
 
 
-def test_environment_naming_another_project_is_refused():
-    r = _cross(GCP_PROJECT_ID="example-proj-uat")
+# Verifies: HHT-OPS-sponsor-name-is-data/B
+def test_connector_outside_the_declared_region_is_refused(tmp_path):
+    r = _locate(tmp_path, connector_found=False)
     assert r.returncode != 0
-    assert "sponsor.toml declares 'example-proj-dev'" in r.stdout
+    assert "example-dev-vpc-con" in r.stdout
+    assert r.env == ""
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["GCP_PROJECT_ID", "GCP_REGION", "VPC_CONNECTOR",
-     "DOPPLER_RUNTIME_IDENTITY_ID", "DOPPLER_RUNTIME_AUDIENCE"],
-)
-def test_missing_environment_variable_is_refused(name):
-    r = _cross(**{name: ""})
-    assert r.returncode != 0
-    assert name in r.stdout
+def test_reset_reads_no_terraform_written_variable():
+    for name in ("GCP_PROJECT_ID", "GCP_REGION", "VPC_CONNECTOR", "DOPPLER_RUNTIME_AUDIENCE"):
+        assert f"vars.{name}" not in TEXT
 
 
 def test_guards_run_before_the_environment_approval():
@@ -230,3 +259,11 @@ def test_slack_notifications_are_skipped_without_a_token():
     assert notify
     for step in notify:
         assert "env.SLACK_CONFIGURED == 'true'" in step["if"], step["name"]
+
+
+def test_resolve_job_exposes_the_declared_region_and_audience():
+    """The reset job reads these from the resolve job; a step output the job
+    does not expose reaches it as an empty string."""
+    outputs = DOC["jobs"]["resolve"]["outputs"]
+    assert outputs["region"] == "${{ steps.identity.outputs.region }}"
+    assert outputs["doppler_audience"] == "${{ steps.identity.outputs.doppler_audience }}"

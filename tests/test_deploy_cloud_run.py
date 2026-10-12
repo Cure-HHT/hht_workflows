@@ -10,6 +10,7 @@ test cannot drift from the workflow, and driven in a temporary directory that
 stands in for the caller's checkout. Exit codes AND the `::error::` text are
 asserted, because an operator reading a refusal needs to know which one it is.
 """
+import json
 import os
 import pathlib
 import re
@@ -50,7 +51,8 @@ def _run_body(text: str, step_name: str) -> str:
 
 
 IDENTITY = _run_body(TEXT, "Read the sponsor identity")
-CROSS_CHECK = _run_body(TEXT, "Confirm the environment matches the sponsor identity")
+RUNTIME_IDENTITY = _run_body(TEXT, "Confirm the environment names its runtime identity")
+LOCATE = _run_body(TEXT, "Locate the environment's database and VPC connector")
 ENV_VARS = _run_body(TEXT, "Compute deploy env vars")
 
 SPONSOR_TOML = """\
@@ -62,6 +64,7 @@ req_namespace = "EXA"
 linking_code_prefix = "EX"
 doppler_project = "example-runtime"
 artifact_registry_repository = "example-images"
+region = "europe-west9"
 
 [environments.dev]
 gcp_project_id = "example-proj-dev"
@@ -134,6 +137,8 @@ def test_identity_is_read_from_sponsor_toml(identity):
     assert o["sponsor_id"] == "example"
     assert o["doppler_project"] == "example-runtime"
     assert o["declared_project"] == "example-proj-dev"
+    assert o["region"] == "europe-west9"
+    assert o["doppler_audience"] == "doppler-runtime:example-runtime:dev"
     assert o["record_repository"] == "ghcr.io/example-org/hht_diary_example/pipeline"
     assert o["gcp_project_number"] == "123456789012"
     assert o["gcp_sa_email"] == "actions@platform-artifacts.iam.gserviceaccount.com"
@@ -215,76 +220,131 @@ def test_invalid_identity_refuses(identity):
     assert "id" in r.stdout
 
 
+# Verifies: HHT-OPS-sponsor-name-is-data/B
+def test_missing_region_refuses(identity):
+    r = identity(toml=SPONSOR_TOML.replace('region = "europe-west9"\n', ""))
+    assert r.returncode != 0
+    assert "region must be a non-empty string" in r.stdout
+
+
+# Verifies: HHT-OPS-identity-over-keys/F
+def test_environment_without_a_runtime_identity_refuses():
+    env = {**os.environ, "TARGET_ENV": "dev", "DOPPLER_RUNTIME_IDENTITY_ID": ""}
+    r = subprocess.run(["bash", "-c", RUNTIME_IDENTITY], env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "DOPPLER_RUNTIME_IDENTITY_ID" in r.stdout
+
+
+def _instance(region="europe-west9", name="example-dev-db"):
+    return {"name": name, "region": region,
+            "connectionName": f"example-proj-dev:{region}:{name}"}
+
+
 @pytest.fixture()
-def cross_check():
-    def _invoke(**overrides):
+def locate(tmp_path):
+    """Run the lookup step against a stub gcloud. `instances` is what the
+    Cloud SQL listing returns (None: the listing fails); `connector_region`
+    is where the named connector exists (None: nowhere)."""
+
+    def _invoke(instances=(_instance(),), connector_region="europe-west9"):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        (tmp_path / "instances.json").write_text(json.dumps(list(instances or [])))
+        gcloud = bin_dir / "gcloud"
+        gcloud.write_text(f"""#!/usr/bin/env bash
+echo "$*" >> '{tmp_path / "calls"}'
+case "$*" in
+  "sql instances list"*)
+    {"exit 1" if instances is None else f"cat '{tmp_path / 'instances.json'}'"} ;;
+  "compute networks vpc-access connectors describe example-dev-vpc-con"*"--region=europe-west9"*)
+    {"exit 0" if connector_region == "europe-west9" else "echo NOT_FOUND >&2; exit 1"} ;;
+  "compute networks vpc-access connectors describe"*)
+    echo NOT_FOUND >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+""")
+        gcloud.chmod(0o755)
+        env_file = tmp_path / "github_env"
+        env_file.write_text("")
         env = {
             **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "TARGET_ENV": "dev",
-            "DECLARED_PROJECT": "example-proj-dev",
+            "SPONSOR_ID": "example",
             "GCP_PROJECT_ID": "example-proj-dev",
-            "GCP_REGION": "region9",
-            "CLOUD_SQL_CONNECTION": "example-proj-dev:region9:example-dev-db",
-            "VPC_CONNECTOR": "example-dev-vpc-con",
-            "DOPPLER_RUNTIME_IDENTITY_ID": "00000000-0000-0000-0000-000000000001",
-            "DOPPLER_RUNTIME_AUDIENCE": "doppler-runtime:example:dev",
+            "GCP_REGION": "europe-west9",
             "DOPPLER_PROJECT": "example-runtime",
             "IMAGE_PATH": GOOD_IMAGE,
-            **overrides,
+            "GITHUB_ENV": str(env_file),
         }
-        return subprocess.run(
-            ["bash", "-c", CROSS_CHECK], env=env, capture_output=True, text=True
-        )
+        proc = subprocess.run(["bash", "-c", LOCATE], env=env, capture_output=True, text=True)
+        proc.env = _outputs(env_file)  # type: ignore[attr-defined]
+        proc.calls = (tmp_path / "calls").read_text() if (tmp_path / "calls").exists() else ""  # type: ignore[attr-defined]
+        return proc
 
     return _invoke
 
 
-# Verifies: HHT-OPS-identity-over-keys/F
-def test_consistent_environment_passes(cross_check):
-    r = cross_check()
+# Verifies: HHT-OPS-sponsor-name-is-data/B
+def test_database_and_connector_in_the_declared_region_are_used(locate):
+    r = locate()
     assert r.returncode == 0, r.stdout + r.stderr
+    assert r.env["CLOUD_SQL_CONNECTION"] == "example-proj-dev:europe-west9:example-dev-db"
+    assert r.env["VPC_CONNECTOR"] == "example-dev-vpc-con"
 
 
-def test_project_other_than_declared_refuses(cross_check):
-    """An environment whose variables name another environment's project."""
-    r = cross_check(GCP_PROJECT_ID="example-proj-uat")
+def test_database_lookup_selects_this_environments_terraform_instance(locate):
+    """Cloud SQL carries user labels under settings.userLabels; a top-level
+    labels filter matches no instance at all."""
+    r = locate()
+    assert "settings.userLabels.environment=dev" in r.calls
+    assert "settings.userLabels.managed_by=terraform" in r.calls
+    assert "settings.userLabels.sponsor=example" in r.calls
+
+
+def test_no_database_refuses(locate):
+    r = locate(instances=[])
     assert r.returncode != 0
-    assert "sponsor.toml declares 'example-proj-dev'" in r.stdout
+    assert "no Cloud SQL instance" in r.stdout
+    assert r.env == {}
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "GCP_PROJECT_ID",
-        "GCP_REGION",
-        "CLOUD_SQL_CONNECTION",
-        "VPC_CONNECTOR",
-        "DOPPLER_RUNTIME_IDENTITY_ID",
-        "DOPPLER_RUNTIME_AUDIENCE",
-    ],
-)
-def test_missing_environment_variable_refuses(cross_check, name):
-    r = cross_check(**{name: ""})
+def test_several_databases_refuse(locate):
+    r = locate(instances=[_instance(), _instance(name="example-dev-db-2")])
     assert r.returncode != 0
-    assert name in r.stdout
+    assert "more than one Cloud SQL instance" in r.stdout
+    assert r.env == {}
 
 
-def test_database_in_another_region_refuses(cross_check):
-    r = cross_check(CLOUD_SQL_CONNECTION="example-proj-dev:region1:example-dev-db")
+def test_database_lookup_failure_refuses(locate):
+    r = locate(instances=None)
     assert r.returncode != 0
-    assert "CLOUD_SQL_CONNECTION" in r.stdout
+    assert r.env == {}
 
 
-def test_database_in_another_project_refuses(cross_check):
-    r = cross_check(CLOUD_SQL_CONNECTION="example-proj-uat:region9:example-uat-db")
+# Verifies: HHT-OPS-sponsor-name-is-data/B
+def test_database_outside_the_declared_region_refuses(locate):
+    """sponsor.toml's region is the sponsor's residency choice."""
+    r = locate(instances=[_instance(region="us-central1")])
     assert r.returncode != 0
-    assert "CLOUD_SQL_CONNECTION is in project 'example-proj-uat'" in r.stdout
+    assert "sponsor.toml declares europe-west9" in r.stdout
+    assert r.env == {}
 
 
-def test_malformed_database_connection_refuses(cross_check):
-    r = cross_check(CLOUD_SQL_CONNECTION="example-dev-db")
+# Verifies: HHT-OPS-sponsor-name-is-data/B
+def test_connector_outside_the_declared_region_refuses(locate):
+    r = locate(connector_region=None)
     assert r.returncode != 0
-    assert "CLOUD_SQL_CONNECTION" in r.stdout
+    assert "example-dev-vpc-con" in r.stdout
+    assert r.env == {}
+
+
+def test_deploy_reads_no_terraform_written_variable():
+    """Only the runtime identity, written by the org administration
+    repository, is read from the GitHub environment."""
+    for name in ("GCP_PROJECT_ID", "GCP_REGION", "CLOUD_SQL_CONNECTION",
+                 "VPC_CONNECTOR", "DOPPLER_RUNTIME_AUDIENCE"):
+        assert f"vars.{name}" not in TEXT
 
 
 def _env_vars(tmp_path, **overrides):
@@ -403,3 +463,11 @@ def test_slack_notifications_are_not_gated_on_the_token():
     """The token is guaranteed by the first step, so no notify step may be
     skipped for its absence."""
     assert "SLACK_CONFIGURED" not in TEXT
+
+
+def test_resolve_job_exposes_the_declared_region_and_audience():
+    """The deploy job reads these from the resolve job; a step output the job
+    does not expose reaches it as an empty string."""
+    outputs = DOC["jobs"]["resolve"]["outputs"]
+    assert outputs["region"] == "${{ steps.identity.outputs.region }}"
+    assert outputs["doppler_audience"] == "${{ steps.identity.outputs.doppler_audience }}"

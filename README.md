@@ -323,14 +323,16 @@ from the caller:
 
 | Source | What it supplies |
 |---|---|
-| `sponsor.toml` (repository root) | sponsor id, Doppler project, repository, Artifact Registry repository, each environment's GCP project and optional portal domain |
+| `sponsor.toml` (repository root) | sponsor id, Doppler project, repository, Artifact Registry repository, region, each environment's GCP project and optional portal domain |
 | `deployment/base-config.json` | platform constants only: `gar.host`, `gar.project`, `gcp.project_number`, `gcp.actions_sa_email` |
-| the bound GitHub environment's variables | `GCP_PROJECT_ID`, `GCP_REGION`, `CLOUD_SQL_CONNECTION`, `VPC_CONNECTOR`, `DOPPLER_RUNTIME_AUDIENCE` (written by the sponsor's Terraform); `DOPPLER_RUNTIME_IDENTITY_ID` (written by the org administration repository) |
+| the bound GitHub environment's variables | `DOPPLER_RUNTIME_IDENTITY_ID` (written by the org administration repository) |
+| the environment's GCP project | its Cloud SQL instance (the one labelled for the sponsor and environment and managed by Terraform) and its VPC connector |
 
 The image path is accepted only under
-`<gar.host>/<gar.project>/<artifact_registry_repository>/`, and the
-environment's `GCP_PROJECT_ID` must equal the project `sponsor.toml` declares
-for the target environment; either mismatch refuses before anything changes.
+`<gar.host>/<gar.project>/<artifact_registry_repository>/`. The database and
+connector must be in the region `sponsor.toml` declares, the sponsor's
+data-residency choice; none, several, or one elsewhere refuses before
+anything changes.
 The revision authenticates to Doppler with its runtime identity; there is no
 stored-token path.
 
