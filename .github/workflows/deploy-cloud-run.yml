@@ -1,0 +1,998 @@
+# notify-failure: semantic-exempt - classifies its outcome per environment as
+#   deploy success / deploy failure / attest failure and routes each through
+#   the caller's .github/slack-channels.yml, rather than a generic "the job
+#   failed". A standard notify-failure job would add a second, semantically
+#   wrong post beside the correct one; the CALLER carries the standard job.
+#   Implements: HHT-OPS-failure-notification-routing/A
+
+name: "[internal] Deploy Cloud Run service"
+
+# Reusable deploy primitive for a sponsor's portal: one fully-pinned image
+# digest into one Cloud Run environment. Every sponsor flow that changes what an
+# environment serves (dev deploy, promotion, hotfix) ends in this workflow.
+#
+# Nothing in this file names a sponsor, a project or a platform account. It runs
+# in the caller's context, and every value comes from one of three places:
+#
+#   - the caller's sponsor.toml (the Sponsor Identity Declaration): sponsor id,
+#     Doppler project, repository, Artifact Registry repository, and the GCP
+#     project and portal domain each environment is declared with;
+#   - the caller's deployment/base-config.json (the Sponsor Build
+#     Configuration): platform constants only -- the registry host and project,
+#     and the workload identity project number and service account;
+#   - the variables of the GitHub environment the deploy job is bound to,
+#     written there by the sponsor's Terraform: GCP_PROJECT_ID, GCP_REGION,
+#     CLOUD_SQL_CONNECTION, VPC_CONNECTOR, DOPPLER_RUNTIME_IDENTITY_ID and
+#     DOPPLER_RUNTIME_AUDIENCE. Adding an environment needs no edit here.
+#
+# Image paths are computed from the identity and the platform constants, never
+# read from configuration, so a build configuration carrying identity cannot
+# steer a deploy.
+#
+# NO CONCURRENCY BLOCK, deliberately. Callers serialise per environment (a
+# dispatch entry point keyed on its flow, a hotfix keyed on its target). A group
+# declared here as well would deadlock the caller that already holds it.
+#
+# NO DISPATCH TRIGGER. An operator-supplied image_path is an arbitrary digest,
+# and an environment past dev holds only the digest the previous environment
+# proved. The caller owns dispatch and pins the dev-only flow to dev.
+#   Implements: HHT-OPS-gate-enforcement-locus/A
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Cloud Run service to deploy"
+        required: false
+        type: string
+        default: portal-service
+      target-env:
+        description: "Environment to deploy to; must be declared in sponsor.toml"
+        required: true
+        type: string
+      image_path:
+        description: "Full Artifact Registry digest reference (<host>/<project>/<repository>/<image>@sha256:<64-hex>)"
+        required: true
+        type: string
+      approval_environment:
+        # The GitHub environment that holds this run for approval, when it is
+        # not the target's own. The deploy job reads its per-environment
+        # variables from whichever environment it is bound to, and those
+        # variables are cross-checked against sponsor.toml's declaration for
+        # target-env before anything changes.
+        description: "GitHub environment to gate on; defaults to target-env."
+        required: false
+        type: string
+        default: ""
+      verify_source_project:
+        # Set by a promotion. GitHub holds the deploy job before its first step,
+        # so a check placed there runs AFTER the approval -- the only place the
+        # artifact can be re-established against what was actually approved.
+        description: >
+          Project id of the environment the image is promoted FROM. When set
+          with expected_digest, the deploy re-confirms that source is still
+          serving the approved digest before anything changes.
+        required: false
+        type: string
+        default: ""
+      expected_digest:
+        description: "Digest the approval was granted for; checked against the source environment."
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "Optional version label"
+        required: false
+        type: string
+        default: ""
+      representative-email:
+        description: "Recipient of uat and prod deploy-outcome emails. Empty skips the email."
+        required: false
+        type: string
+        default: ""
+      notification-sender:
+        description: "Workspace address deploy-outcome emails are sent as."
+        required: false
+        type: string
+        default: ""
+      notification-service-account:
+        description: "Domain-wide-delegation service account the email is signed with."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SLACK_APP_OATH_TOKEN:
+        description: "Slack bot token for deploy-outcome notifications"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything the deploy needs to know about the sponsor, read once and
+  # checked before the approval prompt, so a reviewer is never asked to approve
+  # a deploy that would refuse its own inputs.
+  resolve:
+    name: Resolve sponsor identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sponsor_id: ${{ steps.identity.outputs.sponsor_id }}
+      doppler_project: ${{ steps.identity.outputs.doppler_project }}
+      declared_project: ${{ steps.identity.outputs.declared_project }}
+      portal_domain: ${{ steps.identity.outputs.portal_domain }}
+      record_repository: ${{ steps.identity.outputs.record_repository }}
+      gar_project: ${{ steps.identity.outputs.gar_project }}
+      gcp_project_number: ${{ steps.identity.outputs.gcp_project_number }}
+      gcp_sa_email: ${{ steps.identity.outputs.gcp_sa_email }}
+    steps:
+      - name: Check out the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Implements: HHT-OPS-sponsor-name-is-data/B
+      # Implements: DIARY-OPS-deploy-traffic-gating/E
+      #   Identity is read from sponsor.toml at run time, and the image is
+      #   accepted only as an immutable digest in the registry repository
+      #   sponsor.toml declares.
+      - name: Read the sponsor identity
+        id: identity
+        env:
+          TARGET_ENV: ${{ inputs.target-env }}
+          IMAGE_PATH: ${{ inputs.image_path }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import tomllib
+
+          errors = []
+
+          def fail():
+              for e in errors:
+                  print(f"::error::{e}")
+              sys.exit(1)
+
+          try:
+              with open("sponsor.toml", "rb") as fh:
+                  ident = tomllib.load(fh)
+          except FileNotFoundError:
+              errors.append("sponsor.toml is missing from the repository root; it declares the sponsor this repository deploys.")
+              fail()
+          except tomllib.TOMLDecodeError as exc:
+              errors.append(f"sponsor.toml is not valid TOML: {exc}")
+              fail()
+
+          for key in ("id", "repository", "doppler_project", "artifact_registry_repository"):
+              value = ident.get(key)
+              if not isinstance(value, str) or not value.strip():
+                  errors.append(f"sponsor.toml: {key} must be a non-empty string")
+          if errors:
+              fail()
+
+          target = os.environ["TARGET_ENV"]
+          envs = ident.get("environments") or {}
+          if target not in envs or not isinstance(envs[target], dict):
+              declared = ", ".join(sorted(envs)) or "none"
+              errors.append(f"target environment '{target}' is not declared in sponsor.toml (declared: {declared})")
+              fail()
+          env_decl = envs[target]
+          project = env_decl.get("gcp_project_id")
+          if not isinstance(project, str) or not project:
+              errors.append(f"sponsor.toml: environments.{target}.gcp_project_id is required")
+              fail()
+
+          repo_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]
+          if ident["repository"] != repo_name:
+              errors.append(f"sponsor.toml declares repository '{ident['repository']}' but this run is in '{repo_name}'; refusing to deploy another sponsor's identity.")
+              fail()
+
+          try:
+              with open("deployment/base-config.json") as fh:
+                  base = json.load(fh)
+          except (FileNotFoundError, json.JSONDecodeError) as exc:
+              errors.append(f"deployment/base-config.json is unreadable: {exc}")
+              fail()
+
+          def platform(path):
+              node = base
+              for part in path.split("."):
+                  node = node.get(part) if isinstance(node, dict) else None
+              if not isinstance(node, str) or not node:
+                  errors.append(f"deployment/base-config.json: {path} is required (platform constant)")
+                  return ""
+              return node
+
+          gar_host = platform("gar.host")
+          gar_project = platform("gar.project")
+          project_number = platform("gcp.project_number")
+          sa_email = platform("gcp.actions_sa_email")
+          if errors:
+              fail()
+
+          service = os.environ["SERVICE_NAME"]
+          if service != "portal-service":
+              errors.append(f"service-name must be 'portal-service', got '{service}'")
+
+          prefix = f"{gar_host}/{gar_project}/{ident['artifact_registry_repository']}/"
+          image = os.environ["IMAGE_PATH"]
+          pattern = re.escape(prefix) + r"[a-z0-9._/-]+@sha256:[a-f0-9]{64}"
+          if not re.fullmatch(pattern, image):
+              errors.append(f"image_path must be an immutable digest reference under {prefix}, got '{image}'")
+          if errors:
+              fail()
+
+          owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+          outputs = {
+              "sponsor_id": ident["id"],
+              "doppler_project": ident["doppler_project"],
+              "declared_project": project,
+              "portal_domain": env_decl.get("portal_domain", ""),
+              "record_repository": f"ghcr.io/{owner}/{ident['repository'].lower()}/pipeline",
+              "gar_project": gar_project,
+              "gcp_project_number": project_number,
+              "gcp_sa_email": sa_email,
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              for key, value in outputs.items():
+                  fh.write(f"{key}={value}\n")
+          print(f"Deploying {service} for sponsor '{ident['id']}' to {target} ({project})")
+          print(f"Image: {image}")
+          PY
+
+  # Ask the record for what is about to be served, at the last moment it can be
+  # asked, on every environment that reaches this workflow.
+  #
+  # The image names the revision of the record it came from, as a label, so the
+  # lookup needs nothing from the caller. Most advanced record first, because
+  # asking the earliest would report a thinner answer than the one that exists.
+  #
+  # The deploy job `needs` this one, so the answer is in hand before a revision
+  # takes traffic and before the approval prompt; `continue-on-error` means a
+  # refusal is recorded and shown rather than obeyed.
+  # Implements: DIARY-OPS-build-record-retention/D
+  verify-the-record:
+    name: Does the record for this image still pass?
+    needs: resolve
+    runs-on: ubuntu-latest
+    # The one line that holds this check's authority back. With it, a refusal is
+    # reported and the deploy proceeds; without it, a refusal stops the deploy.
+    continue-on-error: true
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      # The image lives in Artifact Registry and the record in GHCR; reading
+      # the image's labels needs the registry credential, not the GHCR one.
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate with Google Cloud
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: projects/${{ needs.resolve.outputs.gcp_project_number }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ${{ needs.resolve.outputs.gcp_sa_email }}
+
+      # The host is taken from the image reference rather than written out
+      # again, so this cannot drift from the registry the image is actually in.
+      - name: Configure Docker for the registry the image lives in
+        env:
+          IMAGE: ${{ inputs.image_path }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${IMAGE%%/*}" --quiet
+
+      - name: Read the revision off the image, then ask its record
+        env:
+          IMAGE: ${{ inputs.image_path }}
+          RECORD_REPOSITORY: ${{ needs.resolve.outputs.record_repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          # Sign in first, so a credential problem is reported as one rather
+          # than as one of the "there is nothing to ask" answers below.
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+          # A read that fails says why: a registry outage and "this image has
+          # no record" must not be the same answer.
+          if ! label_out="$(docker buildx imagetools inspect "$IMAGE" \
+                 --format '{{ index .Image.Config.Labels "org.cure-hht.sponsor-pipeline-revision" }}' 2>&1)"; then
+            echo "::error::could not read $IMAGE from the registry, so whether it has a record is"
+            echo "::error::unknown. This is not the same as it having none. Registry said: $label_out"
+            exit 1
+          fi
+          rev="$label_out"
+
+          case "$rev" in
+            [0-9a-f]*) if [ ${#rev} -ne 40 ]; then rev=""; fi ;;
+            *) rev="" ;;
+          esac
+
+          if [ -z "$rev" ]; then
+            echo "::warning::this image carries no pipeline revision label, so there is no record to ask."
+            exit 0
+          fi
+
+          # GHCR answers `denied` both for a package that does not exist and
+          # for one this token may not read, so `denied` counts as absence;
+          # anything else is loud.
+          ref=""
+          for tag in "uat-${rev}" "qa-${rev}" "commit-${rev}"; do
+            if pull_out="$(docker pull -q "${RECORD_REPOSITORY}:${tag}" 2>&1)"; then
+              ref="${RECORD_REPOSITORY}:${tag}"; echo "asking the record at ${ref}" >&2; break
+            fi
+            case "$pull_out" in
+              *"not found"*|*"manifest unknown"*|*MANIFEST_UNKNOWN*|*NAME_UNKNOWN*|*"no such manifest"*|*denied*|*unauthorized*)
+                echo "no record at ${RECORD_REPOSITORY}:${tag}" ;;
+              *)
+                echo "::error::could not pull ${RECORD_REPOSITORY}:${tag}, and that is not the same as it not"
+                echo "::error::existing. Registry said: $pull_out"
+                exit 1 ;;
+            esac
+          done
+
+          if [ -z "$ref" ]; then
+            echo "::warning::no record published for revision ${rev}; nothing to ask."
+            exit 0
+          fi
+
+          docker run --rm "$ref" /pipeline/refuse --gate build
+
+  deploy:
+    name: Deploy selected Cloud Run service
+    needs: [resolve, verify-the-record]
+    runs-on: ubuntu-latest
+    # Implements: HHT-OPS-environment-bound-deploy-identity/D
+    #   The deploy holds the target environment: its protection rules gate this
+    #   job, and its variables are the only source of per-environment facts.
+    environment: ${{ inputs.approval_environment != '' && inputs.approval_environment || inputs.target-env }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET_ENV: ${{ inputs.target-env }}
+      SERVICE_NAME: ${{ inputs.service-name }}
+      IMAGE_PATH: ${{ inputs.image_path }}
+      SPONSOR_ID: ${{ needs.resolve.outputs.sponsor_id }}
+      DOPPLER_PROJECT: ${{ needs.resolve.outputs.doppler_project }}
+      DECLARED_PROJECT: ${{ needs.resolve.outputs.declared_project }}
+      GCP_SA_EMAIL: ${{ needs.resolve.outputs.gcp_sa_email }}
+      WIF_PROVIDER: projects/${{ needs.resolve.outputs.gcp_project_number }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+      VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
+      DOPPLER_RUNTIME_IDENTITY_ID: ${{ vars.DOPPLER_RUNTIME_IDENTITY_ID }}
+      DOPPLER_RUNTIME_AUDIENCE: ${{ vars.DOPPLER_RUNTIME_AUDIENCE }}
+      # How long a portal boot waits for the database's boot lock. The revision
+      # receives it as an env var, and the verify step waits this long plus a
+      # catch-up margin.
+      DB_BOOT_LOCK_WAIT_SECONDS: "60"
+
+    steps:
+      # The first thing that runs after a reviewer approves. An approval is
+      # granted against a digest, and the source environment is free to move
+      # while a reviewer decides; without this the approval for one artifact
+      # could deploy another.
+      #   Implements: DIARY-OPS-deployment-gate-contract/D+E
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate for the post-approval recheck
+        if: ${{ inputs.verify_source_project != '' && inputs.expected_digest != '' }}
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GCP_SA_EMAIL }}
+
+      - name: Confirm the source is still serving the approved digest
+        if: ${{ inputs.verify_source_project != '' && inputs.expected_digest != '' }}
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-resolve-serving-digest@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          service: ${{ inputs.service-name }}
+          region: ${{ vars.GCP_REGION }}
+          project: ${{ inputs.verify_source_project }}
+          expected_digest: ${{ inputs.expected_digest }}
+
+      # The environment's variables are written by Terraform and sponsor.toml
+      # is written by hand; they must agree before either is trusted. An
+      # approval environment carrying another environment's variables, or a
+      # variable left empty, stops the deploy here.
+      # Implements: HHT-OPS-identity-over-keys/F
+      #   Every deployable environment names its own Doppler runtime identity;
+      #   there is no stored-token path to fall back to.
+      - name: Confirm the environment matches the sponsor identity
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in GCP_PROJECT_ID GCP_REGION CLOUD_SQL_CONNECTION VPC_CONNECTOR \
+                   DOPPLER_RUNTIME_IDENTITY_ID DOPPLER_RUNTIME_AUDIENCE; do
+            if [ -z "${!v:-}" ]; then missing="$missing $v"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::environment '$TARGET_ENV' is missing variables:$missing. They are written by the sponsor's Terraform; apply it for this environment."
+            exit 1
+          fi
+
+          if [ "$GCP_PROJECT_ID" != "$DECLARED_PROJECT" ]; then
+            echo "::error::environment variables name project '$GCP_PROJECT_ID' but sponsor.toml declares '$DECLARED_PROJECT' for '$TARGET_ENV'. Refusing to deploy."
+            exit 1
+          fi
+
+          if [[ ! "$CLOUD_SQL_CONNECTION" =~ ^[a-z][a-z0-9-]*:([a-z0-9-]+):[a-z0-9-]+$ ]]; then
+            echo "::error::CLOUD_SQL_CONNECTION '$CLOUD_SQL_CONNECTION' is not a <project>:<region>:<instance> connection name."
+            exit 1
+          fi
+          if [ "${BASH_REMATCH[1]}" != "$GCP_REGION" ]; then
+            echo "::error::CLOUD_SQL_CONNECTION is in region '${BASH_REMATCH[1]}' but GCP_REGION is '$GCP_REGION'."
+            exit 1
+          fi
+
+          echo "Resolved target:"
+          echo "  environment:    $TARGET_ENV"
+          echo "  project:        $GCP_PROJECT_ID ($GCP_REGION)"
+          echo "  db-connection:  $CLOUD_SQL_CONNECTION"
+          echo "  vpc-connector:  $VPC_CONNECTOR"
+          echo "  doppler:        $DOPPLER_PROJECT/$TARGET_ENV"
+          echo "  image:          $IMAGE_PATH"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate with Google Cloud
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GCP_SA_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+
+      - name: Validate image exists in the registry
+        env:
+          GAR_PROJECT: ${{ needs.resolve.outputs.gar_project }}
+        run: |
+          set -euo pipefail
+          echo "Validating image: $IMAGE_PATH"
+          gcloud artifacts docker images describe "$IMAGE_PATH" \
+            --project="$GAR_PROJECT" \
+            --format="table(image_summary.digest,image_summary.fully_qualified_digest,package,tags)"
+
+      - name: Validate target project resources exist
+        run: |
+          set -euo pipefail
+          INSTANCE_PROJECT="${CLOUD_SQL_CONNECTION%%:*}"
+          INSTANCE_NAME="${CLOUD_SQL_CONNECTION##*:}"
+
+          echo "Validating target project exists..."
+          gcloud projects describe "$GCP_PROJECT_ID" --format="value(projectId)" >/dev/null
+
+          echo "Validating VPC connector exists in target project..."
+          gcloud compute networks vpc-access connectors describe "$VPC_CONNECTOR" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --format="value(name)" >/dev/null
+
+          echo "Validating Cloud SQL instance exists..."
+          gcloud sql instances describe "$INSTANCE_NAME" \
+            --project="$INSTANCE_PROJECT" \
+            --format="value(name,state)" >/dev/null
+
+      # Implements: HHT-OPS-identity-over-keys/F
+      #   The revision gets the identity to exchange, never a token. DOPPLER_TOKEN
+      #   is removed so a value left on an older revision cannot carry forward.
+      - name: Compute deploy env vars
+        id: envvars
+        run: |
+          set -euo pipefail
+          DEPLOY_SEQ="${GITHUB_RUN_NUMBER}"
+          DEPLOY_SHA="${GITHUB_SHA::7}"
+
+          ENV_VARS="DOPPLER_IDENTITY_ID=$DOPPLER_RUNTIME_IDENTITY_ID,DOPPLER_AUDIENCE=$DOPPLER_RUNTIME_AUDIENCE"
+          ENV_VARS="$ENV_VARS,ENVIRONMENT=$TARGET_ENV,DOPPLER_PROJECT_ID=$DOPPLER_PROJECT,DOPPLER_CONFIG_NAME=$TARGET_ENV"
+          ENV_VARS="$ENV_VARS,GCP_DEPLOY2_PROJECT_ID=$GCP_PROJECT_ID,SPONSOR_ID=$SPONSOR_ID"
+          ENV_VARS="$ENV_VARS,PORTAL_DEPLOY_SEQ=$DEPLOY_SEQ,PORTAL_DEPLOY_SHA=$DEPLOY_SHA"
+          # The event store's schema and the roles that use it. Non-secret, so
+          # they ride on the revision rather than in Doppler. The provisioning
+          # job and the serving revision read the same values.
+          ENV_VARS="$ENV_VARS,DB_SCHEMA=portal,DB_RUNTIME_ROLES=portal_runtime,DB_LOCK_ROLES=portal_runtime,DB_BOOT_LOCK_WAIT_SECONDS=$DB_BOOT_LOCK_WAIT_SECONDS"
+          echo "Doppler auth: OIDC (identity $DOPPLER_RUNTIME_IDENTITY_ID)"
+          DELIM="ENVVARS_EOF_${GITHUB_RUN_ID}"
+          {
+            printf 'update_env_vars<<%s\n%s\n%s\n' "$DELIM" "$ENV_VARS" "$DELIM"
+            echo "remove_env_vars=DOPPLER_TOKEN"
+          } >> "$GITHUB_OUTPUT"
+
+      # Provisions the event-store schema as its owner role before any revision
+      # of this build starts: a Cloud Run job on the canary's image, VPC path,
+      # env vars and runtime service account, run with PORTAL_MODE=provision and
+      # waited on. The service account is read from the service, because the
+      # environment's Doppler runtime identity trusts the account the portal
+      # runs as. Provisioning is idempotent and drops nothing. A failure stops
+      # the deploy here, before the canary; the serving revision is untouched.
+      # Implements: DIARY-OPS-portal-schema-provisioning/A+F
+      - name: Provision the database schema as the owner role
+        if: inputs.service-name == 'portal-service'
+        env:
+          UPDATE_ENV_VARS: ${{ steps.envvars.outputs.update_env_vars }}
+        run: |
+          set -euo pipefail
+          PROVISION_JOB_SA="$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" --region="$GCP_REGION" \
+            --format='value(spec.template.spec.serviceAccountName)')"
+          if [ -z "$PROVISION_JOB_SA" ]; then
+            echo "::error::${SERVICE_NAME} in ${GCP_PROJECT_ID} names no service account; the provisioning job must run as the account the Doppler runtime identity trusts."
+            exit 1
+          fi
+          echo "Provisioning job runs as ${PROVISION_JOB_SA}"
+          # One KEY: "value" line per pair. The split is on commas, so no value
+          # may carry one.
+          {
+            echo 'PORTAL_MODE: "provision"'
+            tr ',' '\n' <<<"$UPDATE_ENV_VARS" | sed -E 's/^([^=]+)=(.*)$/\1: "\2"/'
+          } > "$RUNNER_TEMP/provision-env.yaml"
+          gcloud run jobs deploy portal-provision \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --image="$IMAGE_PATH" \
+            --vpc-connector="$VPC_CONNECTOR" \
+            --service-account="$PROVISION_JOB_SA" \
+            --env-vars-file="$RUNNER_TEMP/provision-env.yaml" \
+            --max-retries=0 \
+            --task-timeout=600s
+          rm -f "$RUNNER_TEMP/provision-env.yaml"
+          gcloud run jobs execute portal-provision \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --wait
+          echo "Schema provisioned as the owner role"
+
+      # The canary composite carries no probe inputs and a revision inherits the
+      # service template's probes, so the probes are set on the template here,
+      # before the canary. The startup probe sits on /started: a boot that waits
+      # on the boot lock answers 503 there without being killed, and a boot
+      # refused before its store opens never answers 200, so the revision fails
+      # its deploy. Its budget (10 s x 24 = 240 s) covers the boot-lock wait plus
+      # opening the store. The liveness probe sits on /live, which answers 200
+      # through a boot of any length and in the Error State, so it never
+      # restarts a boot part way or into the same refusal.
+      #
+      # A template change creates a revision of the image already serving, with
+      # no traffic. The step changes the template only when it differs:
+      #   - probes differ: set them with the deploy health check off, because
+      #     the image already serving may not boot against a freshly reset
+      #     database; that revision is never used;
+      #   - probes match and the health check is still off: turn it back on;
+      #   - otherwise: no change and no extra revision.
+      # A canary deployed while the health check is off is still gated: the
+      # verify step requires its /ready before traffic moves.
+      # Implements: DIARY-OPS-portal-schema-provisioning/D+H
+      - name: Set startup and liveness probes on the service template
+        if: inputs.service-name == 'portal-service'
+        run: |
+          set -euo pipefail
+          STARTUP="httpGet.path=/started,initialDelaySeconds=0,periodSeconds=10,timeoutSeconds=5,failureThreshold=24"
+          LIVENESS="httpGet.path=/live,initialDelaySeconds=0,periodSeconds=30,timeoutSeconds=5,failureThreshold=3"
+          WANT='/started 10 5 24 /live 30 5 3'
+          TEMPLATE="$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" --region="$GCP_REGION" --format=json \
+            | jq -c '.spec.template')"
+          HAVE="$(jq -r '.spec.containers[0]
+              | [ .startupProbe.httpGet.path, .startupProbe.periodSeconds,
+                  .startupProbe.timeoutSeconds, .startupProbe.failureThreshold,
+                  .livenessProbe.httpGet.path, .livenessProbe.periodSeconds,
+                  .livenessProbe.timeoutSeconds, .livenessProbe.failureThreshold ]
+              | map(tostring) | join(" ")' <<<"$TEMPLATE")"
+          CHECK_OFF="$(jq -r '.metadata.annotations["run.googleapis.com/health-check-disabled"] // "False"' <<<"$TEMPLATE")"
+          echo "Template probes: ${HAVE}; deploy health check disabled: ${CHECK_OFF}"
+          if [ "$HAVE" != "$WANT" ]; then
+            gcloud run services update "$SERVICE_NAME" \
+              --project="$GCP_PROJECT_ID" \
+              --region="$GCP_REGION" \
+              --no-traffic \
+              --no-deploy-health-check \
+              --startup-probe="$STARTUP" \
+              --liveness-probe="$LIVENESS"
+            echo "Probes set: startup on /started, liveness on /live (deploy health check off until the next deploy)."
+          elif [ "${CHECK_OFF,,}" = "true" ]; then
+            gcloud run services update "$SERVICE_NAME" \
+              --project="$GCP_PROJECT_ID" \
+              --region="$GCP_REGION" \
+              --no-traffic \
+              --deploy-health-check
+            echo "Deploy health check back on."
+          else
+            echo "Probes already set; no template change."
+          fi
+
+      # Implements: DIARY-OPS-deploy-traffic-gating/A
+      - name: Deploy canary (no traffic)
+        id: canary
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          service: ${{ inputs.service-name }}
+          region: ${{ vars.GCP_REGION }}
+          project: ${{ vars.GCP_PROJECT_ID }}
+          image: ${{ inputs.image_path }}
+          cloudsql_instances: ${{ vars.CLOUD_SQL_CONNECTION }}
+          vpc_connector: ${{ vars.VPC_CONNECTOR }}
+          update_env_vars: ${{ steps.envvars.outputs.update_env_vars }}
+          remove_env_vars: ${{ steps.envvars.outputs.remove_env_vars }}
+
+      # The portal sits behind a public regional load balancer whose serverless
+      # NEG invokes Cloud Run anonymously, so the service grants allUsers
+      # run.invoker; application-layer auth is by identity-platform tokens. The
+      # binding is idempotent, and re-adding it covers a service that was
+      # deleted and recreated, which loses its IAM.
+      - name: Grant public invoker (allUsers)
+        run: |
+          set -euo pipefail
+          gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --member="allUsers" \
+            --role="roles/run.invoker"
+
+      - name: Show deployed revision and image
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --format="yaml(metadata.name,status.url,status.latestReadyRevisionName,spec.template.spec.containers[0].image)"
+
+      # Implements: DIARY-OPS-deploy-traffic-gating/B+D
+      - name: Verify deployment
+        env:
+          SERVICE_URL: ${{ steps.canary.outputs.tagged_url }}
+        run: |
+          set -euo pipefail
+          echo "Verifying candidate (no-traffic) revision at: $SERVICE_URL"
+
+          # An audience-bound identity token keeps the check independent of the
+          # public-invoker binding and of its propagation delay. Under workload
+          # identity federation gcloud must impersonate the service account to
+          # mint one.
+          ID_TOKEN=$(gcloud auth print-identity-token \
+            --impersonate-service-account="$GCP_SA_EMAIL" \
+            --audiences="$SERVICE_URL")
+
+          # The revision is up once its startup probe passed (/started), but its
+          # boot may still be catching views up. /ready answers 503 with the
+          # boot's progress until the boot completes, then 200. Wait as long as
+          # a boot may take: the boot-lock wait plus a catch-up margin.
+          # Implements: DIARY-OPS-portal-schema-provisioning/I
+          READY_WAIT_SECONDS=$(( DB_BOOT_LOCK_WAIT_SECONDS + 240 ))
+          READY_CODE=""
+          : > /tmp/ready_body
+          START=$SECONDS
+          NEXT_LOG=0
+          while [ $((SECONDS - START)) -lt "$READY_WAIT_SECONDS" ]; do
+            READY_CODE=$(curl -s -o /tmp/ready_body --max-time 15 \
+              -H "Authorization: Bearer $ID_TOKEN" \
+              -w '%{http_code}' "$SERVICE_URL/ready") || READY_CODE="000"
+            if [ "$READY_CODE" = "200" ]; then
+              echo "Candidate ready after $((SECONDS - START))s"
+              break
+            fi
+            if [ $((SECONDS - START)) -ge "$NEXT_LOG" ]; then
+              echo "Waiting for /ready ($((SECONDS - START))s, HTTP ${READY_CODE}): $(head -c 500 /tmp/ready_body)"
+              NEXT_LOG=$((NEXT_LOG + 10))
+            fi
+            sleep 2
+          done
+          if [ "$READY_CODE" != "200" ]; then
+            echo "::error::Candidate did not answer /ready with 200 within ${READY_WAIT_SECONDS}s (last HTTP ${READY_CODE})"
+            echo "Last /ready body:"
+            cat /tmp/ready_body
+            exit 1
+          fi
+
+          HEALTH=$(curl -sf --max-time 15 -H "Authorization: Bearer $ID_TOKEN" "$SERVICE_URL/health") || HEALTH='{"status":"UNREACHABLE"}'
+          echo "Health response: $HEALTH"
+
+          STATUS=$(echo "$HEALTH" | jq -r '.status // "unknown"')
+          SERVICE=$(echo "$HEALTH" | jq -r '.service // "unknown"')
+          VERSIONS=$(echo "$HEALTH" | jq -c '.versions // {}')
+
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Health check failed: status=$STATUS"
+            exit 1
+          fi
+
+          {
+            echo "## Post-Deploy Verification"
+            echo ""
+            echo "- URL: $SERVICE_URL"
+            echo "- Health: $STATUS"
+            echo "- Service: $SERVICE"
+            echo "- Versions: \`$VERSIONS\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # /health passes even when Doppler injection is broken, because database
+      # configuration falls back to defaults. The identity-platform config
+      # endpoint returns 503 when any required value is unset, which makes it
+      # the canonical secret-injection smoke test for the portal.
+      # Implements: DIARY-OPS-deploy-traffic-gating/B
+      - name: Verify Identity Platform config endpoint
+        if: inputs.service-name == 'portal-service'
+        env:
+          SERVICE_URL: ${{ steps.canary.outputs.tagged_url }}
+        run: |
+          set -euo pipefail
+          ID_TOKEN=$(gcloud auth print-identity-token \
+            --impersonate-service-account="$GCP_SA_EMAIL" \
+            --audiences="$SERVICE_URL")
+
+          IDENTITY_HTTP=$(curl -s -o /tmp/identity_body --max-time 15 \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -w '%{http_code}' \
+            "$SERVICE_URL/api/v1/portal/config/identity")
+
+          echo "Identity config HTTP status: $IDENTITY_HTTP"
+          if [ "$IDENTITY_HTTP" != "200" ]; then
+            echo "::error::Identity Platform config endpoint returned $IDENTITY_HTTP (expected 200); Doppler secret injection is likely broken in this revision."
+            cat /tmp/identity_body
+            exit 1
+          fi
+          if ! jq -e '.projectId | length > 0' < /tmp/identity_body >/dev/null; then
+            echo "::error::Identity config response is missing or has empty projectId."
+            cat /tmp/identity_body
+            exit 1
+          fi
+          echo "Identity Platform config endpoint healthy (200, projectId present)"
+
+      # Implements: DIARY-OPS-deploy-traffic-gating/C
+      - name: Migrate traffic to verified revision
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-migrate-traffic@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          service: ${{ inputs.service-name }}
+          region: ${{ vars.GCP_REGION }}
+          project: ${{ vars.GCP_PROJECT_ID }}
+          revision: ${{ steps.canary.outputs.revision_name }}
+
+      # Reporting, not verification: any lookup failure degrades to "unknown"
+      # rather than failing the notification. The verify steps above are the
+      # gate.
+      - name: Gather deploy state for success notification
+        if: success()
+        id: gather
+        env:
+          PORTAL_DOMAIN: ${{ needs.resolve.outputs.portal_domain }}
+          CANDIDATE_URL: ${{ steps.canary.outputs.tagged_url }}
+        run: |
+          set -uo pipefail
+
+          if ! PORTAL_URL=$(gcloud run services describe "$SERVICE_NAME" \
+              --project="$GCP_PROJECT_ID" --region="$GCP_REGION" \
+              --format='value(status.url)' 2>/dev/null); then
+            PORTAL_URL=""
+          fi
+
+          # The link a person clicks is the portal domain sponsor.toml declares
+          # for this environment; an environment without one is served at its
+          # platform-default URL.
+          if [ -n "$PORTAL_DOMAIN" ]; then
+            PORTAL_PUBLIC_URL="https://${PORTAL_DOMAIN}"
+          else
+            PORTAL_PUBLIC_URL="$PORTAL_URL"
+          fi
+
+          # Probe the revision THIS run deployed, not whichever holds traffic.
+          PROBE_URL="${CANDIDATE_URL:-$PORTAL_URL}"
+          PORTAL_SERVER_VER="unknown"
+          PORTAL_UI_VER="unknown"
+          PORTAL_SERVER_COMMIT="unknown"
+          DEPLOY_SEQ="unknown"
+          if [ -n "$PROBE_URL" ]; then
+            if ! TOK=$(gcloud auth print-identity-token \
+                --impersonate-service-account="$GCP_SA_EMAIL" \
+                --audiences="$PROBE_URL" 2>/dev/null); then
+              TOK=""
+            fi
+            if [ -n "$TOK" ]; then
+              PORTAL_HEALTH="$(curl -sS --max-time 10 -H "Authorization: Bearer $TOK" "$PROBE_URL/health" 2>/dev/null)" || PORTAL_HEALTH="{}"
+              PORTAL_SERVER_VER=$(jq -r '.versions.portal_server_evs // "unknown"' <<<"$PORTAL_HEALTH" 2>/dev/null) || PORTAL_SERVER_VER=unknown
+              PORTAL_SERVER_COMMIT=$(jq -r '.versions.server_commit // "unknown"' <<<"$PORTAL_HEALTH" 2>/dev/null) || PORTAL_SERVER_COMMIT=unknown
+              DEPLOY_SEQ=$(jq -r '.versions.deploy // "unknown"' <<<"$PORTAL_HEALTH" 2>/dev/null) || DEPLOY_SEQ=unknown
+              PORTAL_VERSION_JSON="$(curl -sS --max-time 10 -H "Authorization: Bearer $TOK" "$PROBE_URL/version.json" 2>/dev/null)" || PORTAL_VERSION_JSON="{}"
+              PORTAL_UI_VER=$(jq -r '.version // "unknown"' <<<"$PORTAL_VERSION_JSON" 2>/dev/null) || PORTAL_UI_VER=unknown
+            fi
+          fi
+
+          {
+            echo "portal_url=${PORTAL_PUBLIC_URL:-unknown}"
+            echo "portal_ui_version=$PORTAL_UI_VER"
+            echo "portal_server_version=$PORTAL_SERVER_VER"
+            echo "portal_server_commit=$PORTAL_SERVER_COMMIT"
+            echo "deploy_seq=$DEPLOY_SEQ"
+            echo "env_upper=${TARGET_ENV^^}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Routing lives in the caller's .github/slack-channels.yml, keyed by
+      # event and environment, so a re-point needs no workflow change. The
+      # bookmark keeps exactly one "live versions" entry per environment in the
+      # routed channel.
+      - name: Notify Slack on deploy success
+        if: success()
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          event: deploy-success
+          env: ${{ inputs.target-env }}
+          bookmark-title: "Cloud Run live versions (${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }})"
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+          text: "Cloud Run deploy to ${{ needs.resolve.outputs.sponsor_id }} / ${{ steps.gather.outputs.env_upper }} succeeded (${{ github.actor }})"
+          blocks: |
+            [
+              {"type":"section","text":{"type":"mrkdwn","text":"*Cloud Run Deploy Succeeded* (${{ github.actor }})"}},
+              {"type":"table","rows":[
+                [{"type":"raw_text","text":"env"},           {"type":"raw_text","text":"${{ needs.resolve.outputs.sponsor_id }} / ${{ steps.gather.outputs.env_upper }}"}],
+                [{"type":"raw_text","text":"deploy"},        {"type":"raw_text","text":"#${{ steps.gather.outputs.deploy_seq }}"}],
+                [{"type":"raw_text","text":"portal-server"}, {"type":"raw_text","text":"${{ steps.gather.outputs.portal_server_version }} (${{ steps.gather.outputs.portal_server_commit }})"}],
+                [{"type":"raw_text","text":"portal-ui"},     {"type":"raw_text","text":"${{ steps.gather.outputs.portal_ui_version }}"}],
+                [{"type":"raw_text","text":"Portal URL"},    {"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"link","url":"${{ steps.gather.outputs.portal_url }}","text":"${{ steps.gather.outputs.portal_url }}"}]}]}]
+              ]}
+            ]
+
+      # continue-on-error so a Slack-side blip during a real deploy failure
+      # cannot become the visible terminal failure; the step that failed stays
+      # the attributed cause.
+      - name: Notify Slack on deploy failure
+        if: failure()
+        continue-on-error: true
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          event: deploy-failure
+          env: ${{ inputs.target-env }}
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+          text: |
+            :rotating_light: *Cloud Run deploy failed*: `${{ inputs.service-name }}` -> `${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }}`
+
+            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>
+            *Actor:* `${{ github.actor }}`
+            *Image:* `${{ inputs.image_path }}`
+
+      # The email column of the deploy notification matrix: uat and prod only.
+      # It runs in this job because the email action signs as the sender
+      # service account through the workload identity established above. Soft
+      # fail: an email hiccup must not redden a deploy that succeeded.
+      - name: Email sponsor representative on deploy success
+        if: >-
+          success() && (inputs.target-env == 'uat' || inputs.target-env == 'prod')
+          && inputs.representative-email != '' && inputs.notification-sender != ''
+          && inputs.notification-service-account != ''
+        uses: Cure-HHT/hht_workflows/.github/actions/email-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          to: ${{ inputs.representative-email }}
+          sender: ${{ inputs.notification-sender }}
+          gmail-service-account: ${{ inputs.notification-service-account }}
+          soft-fail: "true"
+          subject: "[${{ needs.resolve.outputs.sponsor_id }}/${{ inputs.target-env }}] portal deploy success - ${{ steps.gather.outputs.portal_server_version }}"
+          body: |
+            Cloud Run deploy succeeded.
+
+            Environment:   ${{ needs.resolve.outputs.sponsor_id }} / ${{ steps.gather.outputs.env_upper }}
+            Service:       ${{ inputs.service-name }}
+            Deploy #:      ${{ steps.gather.outputs.deploy_seq }}
+            portal-server: ${{ steps.gather.outputs.portal_server_version }} (${{ steps.gather.outputs.portal_server_commit }})
+            portal-ui:     ${{ steps.gather.outputs.portal_ui_version }}
+            Image:         ${{ inputs.image_path }}
+            Portal URL:    ${{ steps.gather.outputs.portal_url }}
+            Actor:         ${{ github.actor }}
+            Workflow run:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Email sponsor representative on deploy failure
+        if: >-
+          failure() && (inputs.target-env == 'uat' || inputs.target-env == 'prod')
+          && inputs.representative-email != '' && inputs.notification-sender != ''
+          && inputs.notification-service-account != ''
+        uses: Cure-HHT/hht_workflows/.github/actions/email-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          to: ${{ inputs.representative-email }}
+          sender: ${{ inputs.notification-sender }}
+          gmail-service-account: ${{ inputs.notification-service-account }}
+          soft-fail: "true"
+          subject: "[${{ needs.resolve.outputs.sponsor_id }}/${{ inputs.target-env }}] portal deploy failure - run #${{ github.run_number }}"
+          body: |
+            Cloud Run deploy FAILED.
+
+            Environment:  ${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }}
+            Service:      ${{ inputs.service-name }}
+            Image:        ${{ inputs.image_path }}
+            Version:      ${{ inputs.version || '(none supplied)' }}
+            Actor:        ${{ github.actor }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            The platform team has been notified and is investigating.
+
+  # Signs the deployed digest and attaches its SBOM, for the environments whose
+  # deploys are evidence (uat and prod). No environment binding: attestation
+  # follows an approved deploy and is not a second decision about whether to
+  # deploy, and a second approval prompt here could leave a live but unsigned
+  # image.
+  #   Implements: DIARY-OPS-deployment-gate-contract/C
+  attest-image:
+    name: Sign image and attach SBOM attestation
+    needs: [resolve, deploy]
+    if: ${{ inputs.target-env == 'uat' || inputs.target-env == 'prod' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # keyless cosign via GitHub OIDC -> Sigstore
+    steps:
+      - name: Checkout (for slack-channels.yml routing)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Cosign writes signature and attestation objects to the registry
+      # repository the image lives in, so the service account needs write on
+      # it.
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate with Google Cloud
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: projects/${{ needs.resolve.outputs.gcp_project_number }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ${{ needs.resolve.outputs.gcp_sa_email }}
+
+      - name: Configure Docker for the registry the image lives in
+        env:
+          IMAGE_PATH: ${{ inputs.image_path }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${IMAGE_PATH%%/*}" --quiet
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0
+
+      - name: Generate SBOM (CycloneDX) for the deployed image
+        env:
+          IMAGE_PATH: ${{ inputs.image_path }}
+        run: |
+          set -euo pipefail
+          syft -q -o cyclonedx-json="sbom-cyclonedx.json" "$IMAGE_PATH"
+          ls -l sbom-cyclonedx.json
+
+      # Keyless: the GitHub OIDC token is exchanged with Fulcio for a
+      # short-lived signing certificate, and the signature is logged in Rekor.
+      - name: Sign image (keyless via Sigstore OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          IMAGE_PATH: ${{ inputs.image_path }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$IMAGE_PATH"
+
+      # Verifiable with: cosign verify-attestation --type cyclonedx <digest>
+      - name: Attach SBOM attestation (CycloneDX -> Rekor)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          IMAGE_PATH: ${{ inputs.image_path }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type cyclonedx --predicate sbom-cyclonedx.json "$IMAGE_PATH"
+
+      - name: Notify Slack on attest failure
+        if: failure()
+        continue-on-error: true
+        uses: Cure-HHT/hht_workflows/.github/actions/slack-notify@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          event: attest-failure
+          env: ${{ inputs.target-env }}
+          slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+          text: |
+            :warning: *Sigstore sign/attest failed*: `${{ inputs.service-name }}` -> `${{ needs.resolve.outputs.sponsor_id }} / ${{ inputs.target-env }}`
+
+            Image: `${{ inputs.image_path }}`
+            Run:   <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>
