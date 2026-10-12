@@ -142,11 +142,12 @@ jobs:
 
 # --- Assertion C: no hand-maintained enumeration of workflows -------------
 # The check is syntactic, per the requirement's Rationale: a workflow fails
-# if its `on:` block carries a `workflow_run.workflows` list, OR if an
-# announcement step reads a workflow enumeration from a file or input. The
+# if its `on:` block carries a `workflow_run.workflows` list other than one
+# selecting every workflow (`"**"`, optionally excluding its own name), OR if
+# an announcement step reads a workflow enumeration from a file or input. The
 # first limb is the construct that caused the original defect — display names
-# typed by hand, matched exactly, with no wildcard and no failure signal when
-# they stop matching anything. The second limb closes the obvious workaround.
+# typed by hand, matched exactly, with no failure signal when they stop
+# matching anything. The second limb closes the obvious workaround.
 
 WORKFLOW_RUN_ENUM = """
 name: Pager
