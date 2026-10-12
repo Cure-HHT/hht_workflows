@@ -1,0 +1,10 @@
+# SHA-256 of gitleaks_<version>_linux_x64.tar.gz, one line per version this
+# action will install. A version not listed here is refused: add its digest in
+# a reviewed change rather than trusting whatever the download returns.
+#
+# Source of each digest: the release's gitleaks_<version>_checksums.txt, read
+# when the line was added and confirmed against a downloaded copy. Recording it
+# here means a later replacement of the asset AND its checksum file is refused.
+#
+# <version> <sha256>
+8.29.0 39e07ad810336fd0ae80d0bd61c60d0521f628173e7583583b5df4a38738522c

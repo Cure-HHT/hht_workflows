@@ -78,6 +78,9 @@ each action's README for usage):
 | [`sponsor-base-preflight`](.github/actions/sponsor-base-preflight/) | Reject a sponsor build whose core base images are not digest-pinned, or whose pinned `portal-server` does not declare every permission the sponsor's `role-permissions.yaml` grants |
 | [`build-oq`](.github/actions/build-oq/) | Generate the OQ traceability deliverables (committed CSV extract plus a run-bound workbook) from the elspais graph of the calling repo and its associates; requires a pinned `elspais-version` input |
 | [`notify-failure`](.github/actions/notify-failure/) | The single way a workflow announces its own failure: derives the failed job/step from the run's own jobs API (no per-workflow config, no workflow-name list) and delegates the post to `slack-notify` |
+| [`install-doppler-cli`](.github/actions/install-doppler-cli/) | Install the Doppler CLI from its GitHub release after verifying Doppler's signature against the pinned release key; replaces `install.sh \| sudo sh` |
+| [`install-gitleaks`](.github/actions/install-gitleaks/) | Install gitleaks after checking the tarball against the digest recorded for its version; the one gitleaks install path (`secrets-scan` uses it) |
+| [`download-integrity-check`](.github/actions/download-integrity-check/) | Run the `download-integrity` hook over the whole repository in CI, so a bypassed local hook still cannot land an unverified download |
 | [`notify-failure-lint`](.github/actions/notify-failure-lint/) | Fails CI when a workflow triggered by push/schedule/workflow_dispatch lacks the standard `notify-failure` job, or announces failure off a hand-maintained `on.workflow_run.workflows` list |
 
 ## Pre-commit hooks shared from this repo
@@ -91,6 +94,7 @@ in their `.pre-commit-config.yaml`:
 | [`release-notes-update`](hooks/release-notes-update/) | Maintain per-PR release-notes fragments and consolidate them into a versioned `RELEASE_NOTES.md` |
 | [`no-or-true-guard`](hooks/no-or-true-guard/) | Block the `\|\| true` / `\|\| :` shell short-circuit fallback in shell/YAML/Dockerfile/Makefile content |
 | [`confidential-terms-scan`](hooks/confidential-terms-scan/) | Pre-push scan of added content, file/dir names, and branch name for confidential terms fetched at scan time from the consumer's `scan-*` Doppler project |
+| [`download-integrity`](hooks/download-integrity/) | Refuse a Dockerfile, workflow, composite action or workflow template that downloads a file without verifying it against a recorded digest or a pinned signing key |
 
 ## Consuming from another Cure-HHT repo
 
@@ -312,6 +316,82 @@ fails — so it works on a bare runner and does not trip over a PEP 668
 externally-managed interpreter. Adding `setup-python` pins the interpreter
 and skips the install path entirely.
 
+## Sponsor Cloud Run deploy (deploy-cloud-run)
+
+[`.github/workflows/deploy-cloud-run.yml`](.github/workflows/deploy-cloud-run.yml)
+is the reusable deploy primitive a sponsor repository's portal flows end in: one
+digest-pinned image into one Cloud Run environment, canary first, traffic only
+after the candidate answers `/ready`, `/health` and its identity-config check.
+It names no sponsor, project or platform account; it reads them at run time
+from the caller:
+
+| Source | What it supplies |
+|---|---|
+| `sponsor.toml` (repository root) | sponsor id, Doppler project, repository, Artifact Registry repository, region, each environment's GCP project and optional portal domain |
+| `deployment/base-config.json` | platform constants only: `gar.host`, `gar.project`, `gcp.project_number`, `gcp.actions_sa_email` |
+| the bound GitHub environment's variables | `DOPPLER_RUNTIME_IDENTITY_ID` (written by the org administration repository) |
+| the environment's GCP project | its Cloud SQL instance (the one labelled for the sponsor and environment and managed by Terraform) and its VPC connector |
+
+The image path is accepted only under
+`<gar.host>/<gar.project>/<artifact_registry_repository>/`. The database and
+connector must be in the region `sponsor.toml` declares, the sponsor's
+data-residency choice; none, several, or one elsewhere refuses before
+anything changes.
+The revision authenticates to Doppler with its runtime identity; there is no
+stored-token path.
+
+The workflow declares no concurrency group and no dispatch trigger: the caller
+serialises per environment and owns the dispatch form. The
+`SLACK_APP_OATH_TOKEN` secret is required: without it the deploy refuses
+before anything is built or deployed. Deploy-outcome Slack
+posts route through the caller's `.github/slack-channels.yml`; the uat/prod
+email is sent only when the caller passes `representative-email`,
+`notification-sender` and `notification-service-account`.
+
+```yaml
+jobs:
+  deploy-dev:
+    permissions:
+      contents: read
+      id-token: write
+      packages: read   # the record lookup reads a GHCR package
+    uses: Cure-HHT/hht_workflows/.github/workflows/deploy-cloud-run.yml@<commit-sha>
+    with:
+      target-env: dev
+      image_path: ${{ needs.build.outputs.portal_image_ref }}
+    secrets:
+      SLACK_APP_OATH_TOKEN: ${{ secrets.SLACK_APP_OATH_TOKEN }}
+```
+
+## Sponsor database reset and archives
+
+Three more reusable workflows a sponsor repository calls through thin wrappers.
+None of them names a sponsor; the reset and the build-artifact archive read the
+sponsor's identity from its `sponsor.toml`, and the deployment-log archive
+records the run the caller names:
+
+- [`.github/workflows/reset-db.yml`](.github/workflows/reset-db.yml) resets a
+  portal database in one non-production environment. Before a reviewer is
+  asked, it refuses `prod` and any `<name>-prod`, requires the target typed
+  again in `confirm`, and requires `sponsor.toml` to declare the target
+  environment and a region. After approval, in the environment-bound job, it
+  requires the environment's `DOPPLER_RUNTIME_IDENTITY_ID` and a VPC connector
+  in the declared region before anything is built. The job image is built from the caller's
+  `deployment/docker/db-reset-job` and runs in-VPC under the environment's
+  Doppler runtime identity. `RESET_JOB_SERVICE_ACCOUNT` (environment variable)
+  optionally names the account the job runs as.
+  Without the `SLACK_APP_OATH_TOKEN` secret the reset warns and runs without
+  its Slack posts.
+- [`.github/workflows/archive-deployment-logs.yml`](.github/workflows/archive-deployment-logs.yml)
+  archives one run's log and a deployment record; the caller states the
+  operation (`deploy`, `hotfix-deploy` or `manual`).
+- [`.github/workflows/archive-build-artifacts.yml`](.github/workflows/archive-build-artifacts.yml)
+  archives a commit's build reports with archive metadata.
+
+Both archives upload to the caller repository's `ARCHIVE_BUCKET` variable and
+verify the upload against the packaged checksum. With the variable unset the
+record is assembled but the run warns that nothing durable was written.
+
 ## Fresh-clone conformance (repo-bootstrap)
 
 Every covered repo owes a fresh clone a documented path from "just cloned" to
@@ -439,7 +519,7 @@ This repo and its consumers standardize on the
 Hook configuration is in `.pre-commit-config.yaml`; thin wrappers in
 `.githooks/` invoke the framework via `core.hooksPath`. Cure-HHT-specific
 hooks live in `hooks/` (`release-notes-update`, `no-or-true-guard`,
-`confidential-terms-scan`) and are shared to consumer repos via the
+`confidential-terms-scan`, `download-integrity`) and are shared to consumer repos via the
 `.pre-commit-hooks.yaml` manifest at the repo root.
 
 ### Setup
@@ -463,6 +543,7 @@ and exits.
 - `rhysd/actionlint` — GitHub Actions YAML validation
 - `no-or-true-guard` — blocks the `|| true` / `|| :` shell short-circuit fallback
 - `confidential-terms-scan` — pre-push confidential-terms scan (dogfoods the shared hook)
+- `download-integrity` — refuses a build definition that downloads a file without verifying it (dogfoods the shared hook)
 
 ### Manual run
 

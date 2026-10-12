@@ -1,0 +1,224 @@
+name: "[internal] Archive build artifacts"
+
+# Reusable archival of a sponsor commit's build reports: the reports the
+# pr-health run on main uploaded for this commit, with archive metadata,
+# packaged with a checksum and uploaded to the sponsor's archive bucket for
+# seven-year retention.
+#
+# The sponsor id in the archive's name and metadata is read from the caller's
+# sponsor.toml. The archive bucket is the caller repository's ARCHIVE_BUCKET
+# variable; until it is set the archive is still assembled and the run says
+# loudly that nothing durable was written. Nothing here names a sponsor.
+# `workflow_call` only: the caller carries the standard notify-failure job.
+on:
+  workflow_call:
+    inputs:
+      reports_run_id:
+        description: >
+          Run ID of the pr-health run on main for this commit -- the run that
+          uploaded build-reports-<sha>. Not the deployment's run.
+        required: true
+        type: string
+      deploy_run_id:
+        description: "Run ID of the deployment being archived (defaults to this run)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    name: Archive build artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      ARCHIVE_BUCKET: ${{ vars.ARCHIVE_BUCKET }}
+    steps:
+      - name: Check out the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Implements: HHT-OPS-sponsor-name-is-data/B
+      - name: Read the sponsor id
+        id: sponsor
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import sys
+          import tomllib
+
+          try:
+              with open("sponsor.toml", "rb") as fh:
+                  ident = tomllib.load(fh)
+          except FileNotFoundError:
+              print("::error::sponsor.toml is missing from the repository root; it names the sponsor these artifacts belong to.")
+              sys.exit(1)
+          sponsor = ident.get("id")
+          if not isinstance(sponsor, str) or not sponsor.strip():
+              print("::error::sponsor.toml: id must be a non-empty string")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"sponsor={sponsor}\n")
+          print(f"Sponsor: {sponsor}")
+          PY
+
+      # A run id that is not one would only make the download below miss, and
+      # that miss is tolerated; refuse it here so a typo cannot pass as a
+      # metadata-only archive.
+      - name: Validate the request
+        env:
+          REPORTS_RUN_ID: ${{ inputs.reports_run_id }}
+          DEPLOY_RUN_ID: ${{ inputs.deploy_run_id }}
+        run: |
+          set -euo pipefail
+          case "$REPORTS_RUN_ID" in
+            ''|*[!0-9]*)
+              echo "::error::reports_run_id must be a numeric run id, got '$REPORTS_RUN_ID'"
+              exit 1 ;;
+          esac
+          case "$DEPLOY_RUN_ID" in
+            *[!0-9]*)
+              echo "::error::deploy_run_id must be empty or a numeric run id, got '$DEPLOY_RUN_ID'"
+              exit 1 ;;
+          esac
+
+      - name: Get version
+        id: version
+        run: |
+          set -euo pipefail
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+
+      - name: Download build reports
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: build-reports-${{ github.sha }}
+          path: ./build-reports
+          run-id: ${{ inputs.reports_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Note if no build reports were available
+        if: steps.download.outcome != 'success'
+        env:
+          SOURCE_RUN_ID: ${{ inputs.reports_run_id }}
+        run: |
+          echo "::warning title=No build reports in this archive::Expected artifact build-reports-${GITHUB_SHA} from run ${SOURCE_RUN_ID}; archiving metadata only."
+
+      - name: Create and package the archive
+        env:
+          SPONSOR: ${{ steps.sponsor.outputs.sponsor }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_RUN_ID: ${{ inputs.deploy_run_id || github.run_id }}
+          DEPLOYER: ${{ github.actor }}
+          REPORTS_PRESENT: ${{ steps.download.outcome == 'success' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg artifact_type   "build_reports" \
+            --arg sponsor         "$SPONSOR" \
+            --arg build_id        "$GITHUB_RUN_ID" \
+            --arg workflow_run_id "$SOURCE_RUN_ID" \
+            --arg commit_sha      "$GITHUB_SHA" \
+            --arg version         "$VERSION" \
+            --arg timestamp       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg deployer        "$DEPLOYER" \
+            --argjson reports_present "$REPORTS_PRESENT" \
+            --argjson retention   7 \
+            '{
+              artifact_type:   $artifact_type,
+              sponsor:         $sponsor,
+              build_id:        $build_id,
+              workflow_run_id: $workflow_run_id,
+              commit_sha:      $commit_sha,
+              version:         $version,
+              timestamp:       $timestamp,
+              deployer:        $deployer,
+              retention_years: $retention,
+              reports_present: $reports_present
+            }' > metadata.json
+          cat metadata.json
+          ARCHIVE_NAME="${SPONSOR}-reports-${VERSION}-$(date -u +%Y%m%d-%H%M%S).tar.gz"
+          if [ -d build-reports ] && [ -n "$(ls -A build-reports)" ]; then
+            tar -czf "$ARCHIVE_NAME" -C build-reports . -C .. metadata.json
+          else
+            echo "No build reports found, archiving metadata only"
+            tar -czf "$ARCHIVE_NAME" metadata.json
+          fi
+          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+          cat "${ARCHIVE_NAME}.sha256"
+          echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Read the upload identity
+        id: platform
+        if: env.ARCHIVE_BUCKET != ''
+        run: |
+          set -euo pipefail
+          num="$(jq -er '.gcp.project_number' deployment/base-config.json)"
+          sa="$(jq -er '.gcp.actions_sa_email' deployment/base-config.json)"
+          {
+            echo "provider=projects/${num}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+            echo "service_account=${sa}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Implements: HHT-OPS-identity-over-keys/A
+      - name: Authenticate to Google Cloud
+        if: env.ARCHIVE_BUCKET != ''
+        uses: Cure-HHT/hht_workflows/.github/actions/gcp-wif-auth@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        with:
+          workload_identity_provider: ${{ steps.platform.outputs.provider }}
+          service_account: ${{ steps.platform.outputs.service_account }}
+
+      - name: Upload and verify
+        if: env.ARCHIVE_BUCKET != ''
+        env:
+          SPONSOR: ${{ steps.sponsor.outputs.sponsor }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          GS_PATH="gs://${ARCHIVE_BUCKET}/builds/${VERSION}/sponsors/${SPONSOR}/"
+          gcloud storage cp "$ARCHIVE_NAME"          "$GS_PATH"
+          gcloud storage cp "${ARCHIVE_NAME}.sha256" "$GS_PATH"
+          gcloud storage cp "${GS_PATH}${ARCHIVE_NAME}" verify.tar.gz
+          want="$(sha256sum < "$ARCHIVE_NAME" | cut -d' ' -f1)"
+          got="$(sha256sum < verify.tar.gz | cut -d' ' -f1)"
+          if [ "$want" != "$got" ]; then
+            echo "::error::uploaded archive does not match what was packaged (want $want, got $got)"
+            exit 1
+          fi
+          echo "Uploaded and verified ${GS_PATH}${ARCHIVE_NAME}"
+
+      - name: Report an unset archive bucket
+        if: env.ARCHIVE_BUCKET == ''
+        run: |
+          echo "::warning title=Nothing archived::ARCHIVE_BUCKET is not set on this repository, so ${ARCHIVE_NAME} was assembled but not uploaded and dies with the runner."
+
+      - name: Log archival
+        if: always()
+        env:
+          SPONSOR: ${{ steps.sponsor.outputs.sponsor }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_RUN_ID: ${{ inputs.deploy_run_id || github.run_id }}
+        run: |
+          {
+            echo "## Build artifact archival"
+            echo ""
+            echo "- Sponsor: \`${SPONSOR}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Source workflow run: \`${SOURCE_RUN_ID}\`"
+            echo "- Archive: \`${ARCHIVE_NAME:-not created}\`"
+            if [ -n "$ARCHIVE_BUCKET" ]; then
+              echo "- Destination: \`gs://${ARCHIVE_BUCKET}/builds/${VERSION}/sponsors/${SPONSOR}/\`"
+            else
+              echo "- Destination: none (ARCHIVE_BUCKET unset; nothing durable written)"
+            fi
+            echo "- Retention target: 7 years"
+          } >> "$GITHUB_STEP_SUMMARY"

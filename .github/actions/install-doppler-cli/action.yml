@@ -1,0 +1,34 @@
+# install-doppler-cli — composite action.
+#
+# Installs the Doppler CLI from its GitHub release after verifying the
+# release's detached signature against the Doppler CLI release key pinned in
+# this directory. Replaces `curl https://cli.doppler.com/install.sh | sudo sh`,
+# which executes a downloaded script as root before anything checks it.
+#
+# CANONICAL HOME: cure-hht/hht_workflows (this file). Consumers SHA-pin:
+#   - uses: Cure-HHT/hht_workflows/.github/actions/install-doppler-cli@<sha>
+#     with:
+#       version: ${{ env.DOPPLER_CLI_VERSION }}
+#
+# This installs the CLI only. Authenticating it is doppler-cli-oidc-auth.
+name: 'Install Doppler CLI (signature-verified)'
+description: 'Install a Doppler CLI release only after verifying Doppler''s signature on it. Linux x86_64 runners only; fails on any other.'
+inputs:
+  version:
+    description: 'Doppler CLI version, X.Y.Z (a leading v is accepted). Read it from the caller''s versions.env; there is deliberately no default.'
+    required: true
+  install-dir:
+    description: 'Directory to install the doppler binary into'
+    required: false
+    default: '/usr/local/bin'
+runs:
+  using: 'composite'
+  steps:
+    # Implements: HHT-OPS-ci-tool-download-integrity/A+B
+    # Implements: HHT-OPS-composite-action-library/A
+    - name: Install Doppler CLI after verifying its signature
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        INSTALL_DIR: ${{ inputs.install-dir }}
+      run: '"${GITHUB_ACTION_PATH}/install.sh" "$VERSION" "$INSTALL_DIR"'
