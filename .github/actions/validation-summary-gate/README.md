@@ -13,15 +13,20 @@ pin it.
 ## How it works
 
 A workflow on the default branch is triggered by `workflow_run` (every
-workflow finishing, plus the start of the workflows that re-run on PR
-`edited`) and by `check_run: completed` (check runs from GitHub Apps other
-than GitHub Actions). Each firing runs one short job that:
+workflow starting or finishing, whatever event raised it) and by
+`check_run: completed` (check runs from GitHub Apps other than GitHub
+Actions). Each firing runs one short job that:
 
-1. Ignores the event unless the triggering run was for a pull request and
-   its head commit is the **current head of an open pull request into the
-   gated base branch** (default `main`). Push-to-main runs, superseded
-   commits and closed PRs are left alone.
-2. Reads the commit's check runs and workflow runs **once**, and decides:
+1. Ignores the event unless its head commit is the **current head of an
+   open pull request into the gated base branch** (default `main`).
+   Push-to-main runs, superseded commits and closed PRs are left alone after
+   one API call. A push, review, label, re-run or dispatch run on a pull
+   request's head is evaluated like a `pull_request` run: the verdict counts
+   it, so its start and its end must each move the verdict.
+2. Posts `pending` on the commit, so a job that dies mid-evaluation never
+   leaves an earlier pass standing.
+3. Reads the commit's check runs (`filter=all`) and workflow runs **once**,
+   and decides:
 
    | Seen on the head commit (newest check run of each job, per workflow) | Verdict |
    | --- | --- |
@@ -32,28 +37,36 @@ than GitHub Actions). Each firing runs one short job that:
    | no check runs at all | `pending` |
 
    "Newest" is decided per workflow (through the check's suite), so two
-   workflows that both have a job called `check` are two checks. Check runs
-   named like the gate (`Validation Summary` — the old polling job) are never
-   counted, commit statuses are never read (so the gate's own status cannot
-   feed back), nor are runs
-   of the gate's workflow or of the `dynamic` event (the Copilot review
-   agent).
-3. Posts the commit status `Validation Summary` on the commit
+   workflows that both have a job called `check` are two checks. Nothing is
+   skipped by name, because a pull request controls every workflow, job and
+   check name: the old polling job's `Validation Summary` check run is
+   counted like any other check. Commit statuses are never read (so the
+   gate's own status cannot feed back). Runs of the gate's own workflow are
+   recognised by its file path together with an event a pull request cannot
+   raise, and are not counted, nor are runs of the `dynamic` event (the
+   Copilot review agent). Any other workflow named like the gate's workflow
+   is a **failure**: the trigger filter excludes that name, so its completion
+   would never fire an evaluation.
+4. Posts the commit status `Validation Summary` on the commit
    (`pending`, `success`, `failure`, or `error` when the gate itself could not
    evaluate), description at most 140 characters, linking to the gate's run.
    The newest status of a context is the one that counts.
-4. On `failure`, upserts one PR comment (marker
+5. On `failure`, upserts one PR comment (marker
    `<!-- pr-comment-upsert:validation-summary -->`) with the failed checks,
    their failure annotations or failed step names, and a link to the run. On
    `success`, removes that comment and the two earlier generations
    (`<!-- validation-summary -->`, `<!-- ci-gate-summary -->`). Only comments
    written by `github-actions[bot]` are touched: anyone can post a comment that
-   starts with a marker.
+   starts with a marker. Names and annotation text taken from the pull
+   request are neutralised first: no line break, no `::` workflow command,
+   no `@` mention.
 
 The job succeeds whenever it published a verdict. A red gate *run* means
-the gate itself broke — including a failure to list pull requests or to
-publish; it then posts an `error` status saying it could not evaluate, so an
-earlier pass never stands as the newest verdict.
+the gate itself broke — a malformed input, a failure to list pull requests
+or to publish; it then posts an `error` status saying it could not evaluate.
+If the evaluation step crashes, times out or is cancelled before it can, the
+wrapper's last step (`mode: job-failed`) posts `error` on the head commit.
+Either way an earlier pass never stands as the newest verdict.
 
 ### Why a commit status and not a check run
 
@@ -104,8 +117,7 @@ time budget ran out.
 ## Usage
 
 The wrapper must live on the default branch; `workflow_run` and `check_run`
-always run the default-branch copy. Copy it verbatim and set the list in
-`if:` to the workflows of your repo that run on `pull_request: edited`.
+always run the default-branch copy. Copy it verbatim.
 
 ```yaml
 name: Validation Summary Gate
@@ -117,37 +129,42 @@ on:
   check_run:
     types: [completed]
 
-permissions:
-  statuses: write
-  checks: read
-  pull-requests: write
-  actions: read
-  contents: read
+permissions: {}
 
 jobs:
   evaluate:
     name: Evaluate Validation Summary
     if: >-
-      (github.event_name == 'check_run'
-        && github.event.check_run.app.slug != 'github-actions')
-      || (github.event_name == 'workflow_run'
-        && contains(fromJSON('["pull_request", "pull_request_target"]'), github.event.workflow_run.event)
-        && github.event.workflow_run.name != 'Validation Summary'
-        && (github.event.action == 'completed'
-          || contains(fromJSON('["Validate PR Title"]'), github.event.workflow_run.name)))
+      github.event_name == 'workflow_run'
+      || github.event.check_run.app.slug != 'github-actions'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      statuses: write
+      checks: read
+      pull-requests: write
+      actions: read
+      contents: read
     concurrency:
       group: validation-summary-gate-${{ github.event.workflow_run.head_sha || github.event.check_run.head_sha }}
       cancel-in-progress: false
     steps:
       - uses: Cure-HHT/hht_workflows/.github/actions/validation-summary-gate@<commit-sha>  # SHA-pin
+      - if: failure() || cancelled()
+        uses: Cure-HHT/hht_workflows/.github/actions/validation-summary-gate@<commit-sha>  # SHA-pin
+        with:
+          mode: job-failed
 ```
 
+- Copy it verbatim; there is no per-repo list to maintain.
 - `workflows: ["**", "!Validation Summary Gate"]` selects every workflow but
   the gate itself. GitHub's `workflows` filter takes glob patterns, so no
   workflow name has to be listed and a new workflow cannot escape the gate.
-  `notify-failure-lint` accepts exactly this filter and rejects any other.
+  `notify-failure-lint` accepts exactly `["**"]` or this filter, `**`
+  first, and rejects any other.
+- The wrapper must live at `.github/workflows/validation-summary-gate.yml`
+  and keep `name: Validation Summary Gate`, or set `gate-workflow-path` /
+  `gate-workflow-name` to match.
 - Do not give the wrapper a `pull_request` trigger and do not check out the
   pull request: the job runs with base-repository permissions, fork PRs
   included.
@@ -161,7 +178,9 @@ jobs:
 | --- | --- | --- |
 | `check-name` | `Validation Summary` | Commit-status context to publish; must equal the ruleset's required context |
 | `base-branch` | `main` | Only PRs into this branch are gated |
-| `ignore-workflows` | `Validation Summary`, `Validation Summary Gate` | Workflow names whose runs and check runs are not counted |
+| `gate-workflow-path` | `.github/workflows/validation-summary-gate.yml` | The wrapper's file; its non-pull-request runs are not counted |
+| `gate-workflow-name` | `Validation Summary Gate` | The wrapper's `name:`; any other workflow with this name fails the gate |
+| `mode` | `evaluate` | `job-failed` posts `error` on the head commit (the wrapper's `if: failure() \|\| cancelled()` step) |
 | `relist-attempts` | `3` | Re-reads while the listing lags the event |
 | `relist-interval-seconds` | `20` | Seconds between re-reads |
 | `github-token` | `github.token` | Needs `statuses: write`, `checks: read`, `pull-requests: write`, `actions: read`, `contents: read` |
@@ -175,7 +194,9 @@ The pull request that adds the wrapper cannot be gated by it — `workflow_run`
 runs only from the default branch — so keep the polling workflow in that pull
 request. After it merges, every PR commit carries the polling job's
 `Validation Summary` **check run** and the gate's `Validation Summary`
-**commit status**, and both must pass. That phase is a live test of the gate:
+**commit status**, and both must pass. The gate counts the polling job's
+check run like any other check, so its status settles about 30 seconds
+after the polling job finishes. That phase is a live test of the gate:
 a gate that wrongly fails or never finishes blocks merges, it cannot let one
 through that the polling gate would have blocked.
 

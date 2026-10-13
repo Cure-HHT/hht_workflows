@@ -15,7 +15,8 @@
 # `workflow_run` and `check_run` -- see README.md for the wrapper. It never
 # checks out or runs pull-request code: everything it needs comes from the
 # GitHub API, and the only value taken from the event is the head commit
-# sha, validated as 40 hex characters.
+# sha, validated as 40 hex characters. A pull request controls every
+# workflow and check name, so nothing is ignored by name.
 #
 # The polling action .github/actions/validation-summary stays in place for
 # consumers whose pin predates this one.
@@ -27,8 +28,9 @@ inputs:
   check-name:
     description: >
       Commit-status context to publish. Must equal the context the branch
-      ruleset requires. Check runs with this name are never counted, and
-      commit statuses are never read, so the gate cannot count itself.
+      ruleset requires. Commit statuses are never read, so the gate cannot
+      count itself; check runs are never skipped by name, because a pull
+      request controls every check and workflow name.
     required: false
     default: 'Validation Summary'
   base-branch:
@@ -37,15 +39,28 @@ inputs:
       current head of an open pull request into it is left alone.
     required: false
     default: 'main'
-  ignore-workflows:
+  gate-workflow-path:
     description: >
-      Newline-separated workflow names whose runs and check runs are never
-      counted: the gate's own workflow and, during the transition, the
-      polling workflow that also reports "Validation Summary".
+      Path of the wrapper workflow file. Its runs are not counted when their
+      event is not a pull-request event; that pair, unlike a display name, is
+      out of a pull request's reach.
     required: false
-    default: |
-      Validation Summary
-      Validation Summary Gate
+    default: '.github/workflows/validation-summary-gate.yml'
+  gate-workflow-name:
+    description: >
+      The wrapper's `name:`, which its `workflows:` filter excludes. Any other
+      workflow on the commit with this name is reported as a failure, since
+      its completion would never fire an evaluation.
+    required: false
+    default: 'Validation Summary Gate'
+  mode:
+    description: >
+      `evaluate` (default) evaluates and publishes. `job-failed` is for the
+      wrapper's `if: failure() || cancelled()` step: it posts an `error`
+      status on the event's head commit, so a crashed, timed-out or cancelled
+      evaluation never leaves an earlier pass standing.
+    required: false
+    default: 'evaluate'
   relist-attempts:
     description: >
       How many times to re-read the checks when the listing visibly lags the
@@ -81,7 +96,9 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_CHECK_NAME: ${{ inputs.check-name }}
         INPUT_BASE_BRANCH: ${{ inputs.base-branch }}
-        INPUT_IGNORE_WORKFLOWS: ${{ inputs.ignore-workflows }}
+        INPUT_GATE_WORKFLOW_PATH: ${{ inputs.gate-workflow-path }}
+        INPUT_GATE_WORKFLOW_NAME: ${{ inputs.gate-workflow-name }}
+        INPUT_MODE: ${{ inputs.mode }}
         INPUT_RELIST_ATTEMPTS: ${{ inputs.relist-attempts }}
         INPUT_RELIST_INTERVAL_SECONDS: ${{ inputs.relist-interval-seconds }}
       run: python3 "$GITHUB_ACTION_PATH/gate.py"

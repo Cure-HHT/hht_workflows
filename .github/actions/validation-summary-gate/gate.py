@@ -2,8 +2,8 @@
 """Validation Summary gate -- event-driven evaluation.
 
 One evaluation of the "Validation Summary" required check for one commit.
-The caller is a workflow triggered by `workflow_run` (every PR workflow
-finishing, plus the start of the workflows that re-run on `edited`) and by
+The caller is a workflow triggered by `workflow_run` (every workflow
+starting or finishing, whatever event raised it) and by
 `check_run: completed` (check runs posted by GitHub Apps other than
 GitHub Actions). Each firing reads the commit's check runs and workflow
 runs ONCE, decides, and publishes the verdict as a COMMIT STATUS with
@@ -20,7 +20,7 @@ both exist under one name, both must pass.
 
 Semantics carried over from the polling gate it replaces
 (.github/actions/validation-summary): every check run on the head commit
-counts except those named like the gate; the newest check run of each job
+counts except those of the gate's own workflow; the newest check run of each job
 wins; skipped and neutral are passing; cancelled means "waiting for a
 re-run"; the gate fails, and upserts one PR comment naming the failed
 checks with their annotations, once every check has completed and any
@@ -40,12 +40,19 @@ status can never feed back into its verdict. Differences, each fail-closed:
   a failure after a bounded re-read instead of being waited on until a
   timeout. The polling gate reached the same verdict after its budget.
 
+What a pull request controls cannot exempt a check. Workflow display names
+and check-run names come from the pull request's own workflow files, so the
+gate never ignores anything by name: its own runs are recognised by the
+workflow file path together with an event a pull request cannot raise, and
+the polling job's "Validation Summary" check run, while it exists, is
+counted like any other check. A workflow that takes the gate's own
+workflow name is a failure, because the trigger filter excludes that name
+and its completion would never fire an evaluation.
+
 Runs of the `dynamic` event (GitHub's Copilot code-review agent) are not
 counted: they are triggered by a review request, not by the pull request
 event, they validate nothing, and no event is documented to fire when they
 finish, so waiting on one could leave the gate pending for good.
-
-Implements: HHT-OPS-composite-action-library/A+F
 """
 from __future__ import annotations
 
@@ -76,6 +83,8 @@ FAILED_CONCLUSIONS = frozenset(
     {"failure", "timed_out", "action_required", "startup_failure", "stale"})
 IGNORED_RUN_EVENTS = frozenset({"dynamic"})
 PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
+DEFAULT_GATE_WORKFLOW_PATH = ".github/workflows/validation-summary-gate.yml"
+DEFAULT_GATE_WORKFLOW_NAME = "Validation Summary Gate"
 
 # Annotation lines that say nothing beyond "it failed".
 _NOISE = re.compile(
@@ -96,6 +105,16 @@ RERUN_GUIDANCE = (
 # --------------------------------------------------------------------------
 # Evaluation (pure)
 # --------------------------------------------------------------------------
+
+# Implements: HHT-OPS-composite-action-library/A
+def safe(text) -> str:
+    """Neutralise text a pull request controls (workflow, job and check names,
+    annotation messages) before it reaches a log line, a commit status or a
+    PR comment: no line break can start a `::workflow-command::`, no `::`
+    survives to form one, and no `@` mentions anyone."""
+    text = re.sub(r"[\r\n]+", " ", str(text))
+    return text.replace("::", ":\u200b:").replace("@", "@\u200b")
+
 
 @dataclasses.dataclass
 class Item:
@@ -144,6 +163,7 @@ def latest_runs(workflow_runs: Iterable[dict]) -> list[dict]:
     return list(best.values())
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def latest_per_job(check_runs: Iterable[dict], workflow_runs: Iterable[dict]) -> list[tuple]:
     """Newest check run of each (workflow, name), as (check_run, workflow_name).
 
@@ -168,18 +188,25 @@ def latest_per_job(check_runs: Iterable[dict], workflow_runs: Iterable[dict]) ->
 
 
 # Implements: HHT-OPS-composite-action-library/A
+def is_gate_run(run: dict, gate_path: str) -> bool:
+    """A run of the gate's own workflow: its file path, and an event a pull
+    request cannot raise. A pull request can rename any workflow, and can
+    even add a `pull_request` trigger to the gate's file, but it cannot make
+    GitHub record one of its runs under a workflow_run or check_run event."""
+    return run.get("path") == gate_path and run.get("event") not in PR_EVENTS
+
+
+# Implements: HHT-OPS-composite-action-library/A
 def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
-             check_name: str, ignore_workflows: Iterable[str]) -> Evaluation:
-    ignore_workflows = set(ignore_workflows)
-    ignored_suites = {
-        r.get("check_suite_id") for r in workflow_runs
-        if r.get("name") in ignore_workflows
-        or r.get("event") in IGNORED_RUN_EVENTS
-    } - {None}
+             gate_path: str = DEFAULT_GATE_WORKFLOW_PATH,
+             gate_name: str = DEFAULT_GATE_WORKFLOW_NAME) -> Evaluation:
+    def ignored(run: dict) -> bool:
+        return is_gate_run(run, gate_path) or run.get("event") in IGNORED_RUN_EVENTS
+
+    ignored_suites = {r.get("check_suite_id") for r in workflow_runs if ignored(r)} - {None}
     relevant = [
         cr for cr in check_runs
-        if cr["name"] != check_name
-        and (cr.get("check_suite") or {}).get("id") not in ignored_suites
+        if (cr.get("check_suite") or {}).get("id") not in ignored_suites
     ]
     jobs = latest_per_job(relevant, workflow_runs)
     name_count: dict[str, int] = {}
@@ -189,9 +216,9 @@ def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
     items: list[Item] = []
     for cr, wf_name in jobs:
         status, conclusion = cr.get("status"), cr.get("conclusion")
-        name = cr["name"]
-        if name_count[name] > 1 and wf_name:
-            name = f"{wf_name} / {name}"
+        name = safe(cr["name"])
+        if name_count[cr["name"]] > 1 and wf_name:
+            name = f"{safe(wf_name)} / {name}"
         item = Item(name=name, state="ok", status="",
                     url=cr.get("html_url") or "", check_id=cr["id"],
                     app=((cr.get("app") or {}).get("slug") or ""),
@@ -213,12 +240,21 @@ def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
     for i in items:
         by_suite.setdefault(i.suite_id, set()).add(i.state)
     for run in latest_runs(workflow_runs):
-        if run.get("name") in ignore_workflows or run.get("event") in IGNORED_RUN_EVENTS:
+        if ignored(run):
             continue
         status, conclusion = run.get("status"), run.get("conclusion")
         suite_states = by_suite.get(run.get("check_suite_id"), set())
-        base = Item(name=f"workflow: {run.get('name')}", state="pending", status="",
+        base = Item(name=f"workflow: {safe(run.get('name'))}", state="pending", status="",
                     url=run.get("html_url") or "", suite_id=run.get("check_suite_id"))
+        if run.get("name") == gate_name:
+            # The trigger filter excludes this name, so this workflow's own
+            # completion never fires an evaluation: whatever it concludes
+            # later could go unseen.
+            base.state, base.status = "failed", "Named like the gate"
+            base.detail = (f"a workflow named {gate_name!r} cannot trigger the gate "
+                           f"when it finishes; rename it")
+            items.append(base)
+            continue
         if status != "completed":
             if "pending" in suite_states:
                 continue    # already listed through its pending check runs
@@ -255,6 +291,7 @@ def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
                       f"all {len(items)} check(s) passed (or were skipped)")
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def looks_stale(ev: Evaluation, workflow_runs: list[dict],
                 trigger: dict) -> bool:
     """True when the listing visibly lags the event that fired this run.
@@ -373,12 +410,13 @@ def failure_detail(annotations: list[dict], failed_steps: list[str]) -> str:
             continue
         for line in str(a.get("message") or "").splitlines():
             line = line.strip()
+            line = safe(line)
             if line and not _NOISE.search(line) and line not in msgs:
                 msgs.append(line)
     if msgs:
         return "; ".join(msgs[:3])
     if failed_steps:
-        return "Failed step(s): " + ", ".join(failed_steps)
+        return "Failed step(s): " + ", ".join(safe(n) for n in failed_steps)
     return ""
 
 
@@ -388,14 +426,21 @@ def failure_detail(annotations: list[dict], failed_steps: list[str]) -> str:
 # Trigger parsing
 # --------------------------------------------------------------------------
 
-def parse_trigger(event_name: str, event: dict, ignore_workflows: Iterable[str]):
-    """Return (trigger dict, None) or (None, reason-to-skip)."""
+# Implements: HHT-OPS-composite-action-library/A
+def parse_trigger(event_name: str, event: dict,
+                  gate_path: str = DEFAULT_GATE_WORKFLOW_PATH):
+    """Return (trigger dict, None) or (None, reason-to-skip).
+
+    Every workflow run is a trigger, whatever its event: a run raised by a
+    push, a review, a label, a re-run or a manual dispatch on a pull
+    request's head commit is counted by the evaluation, so its start and its
+    end must each fire one, or a pass posted before it finished could stand.
+    Whether the commit is an open pull request's head is decided afterwards,
+    from the API. Only the gate's own runs are skipped."""
     if event_name == "workflow_run":
         run = event.get("workflow_run") or {}
-        if run.get("event") not in PR_EVENTS:
-            return None, f"triggering run's event is {run.get('event')!r}, not a pull request"
-        if run.get("name") in set(ignore_workflows):
-            return None, f"triggering workflow {run.get('name')!r} is ignored"
+        if is_gate_run(run, gate_path):
+            return None, "triggering run is the gate's own workflow"
         trig = {"kind": "workflow_run", "sha": run.get("head_sha") or "",
                 "run_id": run.get("id"), "suite_id": run.get("check_suite_id"),
                 "name": run.get("name"), "action": event.get("action")}
@@ -409,11 +454,9 @@ def parse_trigger(event_name: str, event: dict, ignore_workflows: Iterable[str])
                 "name": cr.get("name"), "action": event.get("action")}
     else:
         return None, f"unsupported event {event_name!r}"
-    if not SHA_RE.match(trig["sha"]):
-        return None, f"head sha {trig['sha']!r} is not a commit sha"
+    if not SHA_RE.match(str(trig["sha"])):
+        return None, f"head sha {safe(trig['sha'])!r} is not a commit sha"
     return trig, None
-
-
 
 
 # --------------------------------------------------------------------------
@@ -487,6 +530,7 @@ class GitHub:
 # Effects
 # --------------------------------------------------------------------------
 
+# Implements: HHT-OPS-composite-action-library/A
 def open_prs_for(gh, repo: str, sha: str, base: str) -> list[int]:
     """Open PRs into `base` whose CURRENT head is `sha`.
 
@@ -497,15 +541,21 @@ def open_prs_for(gh, repo: str, sha: str, base: str) -> list[int]:
     return sorted(p["number"] for p in prs if (p.get("head") or {}).get("sha") == sha)
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def read_state(gh, repo: str, sha: str) -> tuple[list[dict], list[dict]]:
-    checks = gh.paginate(f"repos/{repo}/commits/{sha}/check-runs", key="check_runs")
+    # filter=all: the default (`latest`) keeps one check run per name, which
+    # would hide one of two workflows' same-named jobs before the per-workflow
+    # dedupe in latest_per_job ever sees it.
+    checks = gh.paginate(f"repos/{repo}/commits/{sha}/check-runs", {"filter": "all"},
+                         key="check_runs")
     runs = gh.paginate(f"repos/{repo}/actions/runs", {"head_sha": sha},
                        key="workflow_runs")
     return checks, runs
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
-                         check_name: str, ignore_workflows: list[str],
+                         gate_path: str, gate_name: str,
                          attempts: int, interval: float,
                          sleep: Callable[[float], None], log=print):
     """Evaluate, re-listing up to `attempts` more times while the listing
@@ -520,8 +570,7 @@ def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
     stale = False
     for n in range(attempts + 1):
         checks, runs = read_state(gh, repo, sha)
-        ev = evaluate(checks, runs, check_name=check_name,
-                      ignore_workflows=ignore_workflows)
+        ev = evaluate(checks, runs, gate_path=gate_path, gate_name=gate_name)
         stale = looks_stale(ev, runs, trigger)
         if n == attempts or not stale:
             break
@@ -562,6 +611,7 @@ STATE_FOR_VERDICT = {"pending": "pending", "success": "success",
                      "failure": "failure", "error": "error"}
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def publish_status(gh, repo: str, sha: str, context: str, state: str,
                    description: str, target_url: str) -> dict:
     """Set the commit status `context` on `sha`. The newest status of a
@@ -581,6 +631,7 @@ def _ours(comment: dict) -> bool:
         body.startswith(m) for m in (COMMENT_MARKER, *LEGACY_COMMENT_MARKERS))
 
 
+# Implements: HHT-OPS-composite-action-library/A
 def sync_comment(gh, repo: str, pr: int, ev: Evaluation, body: str, log=print) -> None:
     """Failure: upsert one comment. Success: remove every generation of it.
     Pending: leave whatever is there. Only comments this gate's identity
@@ -629,38 +680,71 @@ def _append(path: str | None, text: str) -> None:
             fh.write(text + "\n")
 
 
+def _event_sha(env: dict) -> str:
+    """The head sha the triggering event names, read as defensively as
+    possible so even a malformed event or input still identifies the commit
+    an `error` status belongs on. Empty when it cannot be determined."""
+    try:
+        with open(env["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
+            event = json.load(fh)
+        body = event.get("workflow_run") or event.get("check_run") or {}
+        sha = str(body.get("head_sha") or "")
+    except Exception:  # noqa: BLE001 -- best effort; the caller fails closed
+        return ""
+    return sha if SHA_RE.match(sha) else ""
+
+
+def _details_url(env: dict) -> str:
+    return (f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/"
+            f"{env.get('GITHUB_REPOSITORY', '')}/actions/runs/{env.get('GITHUB_RUN_ID', '')}")
+
+
+def _client(env: dict, gh, sleep):
+    return gh or GitHub(env["GITHUB_TOKEN"],
+                        env.get("GITHUB_API_URL") or "https://api.github.com", sleep=sleep)
+
+
 # Implements: HHT-OPS-composite-action-library/A
 def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = _now, log=print) -> int:
-    repo = env["GITHUB_REPOSITORY"]
+    """One evaluation. Every input and the event are parsed inside the
+    fail-closed block: anything that goes wrong once the commit is known
+    posts `error`, so an earlier pass never stands as the newest verdict."""
     check_name = env.get("INPUT_CHECK_NAME") or "Validation Summary"
-    base = env.get("INPUT_BASE_BRANCH") or "main"
-    ignore = [w.strip() for w in (env.get("INPUT_IGNORE_WORKFLOWS") or "").splitlines()
-              if w.strip()]
-    attempts = int(env.get("INPUT_RELIST_ATTEMPTS") or 3)
-    interval = float(env.get("INPUT_RELIST_INTERVAL_SECONDS") or 20)
-    with open(env["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
-        event = json.load(fh)
-    trigger, skip = parse_trigger(env.get("GITHUB_EVENT_NAME", ""), event, ignore)
-    if trigger is None:
-        log(f"Nothing to evaluate: {skip}.")
-        return 0
-    sha = trigger["sha"]
-    gh = gh or GitHub(env["GITHUB_TOKEN"], env.get("GITHUB_API_URL") or "https://api.github.com",
-                      sleep=sleep)
-    details_url = (f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}"
-                   f"/actions/runs/{env.get('GITHUB_RUN_ID', '')}")
-    log(f"Triggered by {trigger['kind']} {trigger.get('action')} of "
-        f"{trigger.get('name')!r} on {sha[:7]}")
-
+    details_url = _details_url(env)
+    sha = ""
     try:
+        repo = env["GITHUB_REPOSITORY"]
+        base = env.get("INPUT_BASE_BRANCH") or "main"
+        gate_path = env.get("INPUT_GATE_WORKFLOW_PATH") or DEFAULT_GATE_WORKFLOW_PATH
+        gate_name = env.get("INPUT_GATE_WORKFLOW_NAME") or DEFAULT_GATE_WORKFLOW_NAME
+        sha = _event_sha(env)
+        attempts = int(env.get("INPUT_RELIST_ATTEMPTS") or 3)
+        interval = float(env.get("INPUT_RELIST_INTERVAL_SECONDS") or 20)
+        if attempts < 0 or interval < 0:
+            raise ValueError("relist-attempts and relist-interval-seconds must be >= 0")
+        with open(env["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
+            event = json.load(fh)
+        trigger, skip = parse_trigger(env.get("GITHUB_EVENT_NAME", ""), event, gate_path)
+        if trigger is None:
+            log(f"Nothing to evaluate: {skip}.")
+            return 0
+        sha = trigger["sha"]
+        gh = _client(env, gh, sleep)
+        log(f"Triggered by {trigger['kind']} {safe(trigger.get('action'))} of "
+            f"{safe(trigger.get('name'))!r} on {sha[:7]}")
+
         prs = open_prs_for(gh, repo, sha, base)
         if not prs:
             log(f"{sha[:7]} is not the head of an open pull request into {base}; "
                 f"nothing to do.")
             return 0
+        # Pending first: if this job is killed mid-evaluation (timeout,
+        # cancellation, runner loss), the newest verdict is not an earlier pass.
+        publish_status(gh, repo, sha, check_name, "pending",
+                       "Evaluating the checks on this commit", details_url)
         ev, stuck = evaluate_with_relist(
-            gh, repo, sha, trigger, check_name=check_name, ignore_workflows=ignore,
+            gh, repo, sha, trigger, gate_path=gate_path, gate_name=gate_name,
             attempts=attempts, interval=interval, sleep=sleep, log=log)
         if ev.verdict == "failure":
             add_failure_details(gh, repo, ev)
@@ -671,17 +755,13 @@ def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
         for pr in prs:
             sync_comment(gh, repo, pr, ev, comment_body(summary, details_url, stamp), log=log)
     except Exception as exc:  # noqa: BLE001 -- fail closed on anything
-        # A gate that cannot read or publish must not leave an earlier pass
-        # standing as the newest verdict.
-        log(f"::error::Validation Summary could not evaluate {sha[:7]}: {exc}")
-        try:
-            publish_status(gh, repo, sha, check_name, "error",
-                           "Gate could not evaluate; re-run the Validation Summary "
-                           "Gate workflow", details_url)
-        except Exception as exc2:  # noqa: BLE001
-            log(f"::error::could not publish the error status either: {exc2}")
+        log(f"::error::Validation Summary could not evaluate {sha[:7] or 'the commit'}: "
+            f"{safe(exc)}")
+        _publish_error(env, gh, sleep, sha, check_name,
+                       "Gate could not evaluate; re-run the Validation Summary Gate workflow",
+                       details_url, log)
         _append(env.get("GITHUB_STEP_SUMMARY"),
-                f"## Validation Summary: could not evaluate\n\n`{exc}`")
+                f"## Validation Summary: could not evaluate\n\n`{safe(exc)}`")
         return 1
 
     log(f"Validation Summary on {sha[:7]}: {ev.verdict} -- {ev.reason}")
@@ -690,5 +770,43 @@ def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
     return 0
 
 
+def _publish_error(env, gh, sleep, sha, check_name, description, details_url, log) -> None:
+    if not sha:
+        log("::error::the head commit could not be determined; no status was posted")
+        return
+    try:
+        publish_status(_client(env, gh, sleep), env.get("GITHUB_REPOSITORY", ""), sha,
+                       check_name, "error", description, details_url)
+    except Exception as exc2:  # noqa: BLE001
+        log(f"::error::could not publish the error status either: {safe(exc2)}")
+
+
+# Implements: HHT-OPS-composite-action-library/A
+def report_job_failure(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
+                       log=print) -> int:
+    """The `job-failed` mode, run by the wrapper's `if: failure() || cancelled()`
+    step: the evaluation step crashed, timed out or was cancelled, possibly
+    before it published anything. Post `error` on the event's head commit
+    when it is an open pull request's head (or when that cannot be checked),
+    so no earlier pass outlives an evaluation that never finished."""
+    check_name = env.get("INPUT_CHECK_NAME") or "Validation Summary"
+    sha = _event_sha(env)
+    try:
+        prs = open_prs_for(_client(env, gh, sleep), env["GITHUB_REPOSITORY"], sha,
+                           env.get("INPUT_BASE_BRANCH") or "main") if sha else []
+        if sha and not prs:
+            log(f"{sha[:7]} is not the head of an open pull request; nothing to do.")
+            return 0
+    except Exception as exc:  # noqa: BLE001 -- cannot tell: fail closed
+        log(f"::warning::could not list pull requests ({safe(exc)}); posting error anyway")
+    _publish_error(env, gh, sleep, sha, check_name,
+                   "Gate run failed or was cancelled; re-run the Validation Summary "
+                   "Gate workflow", _details_url(env), log)
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(run(dict(os.environ)))
+    _env = dict(os.environ)
+    if _env.get("INPUT_MODE") == "job-failed":
+        sys.exit(report_job_failure(_env))
+    sys.exit(run(_env))

@@ -147,7 +147,7 @@ jobs:
 
 `Validation Summary` is not a job in a `pull_request` workflow: a workflow
 triggered by `workflow_run` and `check_run` evaluates the PR head commit each
-time another workflow finishes and publishes a commit status of that context
+time another workflow starts or finishes and publishes a commit status of that context
 (checks created by `workflow_run` jobs do not count toward rulesets). Copy the wrapper from
 [`validation-summary-gate/README.md`](.github/actions/validation-summary-gate/README.md#usage)
 — it must be on the default branch to run, and its job is deliberately not
