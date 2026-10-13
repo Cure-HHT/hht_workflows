@@ -199,13 +199,15 @@ _ALL_WORKFLOWS = ("**",)
 
 
 def _is_all_workflows_filter(workflows, own_name):
+    """Exactly `["**"]` or `["**", "!<own name>"]`, in that order: GitHub
+    applies the patterns in order, so a `**` after an exclusion would
+    re-include the excluded workflow."""
     if not isinstance(workflows, list) or not workflows:
         return False
-    positives = [w for w in workflows if not str(w).startswith("!")]
-    negatives = [str(w)[1:] for w in workflows if str(w).startswith("!")]
-    if positives != list(_ALL_WORKFLOWS):
+    if [str(w) for w in workflows[:1]] != list(_ALL_WORKFLOWS):
         return False
-    return all(own_name and n == own_name for n in negatives)
+    rest = [str(w) for w in workflows[1:]]
+    return rest == [] or (bool(own_name) and rest == [f"!{own_name}"])
 
 
 def _check_no_workflow_enumeration(filename, wf):
@@ -231,7 +233,7 @@ def _check_no_workflow_enumeration(filename, wf):
                 f"matching reports nothing. Announce failure from inside each "
                 f"workflow with the standard notify-failure job instead. The "
                 f"only accepted filter is every workflow: [\"**\"], optionally "
-                f"followed by \"!<this workflow's own name>\""]
+                f"followed (never preceded) by \"!<this workflow's own name>\""]
     return []
 
 

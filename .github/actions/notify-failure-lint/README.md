@@ -50,7 +50,8 @@ must keep in step, with no signal when an entry stops matching — moving it
 out of `on:` and into a text file changes none of that. One filter is not an
 enumeration and is accepted: every workflow, `workflows: ["**"]`, optionally
 followed by `"!<this workflow's own name:>"` to exclude itself (GitHub's
-`workflows` filter takes glob patterns). It names no other workflow, and the
+`workflows` filter takes glob patterns). `**` must come first: patterns
+apply in order, so a `**` after the exclusion would re-include it. It names no other workflow, and the
 self-exclusion is checked against the file's own `name:`, so it cannot go
 stale. The event-driven `validation-summary-gate` wrapper uses exactly this. Limb 2 reads
 `run:` bodies and `if:` expressions (step- and job-level), so

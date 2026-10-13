@@ -215,6 +215,9 @@ def test_all_workflows_glob_alone_is_not_an_enumeration():
     '["Build*"]',                              # a prefix glob is still a name list
     '["*"]',                                   # single star is not "every workflow"
     '["**", "Build"]',                         # a name riding alongside the glob
+    '["!Validation Summary Gate", "**"]',      # a trailing ** re-includes everything
+    '["**", "!Validation Summary Gate", "**"]',
+    '["**", "**"]',
     '[]',
 ])
 def test_anything_but_the_all_workflows_filter_is_still_rejected(workflows):
