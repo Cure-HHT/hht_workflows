@@ -14,8 +14,8 @@ pin it.
 
 A workflow on the default branch is triggered by `workflow_run` (every
 workflow starting or finishing, whatever event raised it) and by
-`check_run: completed` (check runs from GitHub Apps other than GitHub
-Actions). Each firing runs one short job that:
+`check_run` `created` and `completed` (check runs from GitHub Apps other
+than GitHub Actions). Each firing runs one short job that:
 
 1. Ignores the event unless its head commit is the **current head of an
    open pull request into the gated base branch** (default `main`).
@@ -124,10 +124,10 @@ name: Validation Summary Gate
 
 on:
   workflow_run:
-    workflows: ["**", "!Validation Summary Gate"]
+    workflows: ["**"]
     types: [completed, requested]
   check_run:
-    types: [completed]
+    types: [created, completed]
 
 permissions: {}
 
@@ -135,8 +135,11 @@ jobs:
   evaluate:
     name: Evaluate Validation Summary
     if: >-
-      github.event_name == 'workflow_run'
-      || github.event.check_run.app.slug != 'github-actions'
+      (github.event_name == 'workflow_run'
+        && !(github.event.workflow_run.path == '.github/workflows/validation-summary-gate.yml'
+          && !contains(fromJSON('["pull_request", "pull_request_target"]'), github.event.workflow_run.event)))
+      || (github.event_name == 'check_run'
+        && github.event.check_run.app.slug != 'github-actions')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -157,11 +160,18 @@ jobs:
 ```
 
 - Copy it verbatim; there is no per-repo list to maintain.
-- `workflows: ["**", "!Validation Summary Gate"]` selects every workflow but
-  the gate itself. GitHub's `workflows` filter takes glob patterns, so no
-  workflow name has to be listed and a new workflow cannot escape the gate.
-  `notify-failure-lint` accepts exactly `["**"]` or this filter, `**`
-  first, and rejects any other.
+- `workflows: ["**"]` selects every workflow, so no workflow name has to be
+  listed and a new workflow cannot escape the gate. The gate's own runs are
+  skipped by the job's `if:`, on the run's file path and a non-pull-request
+  event, never on a name: a name-based exclusion (`"!Validation Summary
+  Gate"`) would let a pull request add a workflow wearing that name whose
+  start and end never fire the gate, and which could post the status
+  itself after the gate's last evaluation. A skipped run of the gate is
+  itself a `workflow_run`, which the same `if:` skips; GitHub stops such a
+  chain after three levels. `notify-failure-lint` accepts `["**"]`.
+- `check_run: [created, completed]`: another app's check that starts after
+  a pass sets the status back to pending at once, rather than leaving the
+  pass standing until that check finishes.
 - The wrapper must live at `.github/workflows/validation-summary-gate.yml`
   and keep `name: Validation Summary Gate`, or set `gate-workflow-path` /
   `gate-workflow-name` to match.

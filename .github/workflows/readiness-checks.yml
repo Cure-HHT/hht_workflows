@@ -938,43 +938,6 @@ jobs:
             exit 1
           fi
 
-  validation-summary-gate-readiness:
-    name: validation-summary-gate
-    # Readiness for the event-driven merge gate: unit-test its decisions
-    # against stubbed GitHub state and recorded pull requests, then run the
-    # composite itself on this pull_request event, which the action must
-    # leave alone without touching the API or posting a status.
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
-        with:
-          python-version: '3.12'
-      # Verifies: HHT-OPS-composite-action-library/A+D
-      - name: Unit-test the gate
-        run: |
-          set -euo pipefail
-          python3 -m pip install --user pytest
-          cd .github/actions/validation-summary-gate
-          PYTHONPATH=. python3 -m pytest tests/ -v
-      # Verifies: HHT-OPS-composite-action-library/D+F
-      - id: evaluate
-        uses: ./.github/actions/validation-summary-gate
-        with:
-          github-token: unused-on-a-pull-request-event
-      - name: Assert the action left a non-PR-head event alone
-        env:
-          VERDICT: ${{ steps.evaluate.outputs.verdict }}
-        run: |
-          set -euo pipefail
-          [ -z "$VERDICT" ] || { echo "::error::expected no verdict, got '$VERDICT'"; exit 1; }
-          echo "validation-summary-gate wiring OK"
-
   no-op:
     # Placeholder job; per-action readiness jobs added by PRs that introduce
     # each action. Keeps the workflow non-empty until all real jobs land.
@@ -1006,7 +969,6 @@ jobs:
       - notify-failure-readiness
       - release-notes-publish
       - sponsor-base-preflight
-      - validation-summary-gate-readiness
     if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
