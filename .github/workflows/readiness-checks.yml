@@ -1034,7 +1034,9 @@ jobs:
           }
           decide cosign    '^\.github/(actions|fixtures)/cosign-verify/'
           decide urs       '^(\.github/actions/build-urs|scripts/urs-compile)/'
-          decide oq        '^(\.github/actions/build-oq|scripts/oq-compile)/'
+          # oq_compile imports urs_compile (scripts/oq-compile/oq_compile/urs_sections.py),
+          # so urs-compile is an input of build-oq as well.
+          decide oq        '^(\.github/actions/build-oq|scripts/(oq|urs)-compile)/'
           decide preflight '^\.github/actions/sponsor-base-preflight/'
 
   # Implements: HHT-OPS-failure-notification-routing/A

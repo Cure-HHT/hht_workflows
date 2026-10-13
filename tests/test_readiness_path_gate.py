@@ -139,7 +139,9 @@ def _decide(repo: pathlib.Path, event: str = "pull_request") -> dict[str, str]:
         (".github/actions/cosign-verify/action.yml", {"cosign"}),
         (".github/fixtures/cosign-verify/Dockerfile", {"cosign"}),
         (".github/actions/build-urs/obtain-associates.sh", {"urs"}),
-        ("scripts/urs-compile/compile-urs.py", {"urs"}),
+        # oq_compile imports urs_compile, so build-oq reads urs-compile too.
+        ("scripts/urs-compile/compile-urs.py", {"urs", "oq"}),
+        ("scripts/urs-compile/urs_compile/ordering.py", {"urs", "oq"}),
         (".github/actions/build-oq/action.yml", {"oq"}),
         ("scripts/oq-compile/compile-oq.py", {"oq"}),
         (".github/actions/sponsor-base-preflight/preflight.py", {"preflight"}),
