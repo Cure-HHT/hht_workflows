@@ -189,10 +189,13 @@ def latest_per_job(check_runs: Iterable[dict], workflow_runs: Iterable[dict]) ->
 
 # Implements: HHT-OPS-composite-action-library/A
 def is_gate_run(run: dict, gate_path: str) -> bool:
-    """A run of the gate's own workflow: its file path, and an event a pull
-    request cannot raise. A pull request can rename any workflow, and can
-    even add a `pull_request` trigger to the gate's file, but it cannot make
-    GitHub record one of its runs under a workflow_run or check_run event."""
+    """A run of the gate's own workflow: its file path, and an event other
+    than a pull request's. A pull request can rename any workflow and can add
+    a `pull_request` trigger to the gate's file, and those runs are counted.
+    A same-repository branch push to the gate's file does raise `push` and is
+    ignored here, but a push run belongs to the branch, not to the pull
+    request: ignoring it drops nothing the pull request is judged on, and the
+    pull request's own runs of that file are still counted."""
     return run.get("path") == gate_path and run.get("event") not in PR_EVENTS
 
 
@@ -247,9 +250,10 @@ def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
         base = Item(name=f"workflow: {safe(run.get('name'))}", state="pending", status="",
                     url=run.get("html_url") or "", suite_id=run.get("check_suite_id"))
         if run.get("name") == gate_name:
-            # The trigger filter excludes this name, so this workflow's own
-            # completion never fires an evaluation: whatever it concludes
-            # later could go unseen.
+            # Only the gate's own file is skipped, by path, so a workflow
+            # wearing the gate's name does fire an evaluation. It still fails:
+            # a second "Validation Summary Gate" in the run list makes the
+            # gate's own runs indistinguishable to a reader of the checks.
             base.state, base.status = "failed", "Named like the gate"
             base.detail = (f"a workflow named {gate_name!r} cannot trigger the gate "
                            f"when it finishes; rename it")
@@ -317,8 +321,17 @@ def looks_stale(ev: Evaluation, workflow_runs: list[dict],
                    for i in ev.of("pending")):
                 return True
     elif trigger.get("kind") == "check_run":
-        if any(i.check_id == trigger.get("check_id") for i in ev.of("pending")):
+        cid = trigger.get("check_id")
+        listed = [i for i in ev.items if i.check_id is not None
+                  and (i.check_id == cid or (isinstance(cid, int) and i.check_id > cid
+                                             and i.name.endswith(safe(trigger.get("name")))))]
+        if not listed:
+            return True     # not listed yet, and no newer run of it either
+        if trigger.get("action") == "completed" and any(
+                i.check_id == cid for i in ev.of("pending")):
             return True
+        # `created`: the check run is expected to be pending; that is the
+        # point of evaluating it (an earlier pass must not stand meanwhile).
     completed_suites = {r.get("check_suite_id") for r in workflow_runs
                         if r.get("status") == "completed"}
     return any(i.check_id is not None and i.suite_id in completed_suites
@@ -584,6 +597,12 @@ def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
         if failed:
             reason = (f"{len(failed)} of {len(ev.items)} check(s) failed; " + reason)
         return Evaluation("failure", ev.items, reason[:900]), False
+    if stale and ev.verdict == "success":
+        # The run that fired this evaluation is still missing or unfinished
+        # in the listing after every re-read. Passing now would pass without
+        # it; wait instead, and say how to unstick it.
+        ev = Evaluation("pending", ev.items,
+                        "the triggering run is not listed as finished yet")
     stuck = ev.verdict == "pending" and (stale or ev.external_pending)
     return ev, stuck
 

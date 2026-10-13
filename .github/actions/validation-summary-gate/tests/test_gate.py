@@ -670,6 +670,62 @@ def test_requested_event_relists_when_its_run_is_not_listed_yet(tmp_path):
 
 
 # Verifies: HHT-OPS-composite-action-library/A
+def test_requested_run_never_listed_is_pending_not_success(tmp_path):
+    # Everything listed has passed, but the run whose `requested` fired this
+    # evaluation never shows up in the listing. Passing would pass without it.
+    state = ([cr(1, "Build", suite=1)], [wr(500, "Build", suite=1)])
+    event = {"action": "requested",
+             "workflow_run": {"id": 510, "name": "PR Metadata", "event": "pull_request",
+                              "head_sha": SHA, "check_suite_id": 3}}
+    slept = []
+    fake = FakeGitHub([state])
+    run_gate(tmp_path, fake, event=event, sleeps=slept)
+    assert slept == [20.0, 20.0, 20.0]
+    body = published(fake)
+    assert body["state"] == "pending"
+    assert body["description"].endswith(
+        "(if stuck, re-run the Validation Summary Gate workflow)")
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_completed_run_still_unfinished_after_relists_is_pending(tmp_path):
+    lagging = ([cr(1, "Build", suite=1)],
+               [wr(500, "Build", suite=1),
+                wr(510, "Tests", status="in_progress", conclusion=None, suite=3)])
+    event = {"action": "completed",
+             "workflow_run": {"id": 510, "name": "Tests", "event": "pull_request",
+                              "head_sha": SHA, "check_suite_id": 3}}
+    fake = FakeGitHub([lagging])
+    run_gate(tmp_path, fake, event=event, sleeps=[])
+    assert published(fake)["state"] == "pending"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_external_check_created_after_a_pass_turns_pending_without_relisting(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build"), cr(2, "SonarCloud Code Analysis", suite=77,
+                                             status="queued", conclusion=None,
+                                             app="sonarqubecloud")],
+                        [wr(500, "Build")])])
+    event = {"action": "created",
+             "check_run": {"id": 2, "name": "SonarCloud Code Analysis", "head_sha": SHA,
+                           "app": {"slug": "sonarqubecloud"}, "check_suite": {"id": 77}}}
+    slept = []
+    run_gate(tmp_path, fake, event_name="check_run", event=event, sleeps=slept)
+    assert slept == []
+    assert published(fake)["state"] == "pending"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_external_check_not_listed_yet_is_never_a_pass(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])])
+    event = {"action": "created",
+             "check_run": {"id": 2, "name": "SonarCloud Code Analysis", "head_sha": SHA,
+                           "app": {"slug": "sonarqubecloud"}, "check_suite": {"id": 77}}}
+    run_gate(tmp_path, fake, event_name="check_run", event=event, sleeps=[])
+    assert published(fake)["state"] == "pending"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
 def test_cancelled_with_no_rerun_becomes_a_failure_after_the_relist(tmp_path):
     # The polling gate waited on this until its budget ran out and then failed.
     state = ([cr(1, "Build", suite=1), cr(2, "Tests", conclusion="cancelled", suite=2)],
@@ -893,3 +949,30 @@ def test_recorded_pr_reproduces_the_polling_gate_verdict(name):
     if data.get("polling_gate_conclusion"):
         assert {"success": "success", "failure": "failure"}[
             data["polling_gate_conclusion"]] == ev.verdict
+
+
+# --------------------------------------------------------------------------
+# the wrapper workflow: what fires the gate
+# --------------------------------------------------------------------------
+
+WRAPPERS = [
+    pathlib.Path(__file__).resolve().parents[3] / "workflows" / "validation-summary-gate.yml",
+]
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+@pytest.mark.parametrize("wrapper", WRAPPERS, ids=lambda p: p.name)
+def test_wrapper_selects_every_workflow_and_skips_itself_by_path(wrapper):
+    text = wrapper.read_text()
+    assert 'workflows: ["**"]' in text
+    assert "!Validation Summary" not in text   # no name-based exclusion
+    assert "types: [created, completed]" in text
+    assert "github.event.workflow_run.path == '.github/workflows/validation-summary-gate.yml'" in text
+    assert "github.event.workflow_run.name" not in text
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_readme_reference_matches_the_wrapper_trigger():
+    readme = (pathlib.Path(gate.__file__).resolve().parent / "README.md").read_text()
+    assert 'workflows: ["**"]' in readme and "types: [created, completed]" in readme
+    assert "github.event.workflow_run.path == '.github/workflows/validation-summary-gate.yml'" in readme
