@@ -205,7 +205,13 @@ jobs:
     # workflow's own keyless OIDC identity, then verifies with the action.
     # TODO: cite the deploy-provenance requirement once one is drafted as
     # HSI-* in hht_sponsor_iac.
+    # On a pull request, runs only when its inputs changed; see `no-op`. Runs
+    # whenever that decision is missing, so a classifier fault costs a build
+    # rather than reporting `skipped` for work nothing did.
+    needs: [no-op]
+    if: ${{ !cancelled() && (needs.no-op.result != 'success' || needs.no-op.outputs.cosign == 'true') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # measured max 4.0 min over 40 runs (CUR-1030)
     permissions:
       contents: read
       packages: write    # push to GHCR
@@ -356,7 +362,13 @@ jobs:
     # the self-contained synthetic URS fixture (a primary + an associate repo)
     # and asserts the PDF + DOCX deliverables are produced. Exercises
     # multi-source federation, level filtering, and metadata hiding.
+    # On a pull request, runs only when its inputs changed; see `no-op`. Runs
+    # whenever that decision is missing, so a classifier fault costs a build
+    # rather than reporting `skipped` for work nothing did.
+    needs: [no-op]
+    if: ${{ !cancelled() && (needs.no-op.result != 'success' || needs.no-op.outputs.urs == 'true') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # measured max 2.9 min over 40 runs (CUR-1030)
     permissions:
       contents: read
     steps:
@@ -411,7 +423,13 @@ jobs:
     # the self-contained synthetic fixture and asserts both the committed CSV
     # extract and the run-bound workbook are produced, with the fixture
     # journey traced to the fixture requirement.
+    # On a pull request, runs only when its inputs changed; see `no-op`. Runs
+    # whenever that decision is missing, so a classifier fault costs a build
+    # rather than reporting `skipped` for work nothing did.
+    needs: [no-op]
+    if: ${{ !cancelled() && (needs.no-op.result != 'success' || needs.no-op.outputs.oq == 'true') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # measured max 0.9 min over 40 runs (CUR-1030)
     permissions:
       contents: read
     steps:
@@ -568,7 +586,13 @@ jobs:
     # stands in for the core portal-server, so the check exercises the real
     # docker extraction path without depending on a published core build.
     # Implements: HSI-OPS-image-promotion/G+H
+    # On a pull request, runs only when its inputs changed; see `no-op`. Runs
+    # whenever that decision is missing, so a classifier fault costs a build
+    # rather than reporting `skipped` for work nothing did.
+    needs: [no-op]
+    if: ${{ !cancelled() && (needs.no-op.result != 'success' || needs.no-op.outputs.preflight == 'true') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # measured max 0.3 min over 40 runs (CUR-1030)
     permissions:
       contents: read
     steps:
@@ -938,13 +962,82 @@ jobs:
             exit 1
           fi
 
+  # Decides which of the expensive readiness jobs this event needs (CUR-1030).
+  #
+  # The workflow runs on every pull request so that every required context
+  # reports, but four jobs cost real minutes and touch real systems whatever
+  # the pull request changed: cosign-verify builds a fixture image, pushes it to
+  # GHCR and signs it with the run's identity; build-urs and build-oq install
+  # pandoc, LaTeX and the compile toolchain; sponsor-base-preflight builds a
+  # Docker image. On a pull request each now runs only when a file it exercises
+  # changed, and reports `skipped` otherwise -- which a required check and
+  # Validation Summary both accept. On main and on dispatch every one runs.
+  #
+  # The job id stays `no-op`, and so does its reported check name, because that
+  # is the name hht_admin's gate-parity lint (tools/gate_parity/parity.py
+  # NON_GATING) records as deliberately not gating. A new job here would be a
+  # readiness check the ruleset does not require, and the lint would fail.
+  #
+  # The diff is the pull request's whole change, not the last push: HEAD is the
+  # test merge commit and its first parent is the base tip, so `HEAD^1..HEAD` is
+  # exactly what merging would add. Every run on a pull request therefore makes
+  # the same decision for the same head, and a later push cannot narrow it.
+  #
+  # Implements: HHT-OPS-composite-action-library/D
+  #   The per-action readiness checks keep reporting on every pull request;
+  #   the decision only lets the unaffected ones report `skipped`.
   no-op:
-    # Placeholder job; per-action readiness jobs added by PRs that introduce
-    # each action. Keeps the workflow non-empty until all real jobs land.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cosign: ${{ steps.decide.outputs.cosign }}
+      urs: ${{ steps.decide.outputs.urs }}
+      oq: ${{ steps.decide.outputs.oq }}
+      preflight: ${{ steps.decide.outputs.preflight }}
     steps:
-      - name: Placeholder
-        run: echo "Readiness Checks workflow ready; per-action jobs land in subsequent PRs."
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Decide which readiness jobs this change needs
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          keys="cosign urs oq preflight"
+          run_all() {
+            echo "$1 -- every gated readiness job runs."
+            for key in $keys; do echo "${key}=true" >> "$GITHUB_OUTPUT"; done
+            exit 0
+          }
+
+          [ "$EVENT" = "pull_request" ] || run_all "event is ${EVENT}, not a pull request"
+          git rev-parse -q --verify 'HEAD^2' >/dev/null \
+            || run_all "HEAD is not a test merge commit, so the change cannot be read"
+          # --no-renames: with rename detection a file moved OUT of a gated
+          # directory is listed only under its new path, and the job whose
+          # input it was would report `skipped`. Both sides must be listed.
+          files="$(git diff --no-renames --name-only 'HEAD^1' HEAD)" \
+            || run_all "the diff against the base could not be read"
+
+          # Each job's inputs: its action, its fixture, and this workflow file,
+          # which holds the job definitions themselves.
+          self='^\.github/workflows/readiness-checks\.yml$'
+          decide() {
+            local key="$1" pattern="$2" value=false
+            if grep -qE -e "$pattern" -e "$self" <<<"$files"; then value=true; fi
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+            echo "${key}: ${value}"
+          }
+          decide cosign    '^\.github/(actions|fixtures)/cosign-verify/'
+          decide urs       '^(\.github/actions/build-urs|scripts/urs-compile)/'
+          # oq_compile imports urs_compile (scripts/oq-compile/oq_compile/urs_sections.py),
+          # so urs-compile is an input of build-oq as well.
+          decide oq        '^(\.github/actions/build-oq|scripts/(oq|urs)-compile)/'
+          decide preflight '^\.github/actions/sponsor-base-preflight/'
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.
