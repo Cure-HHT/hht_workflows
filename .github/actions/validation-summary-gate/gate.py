@@ -40,14 +40,25 @@ status can never feed back into its verdict. Differences, each fail-closed:
   a failure after a bounded re-read instead of being waited on until a
   timeout. The polling gate reached the same verdict after its budget.
 
-What a pull request controls cannot exempt a check. Workflow display names
+Names a pull request controls do not exempt a check. Workflow display names
 and check-run names come from the pull request's own workflow files, so the
 gate never ignores anything by name: its own runs are recognised by the
-workflow file path together with an event a pull request cannot raise, and
+workflow file path together with a non-pull-request event (a same-repo
+branch push raises `push` at that path, but such a run belongs to the
+branch, not to a pull request's head, and only drops its own content), and
 the polling job's "Validation Summary" check run, while it exists, is
 counted like any other check. A workflow that takes the gate's own
-workflow name is a failure, because the trigger filter excludes that name
-and its completion would never fire an evaluation.
+workflow name is a failure, since it reads as the gate in every listing.
+
+What the gate does not stop: the required "Validation Summary" context is a
+commit status, and GitHub accepts it from any workflow in the repository
+that holds `statuses: write`. A same-repo pull request can add such a
+workflow, keep it running until every other check has finished, and post
+`success` itself; no later event re-evaluates. The polling job it replaces
+was open to the same attack, since a pull request could edit it. Closing
+it needs the status posted by a dedicated GitHub App and the required check
+pinned to that App's `integration_id`, which is a follow-up; until then,
+review of `.github/workflows/` changes is what guards it.
 
 Runs of the `dynamic` event (GitHub's Copilot code-review agent) are not
 counted: they are triggered by a review request, not by the pull request
@@ -314,6 +325,11 @@ def looks_stale(ev: Evaluation, workflow_runs: list[dict],
         run = runs_by_id.get(trigger.get("run_id"))
         if run is None:
             return True
+        # A listing still showing an earlier attempt of a re-run lags the
+        # event: its conclusion is the previous attempt's, not this one's.
+        attempt = trigger.get("run_attempt")
+        if isinstance(attempt, int) and (run.get("run_attempt") or 0) < attempt:
+            return True
         if trigger.get("action") == "completed":
             if run.get("status") != "completed":
                 return True
@@ -322,9 +338,18 @@ def looks_stale(ev: Evaluation, workflow_runs: list[dict],
                 return True
     elif trigger.get("kind") == "check_run":
         cid = trigger.get("check_id")
+        tname = safe(trigger.get("name"))
+
+        def newer_run_of_trigger(i: Item) -> bool:
+            # The same check posted again: same app and exactly the same
+            # name (or that name under its workflow, when names collide). A
+            # name that merely ends the same way is a different check.
+            return (isinstance(cid, int) and i.check_id > cid
+                    and i.app == trigger.get("app", "")
+                    and (i.name == tname or i.name.endswith(" / " + tname)))
+
         listed = [i for i in ev.items if i.check_id is not None
-                  and (i.check_id == cid or (isinstance(cid, int) and i.check_id > cid
-                                             and i.name.endswith(safe(trigger.get("name")))))]
+                  and (i.check_id == cid or newer_run_of_trigger(i))]
         if not listed:
             return True     # not listed yet, and no newer run of it either
         if trigger.get("action") == "completed" and any(
@@ -456,6 +481,7 @@ def parse_trigger(event_name: str, event: dict,
             return None, "triggering run is the gate's own workflow"
         trig = {"kind": "workflow_run", "sha": run.get("head_sha") or "",
                 "run_id": run.get("id"), "suite_id": run.get("check_suite_id"),
+                "run_attempt": run.get("run_attempt"),
                 "name": run.get("name"), "action": event.get("action")}
     elif event_name == "check_run":
         cr = event.get("check_run") or {}
@@ -464,6 +490,7 @@ def parse_trigger(event_name: str, event: dict,
         trig = {"kind": "check_run", "sha": cr.get("head_sha") or "",
                 "check_id": cr.get("id"),
                 "suite_id": (cr.get("check_suite") or {}).get("id"),
+                "app": (cr.get("app") or {}).get("slug") or "",
                 "name": cr.get("name"), "action": event.get("action")}
     else:
         return None, f"unsupported event {event_name!r}"

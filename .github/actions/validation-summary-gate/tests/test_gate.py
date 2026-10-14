@@ -726,6 +726,60 @@ def test_external_check_not_listed_yet_is_never_a_pass(tmp_path):
 
 
 # Verifies: HHT-OPS-composite-action-library/A
+def test_unlisted_check_is_not_found_through_a_name_suffix(tmp_path):
+    # "My Sonar" ends with "Sonar" but is another check; the triggering check
+    # is still unlisted, so the listing lags and the verdict must not pass.
+    fake = FakeGitHub([([cr(1, "Build"), cr(9, "My Sonar", app="sonarqubecloud", suite=78)],
+                        [wr(500, "Build")])])
+    event = {"action": "completed",
+             "check_run": {"id": 5, "name": "Sonar", "head_sha": SHA,
+                           "app": {"slug": "sonarqubecloud"}, "check_suite": {"id": 77}}}
+    slept = []
+    run_gate(tmp_path, fake, event_name="check_run", event=event, sleeps=slept)
+    assert slept == [20.0, 20.0, 20.0]
+    assert published(fake)["state"] == "pending"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_newer_run_of_the_same_check_by_another_app_is_not_the_trigger(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build"), cr(9, "Sonar", app="someother", suite=78)],
+                        [wr(500, "Build")])])
+    event = {"action": "completed",
+             "check_run": {"id": 5, "name": "Sonar", "head_sha": SHA,
+                           "app": {"slug": "sonarqubecloud"}, "check_suite": {"id": 77}}}
+    run_gate(tmp_path, fake, event_name="check_run", event=event, sleeps=[])
+    assert published(fake)["state"] == "pending"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_newer_run_of_the_same_check_counts_as_listed(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build"), cr(9, "Sonar", app="sonarqubecloud", suite=78)],
+                        [wr(500, "Build")])])
+    event = {"action": "completed",
+             "check_run": {"id": 5, "name": "Sonar", "head_sha": SHA,
+                           "app": {"slug": "sonarqubecloud"}, "check_suite": {"id": 77}}}
+    slept = []
+    run_gate(tmp_path, fake, event_name="check_run", event=event, sleeps=slept)
+    assert slept == []
+    assert published(fake)["state"] == "success"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_rerun_completion_served_from_the_previous_attempt_relists(tmp_path):
+    old = dict(wr(500, "Build", conclusion="success"), run_attempt=1)
+    new = dict(wr(500, "Build", conclusion="failure"), run_attempt=2)
+    fake = FakeGitHub([([cr(1, "Build")], [old]),
+                       ([cr(1, "Build"), cr(2, "Build", conclusion="failure")], [new])])
+    event = {"action": "completed",
+             "workflow_run": {"id": 500, "name": "Build", "event": "pull_request",
+                              "head_sha": SHA, "check_suite_id": 1, "run_attempt": 2}}
+    slept = []
+    run_gate(tmp_path, fake, event=event, sleeps=slept)
+    assert slept == [20.0]
+    assert published(fake)["state"] == "failure"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
 def test_cancelled_with_no_rerun_becomes_a_failure_after_the_relist(tmp_path):
     # The polling gate waited on this until its budget ran out and then failed.
     state = ([cr(1, "Build", suite=1), cr(2, "Tests", conclusion="cancelled", suite=2)],
