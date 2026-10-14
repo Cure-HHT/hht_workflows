@@ -42,11 +42,17 @@ than GitHub Actions). Each firing runs one short job that:
    check name: the old polling job's `Validation Summary` check run is
    counted like any other check. Commit statuses are never read (so the
    gate's own status cannot feed back). Runs of the gate's own workflow are
-   recognised by its file path together with an event a pull request cannot
-   raise, and are not counted, nor are runs of the `dynamic` event (the
-   Copilot review agent). Any other workflow named like the gate's workflow
-   is a **failure**: the trigger filter excludes that name, so its completion
-   would never fire an evaluation.
+   recognised by its file path together with a non-pull-request event, and
+   are not counted, nor are runs of the `dynamic` event (the Copilot review
+   agent). Any other workflow named like the gate's workflow is a
+   **failure**, since it reads as the gate in every listing.
+
+   The gate does not stop a same-repo pull request from adding a workflow
+   with `statuses: write` that posts `Validation Summary` itself after every
+   other check has finished. The polling job was open to the same attack.
+   Closing it needs a dedicated GitHub App to post the status and the
+   required check pinned to that App's `integration_id` (a follow-up); until
+   then, review of `.github/workflows/` changes guards it.
 4. Posts the commit status `Validation Summary` on the commit
    (`pending`, `success`, `failure`, or `error` when the gate itself could not
    evaluate), description at most 140 characters, linking to the gate's run.
