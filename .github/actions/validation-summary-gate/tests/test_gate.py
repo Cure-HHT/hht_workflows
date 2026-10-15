@@ -35,9 +35,9 @@ def cr(cid, name, status="completed", conclusion="success", suite=1, app="github
 
 
 def wr(rid, name, status="completed", conclusion="success", suite=1, event="pull_request",
-       workflow_id=None):
+       workflow_id=None, head_branch="feature"):
     return {"id": rid, "name": name, "status": status, "conclusion": conclusion,
-            "check_suite_id": suite, "event": event,
+            "check_suite_id": suite, "event": event, "head_branch": head_branch,
             "workflow_id": workflow_id if workflow_id is not None else hash(name) % 10000,
             "html_url": f"https://github.com/{REPO}/actions/runs/{rid}"}
 
@@ -62,8 +62,9 @@ class FakeGitHub:
     returned by successive read_state calls; the last one repeats."""
 
     def __init__(self, states, prs=None, comments=None,
-                 annotations=None, jobs=None):
+                 annotations=None, jobs=None, statuses=None):
         self.states = list(states)
+        self.statuses = statuses or []
         self.reads = 0
         self.prs = prs if prs is not None else [{"number": 7, "head": {"sha": SHA}}]
         self.comments = comments or []
@@ -95,6 +96,8 @@ class FakeGitHub:
 
     def get(self, path, params=None):
         self.calls.append(("GET", path, params))
+        if path.endswith(f"/commits/{SHA}/statuses"):
+            return list(self.statuses)
         jid = int(path.split("/")[-1])
         return self.jobs.get(jid, {"steps": []})
 
@@ -535,6 +538,24 @@ def test_commit_that_is_not_an_open_pr_head_is_left_alone(tmp_path):
     rc, logs, out = run_gate(tmp_path, fake)
     assert rc == 0 and fake.writes() == []
     assert any("not the head of an open pull request" in line for line in logs)
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_pull_requests_into_every_base_are_listed_by_default(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])])
+    run_gate(tmp_path, fake)
+    pulls = [params for m, p, params in fake.calls if p.endswith("/pulls")]
+    assert pulls == [{"state": "open"}]
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_stacked_pull_request_into_another_branch_is_gated(tmp_path):
+    # A PR stacked on another PR's branch gets a real verdict before GitHub
+    # retargets it, so the retarget needs no new event to be gated.
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])],
+                      prs=[{"number": 8, "base": {"ref": "feature-a"}, "head": {"sha": SHA}}])
+    run_gate(tmp_path, fake)
+    assert published(fake)["state"] == "success"
 
 
 # Verifies: HHT-OPS-composite-action-library/A
@@ -1030,3 +1051,185 @@ def test_readme_reference_matches_the_wrapper_trigger():
     readme = (pathlib.Path(gate.__file__).resolve().parent / "README.md").read_text()
     assert 'workflows: ["**"]' in readme and "types: [created, completed]" in readme
     assert "github.event.workflow_run.path == '.github/workflows/validation-summary-gate.yml'" in readme
+
+
+# --------------------------------------------------------------------------
+# runs that are never a pull request's verdict
+# --------------------------------------------------------------------------
+
+def _wr_event(event, head_branch, action="completed", path=".github/workflows/build.yml"):
+    return {"action": action,
+            "repository": {"default_branch": "main"},
+            "workflow_run": {"id": 500, "name": "Build", "event": event, "path": path,
+                             "head_branch": head_branch, "head_sha": SHA,
+                             "check_suite_id": 1}}
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+@pytest.mark.parametrize("event,branch", [("schedule", "main"), ("dynamic", "feature"),
+                                          ("push", "main")])
+def test_runs_that_are_never_a_verdict_do_not_trigger(tmp_path, event, branch):
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])])
+    rc, logs, _ = run_gate(tmp_path, fake, event=_wr_event(event, branch))
+    assert rc == 0 and fake.calls == []
+    assert any("never a pull request's verdict" in line for line in logs)
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_a_push_to_a_pull_requests_branch_still_triggers(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build", event="push")])])
+    run_gate(tmp_path, fake, event=_wr_event("push", "feature"))
+    assert published(fake)["state"] == "success"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_scheduled_and_default_branch_push_runs_are_not_counted():
+    runs = [wr(500, "Build"),
+            wr(501, "Nightly", status="in_progress", conclusion=None, suite=2,
+               event="schedule", head_branch="main"),
+            wr(502, "Deploy", status="in_progress", conclusion=None, suite=3,
+               event="push", head_branch="main")]
+    checks = [cr(1, "Build"), cr(2, "nightly", status="in_progress", conclusion=None, suite=2),
+              cr(3, "deploy", status="in_progress", conclusion=None, suite=3)]
+    assert gate.evaluate(checks, runs, default_branch="main").verdict == "success"
+    # A push to any other branch is a same-repository PR head's run: counted.
+    runs[2]["head_branch"] = "feature"
+    assert gate.evaluate(checks, runs, default_branch="main").verdict == "pending"
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_wrapper_and_readme_skip_runs_that_are_never_a_verdict():
+    here = pathlib.Path(gate.__file__).resolve().parent
+    for text in ((here / "README.md").read_text(), WRAPPERS[0].read_text()):
+        assert """!contains(fromJSON('["schedule", "dynamic"]'), github.event.workflow_run.event)""" in text
+        assert "github.event.workflow_run.head_branch == github.event.repository.default_branch" in text
+    assert gate.IGNORED_RUN_EVENTS == {"schedule", "dynamic"}
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_readme_reference_grants_no_unused_contents_permission():
+    readme = (pathlib.Path(gate.__file__).resolve().parent / "README.md").read_text()
+    ref = readme[readme.index("```yaml"):]
+    ref = ref[:ref.index("```", 3)]
+    assert "contents: read" not in ref
+
+
+# --------------------------------------------------------------------------
+# the workflow path the self-skip compares
+# --------------------------------------------------------------------------
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_self_skip_matches_the_path_shape_the_api_returns():
+    # GET /actions/runs and the workflow_run payload give `path` as the file
+    # in the repository, with no `@ref` suffix (unlike a reusable workflow's
+    # `uses:`); the wrapper's `if:` compares the same literal.
+    run = {"path": ".github/workflows/validation-summary-gate.yml", "event": "workflow_run"}
+    assert gate.is_gate_run(run, gate.DEFAULT_GATE_WORKFLOW_PATH)
+    assert not gate.is_gate_run(dict(run, path=".github/workflows/validation-summary-gate.yml@refs/heads/main"),
+                                gate.DEFAULT_GATE_WORKFLOW_PATH)
+    assert f"github.event.workflow_run.path == '{gate.DEFAULT_GATE_WORKFLOW_PATH}'" in WRAPPERS[0].read_text()
+
+
+# --------------------------------------------------------------------------
+# pending first, without a needless write
+# --------------------------------------------------------------------------
+
+def _status_posts(fake):
+    return [b["state"] for m, p, b in fake.calls if m == "POST" and p.endswith(f"/statuses/{SHA}")]
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_pending_is_not_posted_again_when_already_pending(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])],
+                      statuses=[{"context": "Validation Summary", "state": "pending"},
+                                {"context": "Validation Summary", "state": "success"}])
+    run_gate(tmp_path, fake)
+    assert _status_posts(fake) == ["success"]
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_pending_is_posted_first_over_an_earlier_pass(tmp_path):
+    fake = FakeGitHub([([cr(1, "Build")], [wr(500, "Build")])],
+                      statuses=[{"context": "other", "state": "pending"},
+                                {"context": "Validation Summary", "state": "success"}])
+    run_gate(tmp_path, fake)
+    assert _status_posts(fake) == ["pending", "success"]
+
+
+# --------------------------------------------------------------------------
+# rate limits
+# --------------------------------------------------------------------------
+
+# Verifies: HHT-OPS-composite-action-library/A
+@pytest.mark.parametrize("code,headers,expected", [
+    (403, {"retry-after": "37"}, 37.0),                                  # secondary limit
+    (429, {"retry-after": "5"}, 5.0),
+    (403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1060"}, 60.0),  # primary
+    (429, {}, 5.0),                                                      # bare 429: back-off
+    (502, {}, 5.0),
+    (403, {}, None),                                                     # permission: no retry
+    (404, {}, None),
+])
+def test_retry_delay(code, headers, expected):
+    assert gate.retry_delay(code, headers, 0, now=1000.0) == expected
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_a_retry_that_does_not_fit_the_budget_fails_so_error_can_post():
+    slept = []
+    gh = gate.GitHub("t", sleep=slept.append, clock=lambda: 0.0, wait_budget=100)
+    gh._wait(60, "x")
+    with pytest.raises(RuntimeError, match="wait budget"):
+        gh._wait(60, "x")
+    assert slept == [60]
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_secondary_limit_is_retried_after_retry_after(monkeypatch):
+    import io, urllib.error
+    calls = []
+
+    class Resp(io.BytesIO):
+        headers = {}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def urlopen(req, timeout):
+        calls.append(req.get_method())
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 403, "secondary", {"retry-after": "7"},
+                                         io.BytesIO(b"slow down"))
+        return Resp(b'{"ok": true}')
+
+    monkeypatch.setattr(gate.urllib.request, "urlopen", urlopen)
+    slept = []
+    gh = gate.GitHub("t", sleep=slept.append, clock=lambda: 0.0)
+    assert gh.post("repos/x/statuses/y", {"state": "pending"}) == {"ok": True}
+    assert slept == [7.0] and calls == ["POST", "POST"]
+
+
+# --------------------------------------------------------------------------
+# the comment's author
+# --------------------------------------------------------------------------
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_comment_author_input_names_whose_comments_are_ours(tmp_path):
+    app_comment = {"id": 5, "body": gate.COMMENT_MARKER + " old",
+                   "user": {"login": "my-app[bot]"}}
+    fake = FakeGitHub([([cr(1, "Build", conclusion="failure")],
+                        [wr(500, "Build", conclusion="failure")])],
+                      comments=[app_comment])
+    run_gate(tmp_path, fake, INPUT_COMMENT_AUTHOR="my-app[bot]")
+    patched = [p for m, p, b in fake.calls if m == "PATCH"]
+    assert patched == [f"repos/{REPO}/issues/comments/5"]
+
+
+# Verifies: HHT-OPS-composite-action-library/A
+def test_without_the_input_another_logins_comment_is_left_alone(tmp_path):
+    app_comment = {"id": 5, "body": gate.COMMENT_MARKER + " old",
+                   "user": {"login": "my-app[bot]"}}
+    fake = FakeGitHub([([cr(1, "Build", conclusion="failure")],
+                        [wr(500, "Build", conclusion="failure")])],
+                      comments=[app_comment])
+    run_gate(tmp_path, fake)
+    assert not [p for m, p, b in fake.calls if m in ("PATCH", "DELETE")]
