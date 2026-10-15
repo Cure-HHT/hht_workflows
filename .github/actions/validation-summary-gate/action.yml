@@ -35,10 +35,20 @@ inputs:
     default: 'Validation Summary'
   base-branch:
     description: >
-      Only pull requests into this branch are gated; a commit that is not the
-      current head of an open pull request into it is left alone.
+      Empty (the default): every open pull request whose head is the commit is
+      gated, whatever branch it targets, so a stacked pull request already
+      carries a real verdict when GitHub retargets it. Set a branch name to
+      gate only pull requests into that branch.
     required: false
-    default: 'main'
+    default: ''
+  comment-author:
+    description: >
+      Login the failure comment is posted under, which the gate uses to find
+      and replace its own comment. github-actions[bot] for the default
+      GITHUB_TOKEN; set the App's bot login (for example my-app[bot]) when
+      github-token is an App token, or every failure adds another comment.
+    required: false
+    default: 'github-actions[bot]'
   gate-workflow-path:
     description: >
       Path of the wrapper workflow file. Its runs are not counted when their
@@ -74,8 +84,8 @@ inputs:
     default: '20'
   github-token:
     description: >
-      Token with statuses:write, checks:read, pull-requests:write,
-      actions:read and contents:read. The default GITHUB_TOKEN of a workflow_run/check_run
+      Token with statuses:write, checks:read, pull-requests:write and
+      actions:read. The default GITHUB_TOKEN of a workflow_run/check_run
       workflow carries base-repository permissions, fork PRs included.
     required: false
     default: ${{ github.token }}
@@ -96,6 +106,7 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_CHECK_NAME: ${{ inputs.check-name }}
         INPUT_BASE_BRANCH: ${{ inputs.base-branch }}
+        INPUT_COMMENT_AUTHOR: ${{ inputs.comment-author }}
         INPUT_GATE_WORKFLOW_PATH: ${{ inputs.gate-workflow-path }}
         INPUT_GATE_WORKFLOW_NAME: ${{ inputs.gate-workflow-name }}
         INPUT_MODE: ${{ inputs.mode }}

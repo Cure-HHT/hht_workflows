@@ -18,13 +18,14 @@ workflow starting or finishing, whatever event raised it) and by
 than GitHub Actions). Each firing runs one short job that:
 
 1. Ignores the event unless its head commit is the **current head of an
-   open pull request into the gated base branch** (default `main`).
-   Push-to-main runs, superseded commits and closed PRs are left alone after
-   one API call. A push, review, label, re-run or dispatch run on a pull
+   open pull request** (into any branch, unless `base-branch` names one).
+   Superseded commits and closed PRs are left alone after one API call;
+   scheduled, Copilot-agent and default-branch push runs never get that far. A push, review, label, re-run or dispatch run on a pull
    request's head is evaluated like a `pull_request` run: the verdict counts
    it, so its start and its end must each move the verdict.
 2. Posts `pending` on the commit, so a job that dies mid-evaluation never
-   leaves an earlier pass standing.
+   leaves an earlier pass standing. When the newest status already reads
+   `pending` it skips that write, since the secondary rate limit counts writes.
 3. Reads the commit's check runs (`filter=all`) and workflow runs **once**,
    and decides:
 
@@ -62,7 +63,7 @@ than GitHub Actions). Each firing runs one short job that:
    their failure annotations or failed step names, and a link to the run. On
    `success`, removes that comment and the two earlier generations
    (`<!-- validation-summary -->`, `<!-- ci-gate-summary -->`). Only comments
-   written by `github-actions[bot]` are touched: anyone can post a comment that
+   written by `comment-author` (default `github-actions[bot]`) are touched: anyone can post a comment that
    starts with a marker. Names and annotation text taken from the pull
    request are neutralised first: no line break, no `::` workflow command,
    no `@` mention.
@@ -73,6 +74,12 @@ or to publish; it then posts an `error` status saying it could not evaluate.
 If the evaluation step crashes, times out or is cancelled before it can, the
 wrapper's last step (`mode: job-failed`) posts `error` on the head commit.
 Either way an earlier pass never stands as the newest verdict.
+
+Rate limits: a 403 or 429 carrying `retry-after` (GitHub's secondary limit)
+is retried after that many seconds, a primary-limit 403 waits until
+`x-ratelimit-reset`, and a 5xx or a bare 429 backs off exponentially. At most
+two minutes of the job's five go to such waits; past that the request fails
+and the gate posts `error`, which stays until the next event or a re-run.
 
 ### Why a commit status and not a check run
 
@@ -143,7 +150,10 @@ jobs:
     if: >-
       (github.event_name == 'workflow_run'
         && !(github.event.workflow_run.path == '.github/workflows/validation-summary-gate.yml'
-          && !contains(fromJSON('["pull_request", "pull_request_target"]'), github.event.workflow_run.event)))
+          && !contains(fromJSON('["pull_request", "pull_request_target"]'), github.event.workflow_run.event))
+        && !contains(fromJSON('["schedule", "dynamic"]'), github.event.workflow_run.event)
+        && !(github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == github.event.repository.default_branch))
       || (github.event_name == 'check_run'
         && github.event.check_run.app.slug != 'github-actions')
     runs-on: ubuntu-latest
@@ -153,7 +163,6 @@ jobs:
       checks: read
       pull-requests: write
       actions: read
-      contents: read
     concurrency:
       group: validation-summary-gate-${{ github.event.workflow_run.head_sha || github.event.check_run.head_sha }}
       cancel-in-progress: false
@@ -175,6 +184,11 @@ jobs:
   itself after the gate's last evaluation. A skipped run of the gate is
   itself a `workflow_run`, which the same `if:` skips; GitHub stops such a
   chain after three levels. `notify-failure-lint` accepts `["**"]`.
+- The `if:` also starts no runner for runs that are never a pull request's
+  verdict: scheduled runs, Copilot review-agent runs (`dynamic`) and pushes
+  to the default branch. Pushes to any other branch still fire it, since a
+  same-repository pull request's head is pushed to its branch. The action
+  ignores the same runs when it evaluates, so none of them can hold a verdict.
 - `check_run: [created, completed]`: another app's check that starts after
   a pass sets the status back to pending at once, rather than leaving the
   pass standing until that check finishes.
@@ -193,13 +207,14 @@ jobs:
 | Input | Default | Meaning |
 | --- | --- | --- |
 | `check-name` | `Validation Summary` | Commit-status context to publish; must equal the ruleset's required context |
-| `base-branch` | `main` | Only PRs into this branch are gated |
+| `base-branch` | empty | Empty: every open PR whose head is the commit, whatever its base, so a stacked PR carries a real verdict when it is retargeted. A branch name gates only PRs into it |
+| `comment-author` | `github-actions[bot]` | Login the failure comment is posted under; set the App's bot login when `github-token` is an App token |
 | `gate-workflow-path` | `.github/workflows/validation-summary-gate.yml` | The wrapper's file; its non-pull-request runs are not counted |
 | `gate-workflow-name` | `Validation Summary Gate` | The wrapper's `name:`; any other workflow with this name fails the gate |
 | `mode` | `evaluate` | `job-failed` posts `error` on the head commit (the wrapper's `if: failure() \|\| cancelled()` step) |
 | `relist-attempts` | `3` | Re-reads while the listing lags the event |
 | `relist-interval-seconds` | `20` | Seconds between re-reads |
-| `github-token` | `github.token` | Needs `statuses: write`, `checks: read`, `pull-requests: write`, `actions: read`, `contents: read` |
+| `github-token` | `github.token` | Needs `statuses: write`, `checks: read`, `pull-requests: write`, `actions: read` |
 
 Output `verdict`: `success`, `failure` or `pending` (empty when the event was
 not for an open PR head).

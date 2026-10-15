@@ -87,12 +87,21 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 # Only comments written by this identity are ever touched.
 COMMENT_MARKER = "<!-- pr-comment-upsert:validation-summary -->"
 LEGACY_COMMENT_MARKERS = ("<!-- validation-summary -->", "<!-- ci-gate-summary -->")
-COMMENT_AUTHOR = "github-actions[bot]"
+# The login whose comments the gate owns: GITHUB_TOKEN posts as this bot.
+# A different token posts under another login; set the `comment-author`
+# input to it, or every failure adds a new comment beside the old one.
+DEFAULT_COMMENT_AUTHOR = "github-actions[bot]"
 
 OK_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 FAILED_CONCLUSIONS = frozenset(
     {"failure", "timed_out", "action_required", "startup_failure", "stale"})
-IGNORED_RUN_EVENTS = frozenset({"dynamic"})
+# Runs that can never be a pull request's verdict: the Copilot review agent
+# (`dynamic`) and scheduled runs, which run on the default branch's head. Push
+# runs of the default branch are excluded as well (see `out_of_scope`). The
+# wrapper's job `if:` skips the same runs, so no runner starts for them; the
+# evaluation ignores them too, or a run that can never fire the gate would
+# hold its verdict.
+IGNORED_RUN_EVENTS = frozenset({"dynamic", "schedule"})
 PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 DEFAULT_GATE_WORKFLOW_PATH = ".github/workflows/validation-summary-gate.yml"
 DEFAULT_GATE_WORKFLOW_NAME = "Validation Summary Gate"
@@ -199,6 +208,17 @@ def latest_per_job(check_runs: Iterable[dict], workflow_runs: Iterable[dict]) ->
 
 
 # Implements: HHT-OPS-composite-action-library/A
+def out_of_scope(run: dict, default_branch: str = "") -> bool:
+    """A run that is never part of a pull request's verdict: an ignored
+    event, or a push to the default branch (the merged commit, not a pull
+    request's head). Branch pushes stay in scope: a same-repository pull
+    request's head is pushed to its branch."""
+    if run.get("event") in IGNORED_RUN_EVENTS:
+        return True
+    return bool(default_branch) and run.get("event") == "push" and \
+        run.get("head_branch") == default_branch
+
+
 def is_gate_run(run: dict, gate_path: str) -> bool:
     """A run of the gate's own workflow: its file path, and an event other
     than a pull request's. A pull request can rename any workflow and can add
@@ -213,9 +233,10 @@ def is_gate_run(run: dict, gate_path: str) -> bool:
 # Implements: HHT-OPS-composite-action-library/A
 def evaluate(check_runs: list[dict], workflow_runs: list[dict], *,
              gate_path: str = DEFAULT_GATE_WORKFLOW_PATH,
-             gate_name: str = DEFAULT_GATE_WORKFLOW_NAME) -> Evaluation:
+             gate_name: str = DEFAULT_GATE_WORKFLOW_NAME,
+             default_branch: str = "") -> Evaluation:
     def ignored(run: dict) -> bool:
-        return is_gate_run(run, gate_path) or run.get("event") in IGNORED_RUN_EVENTS
+        return is_gate_run(run, gate_path) or out_of_scope(run, default_branch)
 
     ignored_suites = {r.get("check_suite_id") for r in workflow_runs if ignored(r)} - {None}
     relevant = [
@@ -479,6 +500,10 @@ def parse_trigger(event_name: str, event: dict,
         run = event.get("workflow_run") or {}
         if is_gate_run(run, gate_path):
             return None, "triggering run is the gate's own workflow"
+        default_branch = (event.get("repository") or {}).get("default_branch") or ""
+        if out_of_scope(run, default_branch):
+            return None, (f"a {safe(run.get('event'))} run of "
+                          f"{safe(run.get('head_branch'))} is never a pull request's verdict")
         trig = {"kind": "workflow_run", "sha": run.get("head_sha") or "",
                 "run_id": run.get("id"), "suite_id": run.get("check_suite_id"),
                 "run_attempt": run.get("run_attempt"),
@@ -503,10 +528,58 @@ def parse_trigger(event_name: str, event: dict,
 # GitHub REST client
 # --------------------------------------------------------------------------
 
+# The job's own budget is 5 minutes; waiting on rate limits must leave room
+# for the evaluation and the error status after it.
+RATE_LIMIT_WAIT_BUDGET = 120.0
+
+
+# Implements: HHT-OPS-composite-action-library/A
+def retry_delay(code: int, headers, attempt: int, now: float) -> float | None:
+    """Seconds to wait before retrying a failed request, or None to give up.
+
+    - 5xx: exponential back-off.
+    - 403/429 with `retry-after` (GitHub's secondary rate limit): that many
+      seconds.
+    - 403/429 with `x-ratelimit-remaining: 0` (the primary limit): until
+      `x-ratelimit-reset`.
+    - 429 without either header: exponential back-off.
+    - any other 403: not a rate limit; give up.
+    """
+    backoff = float(min(60, 5 * 2 ** attempt))
+    if code >= 500:
+        return backoff
+    if code not in (403, 429):
+        return None
+    retry_after = headers.get("retry-after")
+    if retry_after is not None:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            return backoff
+    if headers.get("x-ratelimit-remaining") == "0":
+        try:
+            return max(0.0, float(headers.get("x-ratelimit-reset")) - now)
+        except (TypeError, ValueError):
+            return backoff
+    return backoff if code == 429 else None
+
+
 class GitHub:
     def __init__(self, token: str, api: str = "https://api.github.com",
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep,
+                 clock: Callable[[], float] = time.time,
+                 wait_budget: float = RATE_LIMIT_WAIT_BUDGET):
         self.token, self.api, self.sleep = token, api.rstrip("/"), sleep
+        self.clock, self.wait_left = clock, wait_budget
+
+    def _wait(self, delay: float, what: str) -> None:
+        """Sleep `delay` seconds out of what is left of the budget, or raise
+        when it does not fit, so the job still has time to post `error`."""
+        if delay > self.wait_left:
+            raise RuntimeError(f"{what}; retrying needs {delay:.0f}s, "
+                               f"{self.wait_left:.0f}s of the wait budget left")
+        self.wait_left -= delay
+        self.sleep(delay)
 
     def _request(self, method: str, url: str, body: dict | None = None):
         data = json.dumps(body).encode() if body is not None else None
@@ -523,15 +596,16 @@ class GitHub:
                     raw = resp.read()
                     return (json.loads(raw) if raw else None), resp.headers
             except urllib.error.HTTPError as exc:
-                retryable = exc.code >= 500 or exc.code == 429 or (
-                    exc.code == 403 and exc.headers.get("x-ratelimit-remaining") == "0")
-                if not retryable or attempt == 3:
+                delay = retry_delay(exc.code, exc.headers, attempt, self.clock())
+                what = f"{method} {url} -> HTTP {exc.code}"
+                if delay is None or attempt == 3:
                     detail = exc.read().decode(errors="replace")[:300]
-                    raise RuntimeError(f"{method} {url} -> HTTP {exc.code}: {detail}") from exc
+                    raise RuntimeError(f"{what}: {detail}") from exc
+                self._wait(delay, what)
             except urllib.error.URLError as exc:
                 if attempt == 3:
                     raise RuntimeError(f"{method} {url} -> {exc.reason}") from exc
-            self.sleep(min(60, 5 * 2 ** attempt))
+                self._wait(float(min(60, 5 * 2 ** attempt)), f"{method} {url} -> {exc.reason}")
         raise RuntimeError("unreachable")
 
     def _url(self, path: str, params: dict | None = None) -> str:
@@ -571,13 +645,18 @@ class GitHub:
 # --------------------------------------------------------------------------
 
 # Implements: HHT-OPS-composite-action-library/A
-def open_prs_for(gh, repo: str, sha: str, base: str) -> list[int]:
-    """Open PRs into `base` whose CURRENT head is `sha`.
+def open_prs_for(gh, repo: str, sha: str, base: str = "") -> list[int]:
+    """Open PRs whose CURRENT head is `sha`, into any branch, or only into
+    `base` when one is given. Every base by default: a stacked pull request
+    is gated while it targets another branch, so when its base pull request
+    merges and GitHub retargets it, the status it already carries is a real
+    evaluation rather than nothing.
 
     Matched on the base repository's PR list rather than the event's
     `pull_requests` array, which is empty for pull requests from forks.
     """
-    prs = gh.paginate(f"repos/{repo}/pulls", {"state": "open", "base": base})
+    params = {"state": "open", **({"base": base} if base else {})}
+    prs = gh.paginate(f"repos/{repo}/pulls", params)
     return sorted(p["number"] for p in prs if (p.get("head") or {}).get("sha") == sha)
 
 
@@ -597,7 +676,8 @@ def read_state(gh, repo: str, sha: str) -> tuple[list[dict], list[dict]]:
 def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
                          gate_path: str, gate_name: str,
                          attempts: int, interval: float,
-                         sleep: Callable[[float], None], log=print):
+                         sleep: Callable[[float], None], log=print,
+                         default_branch: str = ""):
     """Evaluate, re-listing up to `attempts` more times while the listing
     visibly lags the triggering event. Bounded: never more than
     attempts * interval seconds of waiting.
@@ -610,7 +690,8 @@ def evaluate_with_relist(gh, repo: str, sha: str, trigger: dict, *,
     stale = False
     for n in range(attempts + 1):
         checks, runs = read_state(gh, repo, sha)
-        ev = evaluate(checks, runs, gate_path=gate_path, gate_name=gate_name)
+        ev = evaluate(checks, runs, gate_path=gate_path, gate_name=gate_name,
+                      default_branch=default_branch)
         stale = looks_stale(ev, runs, trigger)
         if n == attempts or not stale:
             break
@@ -658,6 +739,17 @@ STATE_FOR_VERDICT = {"pending": "pending", "success": "success",
 
 
 # Implements: HHT-OPS-composite-action-library/A
+def current_state(gh, repo: str, sha: str, context: str) -> str | None:
+    """The state of the newest status of `context` on `sha`, or None. The
+    commit's statuses are listed newest first; only the first page is read,
+    since the newest status of the context is what counts."""
+    statuses = gh.get(f"repos/{repo}/commits/{sha}/statuses", {"per_page": 100}) or []
+    for st in statuses:
+        if st.get("context") == context:
+            return st.get("state")
+    return None
+
+
 def publish_status(gh, repo: str, sha: str, context: str, state: str,
                    description: str, target_url: str) -> dict:
     """Set the commit status `context` on `sha`. The newest status of a
@@ -670,22 +762,23 @@ def publish_status(gh, repo: str, sha: str, context: str, state: str,
     })
 
 
-def _ours(comment: dict) -> bool:
+def _ours(comment: dict, author_login: str = DEFAULT_COMMENT_AUTHOR) -> bool:
     body = comment.get("body") or ""
     author = (comment.get("user") or {}).get("login")
-    return author == COMMENT_AUTHOR and any(
+    return author == author_login and any(
         body.startswith(m) for m in (COMMENT_MARKER, *LEGACY_COMMENT_MARKERS))
 
 
 # Implements: HHT-OPS-composite-action-library/A
-def sync_comment(gh, repo: str, pr: int, ev: Evaluation, body: str, log=print) -> None:
+def sync_comment(gh, repo: str, pr: int, ev: Evaluation, body: str, log=print,
+                 author: str = DEFAULT_COMMENT_AUTHOR) -> None:
     """Failure: upsert one comment. Success: remove every generation of it.
     Pending: leave whatever is there. Only comments this gate's identity
     wrote are touched: anyone can post a comment that starts with a marker."""
     if ev.verdict == "pending":
         return
     comments = gh.paginate(f"repos/{repo}/issues/{pr}/comments")
-    ours = [c for c in comments if _ours(c)]
+    ours = [c for c in comments if _ours(c, author)]
     if ev.verdict == "failure":
         keep = next((c for c in ours if c["body"].startswith(COMMENT_MARKER)),
                     ours[0] if ours else None)
@@ -761,7 +854,8 @@ def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
     sha = ""
     try:
         repo = env["GITHUB_REPOSITORY"]
-        base = env.get("INPUT_BASE_BRANCH") or "main"
+        base = env.get("INPUT_BASE_BRANCH") or ""
+        author = env.get("INPUT_COMMENT_AUTHOR") or DEFAULT_COMMENT_AUTHOR
         gate_path = env.get("INPUT_GATE_WORKFLOW_PATH") or DEFAULT_GATE_WORKFLOW_PATH
         gate_name = env.get("INPUT_GATE_WORKFLOW_NAME") or DEFAULT_GATE_WORKFLOW_NAME
         sha = _event_sha(env)
@@ -776,22 +870,28 @@ def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
             log(f"Nothing to evaluate: {skip}.")
             return 0
         sha = trigger["sha"]
+        default_branch = (event.get("repository") or {}).get("default_branch") or ""
         gh = _client(env, gh, sleep)
         log(f"Triggered by {trigger['kind']} {safe(trigger.get('action'))} of "
             f"{safe(trigger.get('name'))!r} on {sha[:7]}")
 
         prs = open_prs_for(gh, repo, sha, base)
         if not prs:
-            log(f"{sha[:7]} is not the head of an open pull request into {base}; "
-                f"nothing to do.")
+            log(f"{sha[:7]} is not the head of an open pull request"
+                f"{' into ' + base if base else ''}; nothing to do.")
             return 0
         # Pending first: if this job is killed mid-evaluation (timeout,
         # cancellation, runner loss), the newest verdict is not an earlier pass.
-        publish_status(gh, repo, sha, check_name, "pending",
-                       "Evaluating the checks on this commit", details_url)
+        # When the newest status already reads pending, that already holds, and
+        # skipping the write spares the secondary rate limit, which counts
+        # writes: a busy push fires dozens of evaluations.
+        if current_state(gh, repo, sha, check_name) != "pending":
+            publish_status(gh, repo, sha, check_name, "pending",
+                           "Evaluating the checks on this commit", details_url)
         ev, stuck = evaluate_with_relist(
             gh, repo, sha, trigger, gate_path=gate_path, gate_name=gate_name,
-            attempts=attempts, interval=interval, sleep=sleep, log=log)
+            attempts=attempts, interval=interval, sleep=sleep, log=log,
+            default_branch=default_branch)
         if ev.verdict == "failure":
             add_failure_details(gh, repo, ev)
         title, summary = render(ev, sha, stuck_hint=stuck)
@@ -799,7 +899,8 @@ def run(env: dict, gh=None, sleep: Callable[[float], None] = time.sleep,
         publish_status(gh, repo, sha, check_name, ev.verdict,
                        describe(ev, stuck_hint=stuck), details_url)
         for pr in prs:
-            sync_comment(gh, repo, pr, ev, comment_body(summary, details_url, stamp), log=log)
+            sync_comment(gh, repo, pr, ev, comment_body(summary, details_url, stamp), log=log,
+                         author=author)
     except Exception as exc:  # noqa: BLE001 -- fail closed on anything
         log(f"::error::Validation Summary could not evaluate {sha[:7] or 'the commit'}: "
             f"{safe(exc)}")
@@ -839,7 +940,7 @@ def report_job_failure(env: dict, gh=None, sleep: Callable[[float], None] = time
     sha = _event_sha(env)
     try:
         prs = open_prs_for(_client(env, gh, sleep), env["GITHUB_REPOSITORY"], sha,
-                           env.get("INPUT_BASE_BRANCH") or "main") if sha else []
+                           env.get("INPUT_BASE_BRANCH") or "") if sha else []
         if sha and not prs:
             log(f"{sha[:7]} is not the head of an open pull request; nothing to do.")
             return 0

@@ -83,7 +83,10 @@ jobs:
     if: >-
       (github.event_name == 'workflow_run'
         && !(github.event.workflow_run.path == '.github/workflows/validation-summary-gate.yml'
-          && !contains(fromJSON('["pull_request", "pull_request_target"]'), github.event.workflow_run.event)))
+          && !contains(fromJSON('["pull_request", "pull_request_target"]'), github.event.workflow_run.event))
+        && !contains(fromJSON('["schedule", "dynamic"]'), github.event.workflow_run.event)
+        && !(github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == github.event.repository.default_branch))
       || (github.event_name == 'check_run'
         && github.event.check_run.app.slug != 'github-actions')
     runs-on: ubuntu-latest
