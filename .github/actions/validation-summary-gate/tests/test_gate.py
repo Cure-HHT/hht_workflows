@@ -1175,6 +1175,13 @@ def test_retry_delay(code, headers, expected):
 
 
 # Verifies: HHT-OPS-composite-action-library/A
+def test_headerless_secondary_limit_403_waits_a_minute():
+    body = '{"message": "You have exceeded a secondary rate limit. Please wait a few minutes"}'
+    assert gate.retry_delay(403, {}, 0, now=1000.0, body=body) == 60.0
+    assert gate.retry_delay(403, {}, 0, now=1000.0, body='{"message": "Resource not accessible"}') is None
+
+
+# Verifies: HHT-OPS-composite-action-library/A
 def test_a_retry_that_does_not_fit_the_budget_fails_so_error_can_post():
     slept = []
     gh = gate.GitHub("t", sleep=slept.append, clock=lambda: 0.0, wait_budget=100)

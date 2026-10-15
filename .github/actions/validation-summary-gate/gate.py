@@ -534,7 +534,8 @@ RATE_LIMIT_WAIT_BUDGET = 120.0
 
 
 # Implements: HHT-OPS-composite-action-library/A
-def retry_delay(code: int, headers, attempt: int, now: float) -> float | None:
+def retry_delay(code: int, headers, attempt: int, now: float,
+                body: str = "") -> float | None:
     """Seconds to wait before retrying a failed request, or None to give up.
 
     - 5xx: exponential back-off.
@@ -543,6 +544,8 @@ def retry_delay(code: int, headers, attempt: int, now: float) -> float | None:
     - 403/429 with `x-ratelimit-remaining: 0` (the primary limit): until
       `x-ratelimit-reset`.
     - 429 without either header: exponential back-off.
+    - 403 whose body names the secondary rate limit but carries neither
+      header: GitHub asks for at least a minute, so 60 seconds.
     - any other 403: not a rate limit; give up.
     """
     backoff = float(min(60, 5 * 2 ** attempt))
@@ -561,7 +564,9 @@ def retry_delay(code: int, headers, attempt: int, now: float) -> float | None:
             return max(0.0, float(headers.get("x-ratelimit-reset")) - now)
         except (TypeError, ValueError):
             return backoff
-    return backoff if code == 429 else None
+    if code == 429:
+        return backoff
+    return 60.0 if "secondary rate limit" in body.lower() else None
 
 
 class GitHub:
@@ -596,10 +601,10 @@ class GitHub:
                     raw = resp.read()
                     return (json.loads(raw) if raw else None), resp.headers
             except urllib.error.HTTPError as exc:
-                delay = retry_delay(exc.code, exc.headers, attempt, self.clock())
+                detail = exc.read().decode(errors="replace")[:300]
+                delay = retry_delay(exc.code, exc.headers, attempt, self.clock(), detail)
                 what = f"{method} {url} -> HTTP {exc.code}"
                 if delay is None or attempt == 3:
-                    detail = exc.read().decode(errors="replace")[:300]
                     raise RuntimeError(f"{what}: {detail}") from exc
                 self._wait(delay, what)
             except urllib.error.URLError as exc:
