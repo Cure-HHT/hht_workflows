@@ -77,7 +77,9 @@ Either way an earlier pass never stands as the newest verdict.
 
 Rate limits: a 403 or 429 carrying `retry-after` (GitHub's secondary limit)
 is retried after that many seconds, a primary-limit 403 waits until
-`x-ratelimit-reset`, and a 5xx or a bare 429 backs off exponentially. At most
+`x-ratelimit-reset`, a 403 that carries neither header but whose body names
+the secondary rate limit waits 60 seconds, and a 5xx or a bare 429 backs off
+exponentially. Any other 403 is not a rate limit and is not retried. At most
 two minutes of the job's five go to such waits; past that the request fails
 and the gate posts `error`, which stays until the next event or a re-run.
 
