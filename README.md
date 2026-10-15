@@ -57,7 +57,8 @@ ruleset's required status checks:
 | --- | --- |
 | [`validate-pr-title`](.github/actions/validate-pr-title/) | `Validate PR Title` |
 | [`secrets-scan`](.github/actions/secrets-scan/) | `Security - Check for Secrets` |
-| [`validation-summary`](.github/actions/validation-summary/) | `Validation Summary` |
+| [`validation-summary-gate`](.github/actions/validation-summary-gate/) | `Validation Summary` (event-driven; published as a commit status) |
+| [`validation-summary`](.github/actions/validation-summary/) | `Validation Summary` (polling; superseded by `validation-summary-gate`, kept for existing pins) |
 
 Each of these is paired with a thin wrapper workflow that dogfoods it
 on this repo's own PRs.
@@ -142,29 +143,18 @@ jobs:
       - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@<commit-sha>  # SHA-pin; see "Pinning & versioning"
 ```
 
-### `validation-summary.yml`
+### `validation-summary-gate.yml`
 
-```yaml
-name: Validation Summary
-on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, edited]
-permissions:
-  checks: read
-  statuses: read
-  actions: read
-  pull-requests: write
-jobs:
-  gate:
-    name: Validation Summary
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: Cure-HHT/hht_workflows/.github/actions/validation-summary@<commit-sha>  # SHA-pin; see "Pinning & versioning"
-```
+`Validation Summary` is not a job in a `pull_request` workflow: a workflow
+triggered by `workflow_run` and `check_run` evaluates the PR head commit each
+time another workflow starts or finishes and publishes a commit status of that context
+(checks created by `workflow_run` jobs do not count toward rulesets). Copy the wrapper from
+[`validation-summary-gate/README.md`](.github/actions/validation-summary-gate/README.md#usage)
+— it must be on the default branch to run, and its job is deliberately not
+named `Validation Summary`. Moving off the polling `validation-summary.yml`
+takes two pull requests; the same README explains why.
 
-The job's `name:` field becomes the check-context name that the
+For the other wrappers, the job's `name:` field becomes the check-context name that the
 org-level ruleset matches against. Each consumer's wrappers must use
 these exact names.
 
