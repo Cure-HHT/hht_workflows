@@ -137,6 +137,14 @@ jobs:
         run: |
           set -euo pipefail
           pytest .github/actions/cosign-verify/tests/ -v
+      # Verifies: HHT-OPS-environment-bound-deploy-identity/A
+      #   Every branch of the recorded-refusal action against a local
+      #   stand-in for GitHub's OIDC endpoint and Doppler's API, including
+      #   the token-issued branch, which the readiness job also drives live.
+      - name: Run assert-doppler-identity-refused tests
+        run: |
+          set -euo pipefail
+          pytest .github/actions/assert-doppler-identity-refused/tests/ -v
       - name: Run cloud-run-resolve-serving-digest logic tests
         run: |
           set -euo pipefail
