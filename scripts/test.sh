@@ -35,6 +35,7 @@ hooks/confidential-terms-scan/tests
 .github/actions/cosign-verify/tests
 scripts/publish/tests
 .github/actions/cloud-run-resolve-serving-digest/tests
+.github/actions/cloud-run-deploy-no-traffic/tests
 tests/test_promote_template.py
 tests/test_deploy_cloud_run.py
 tests/test_reset_db.py
