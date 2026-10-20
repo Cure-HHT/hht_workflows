@@ -62,7 +62,7 @@ runs:
           --format=json \
           | jq -r --arg r "$CREATED" --arg t "$TAG" \
             'first(.[] | select(.revisionName == $r) | .tags[]
-              | select(.tag == $t) | .url | select(. != ""))')
+              | select(.tag == $t) | .url | strings | select(. != ""))')
         if [ -z "$TAGGED_URL" ]; then
           echo "::error::No URL for tag '$TAG' on created revision $CREATED."
           exit 1

@@ -28,15 +28,15 @@ TRAFFIC = [
 COMMON = ["portal-service", "--region=europe-west9", "--project=example-proj-dev"]
 
 
-def _deploy(tmp_path, remove_env_vars):
-    """Run the step against a stub gcloud; return its gcloud argvs and outputs."""
+def _run(tmp_path, remove_env_vars, traffic=TRAFFIC):
+    """Run the step against a stub gcloud; return the process, its gcloud argvs and outputs."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls.jsonl"
     (bin_dir / "gcloud").write_text(f"""#!/usr/bin/env python3
 import json, sys
 open({str(log)!r}, "a").write(json.dumps(sys.argv[1:]) + "\\n")
-print({CREATED!r} if sys.argv[3] == "update" else {json.dumps(TRAFFIC)!r})
+print({CREATED!r} if sys.argv[3] == "update" else {json.dumps(traffic)!r})
 """)
     (bin_dir / "gcloud").chmod(0o755)
     outputs = tmp_path / "github_output"
@@ -56,9 +56,15 @@ print({CREATED!r} if sys.argv[3] == "update" else {json.dumps(TRAFFIC)!r})
     proc = subprocess.run(
         ["bash", "-c", STEP["run"]], env=env, capture_output=True, text=True,
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    return calls, outputs.read_text().splitlines()
+    return proc, calls, outputs.read_text().splitlines()
+
+
+def _deploy(tmp_path, remove_env_vars):
+    """Run a deploy that must succeed; return its gcloud argvs and outputs."""
+    proc, calls, outputs = _run(tmp_path, remove_env_vars)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return calls, outputs
 
 
 def _expected(remove_flags):
@@ -84,3 +90,12 @@ def test_deploy_removes_named_env_vars(tmp_path):
     calls, outputs = _deploy(tmp_path, "DOPPLER_TOKEN")
     assert calls == _expected(["--remove-env-vars=DOPPLER_TOKEN"])
     assert outputs == [f"revision_name={CREATED}", f"tagged_url={URL}"]
+
+
+def test_deploy_fails_when_the_tag_has_no_url(tmp_path):
+    """A tag reported without a URL fails the step and sets no outputs."""
+    traffic = [{"revisionName": CREATED, "tags": [{"tag": "candidate", "url": None}]}]
+    proc, _, outputs = _run(tmp_path, "", traffic)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "No URL for tag 'candidate'" in proc.stdout
+    assert outputs == []
