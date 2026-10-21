@@ -204,6 +204,32 @@ def test_the_workflow_still_reports_on_every_pull_request():
     )
 
 
+def test_main_push_runs_on_every_input_a_gated_job_reads(tmp_path):
+    # The push trigger is path-filtered. A gated job's input missing from that
+    # filter would mean a post-merge change to it runs no readiness check.
+    doc = _doc()
+    paths = doc.get("on", doc.get(True))["push"]["paths"]
+    for i, path in enumerate([
+        ".github/actions/cosign-verify/action.yml",
+        ".github/fixtures/cosign-verify/bundle.json",
+        ".github/actions/build-urs/action.yml",
+        "scripts/urs-compile/urs_compile/cli.py",
+        ".github/actions/build-oq/action.yml",
+        "scripts/oq-compile/oq_compile/cli.py",
+        ".github/actions/sponsor-base-preflight/preflight.py",
+    ]):
+        # Every pattern here is a `dir/**` glob or an exact file.
+        assert any(
+            path.startswith(p[:-2]) if p.endswith("/**") else path == p
+            for p in paths
+        ), f"a change to only {path} on main would run no readiness check"
+        # The pull-request decision must select a job for the same input,
+        # otherwise this list has drifted from what the jobs actually read.
+        case = tmp_path / str(i)
+        case.mkdir()
+        assert "true" in _decide(_repo(case, [path])).values(), path
+
+
 def test_a_file_moved_out_of_a_gated_directory_runs_that_job(tmp_path):
     # Rename detection would list only docs/moved.py, and cosign-verify would
     # report `skipped` for a change that removed one of its inputs.

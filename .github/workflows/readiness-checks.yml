@@ -18,8 +18,15 @@ on:
   # after merge — informational, not gating).
   push:
     branches: [main]
+    # Every input the no-op job's decision reads must be listed here too:
+    # build-urs and build-oq exercise the generators under scripts/, and
+    # cosign-verify reads its fixture, so a change to only one of those on
+    # main would otherwise run no readiness check at all.
     paths:
       - '.github/actions/**'
+      - '.github/fixtures/**'
+      - 'scripts/urs-compile/**'
+      - 'scripts/oq-compile/**'
       - '.github/workflows/readiness-checks.yml'
   pull_request: {}    # always run on PR so the required status check always reports
   workflow_dispatch: {}
