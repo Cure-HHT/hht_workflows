@@ -53,6 +53,6 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v4
-      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
+      - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@f87a71fffa22779dc045197e145c480435ae659e  # v1.13.0
         with:
           slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
