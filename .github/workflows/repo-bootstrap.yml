@@ -90,7 +90,7 @@ jobs:
       # dart runtimes. 'none' opts out entirely.
       - name: Set up Python
         if: inputs.runtime != 'none'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ inputs.python-version }}
 
