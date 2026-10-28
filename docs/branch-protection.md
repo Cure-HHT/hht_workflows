@@ -37,10 +37,14 @@ Two jobs in `readiness-checks.yml` are deliberately **not** required checks:
 - `Notify failure` — the standard announcement job (job id `notify-failure`,
   `name:`-overridden). Its guard skips it on `pull_request` runs, so it has
   nothing to report on the event branch protection gates.
-- `no-op` — the placeholder that kept the workflow non-empty before the real
-  readiness jobs landed. Requiring it would gate merges on a job that asserts
-  nothing; it is deleted, not required, once the last action it stood in for
-  has its own job.
+- `no-op` — once a placeholder; it now decides which of the four costly
+  readiness jobs (`cosign-verify`, `build-urs`, `build-oq`,
+  `sponsor-base-preflight`) a pull request needs, from the files it changes.
+  An unaffected job reports `skipped`, which satisfies its required context;
+  on `main`, on dispatch, on an edit to `readiness-checks.yml`, or when the
+  decision itself fails, every one of them runs. It keeps the id `no-op`
+  because hht_admin's gate-parity lint records that name as non-gating; it
+  asserts nothing about an action, so requiring it would add nothing.
 
 From `release-notes-tests.yml`:
 
