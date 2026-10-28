@@ -2,6 +2,8 @@
 
 Verifies: HHT-OPS-failure-notification-routing/E+F
 """
+import pytest
+
 import lint
 
 CANONICAL_IF = (
@@ -140,11 +142,12 @@ jobs:
 
 # --- Assertion C: no hand-maintained enumeration of workflows -------------
 # The check is syntactic, per the requirement's Rationale: a workflow fails
-# if its `on:` block carries a `workflow_run.workflows` list, OR if an
-# announcement step reads a workflow enumeration from a file or input. The
+# if its `on:` block carries a `workflow_run.workflows` list other than one
+# selecting every workflow (`"**"`, optionally excluding its own name), OR if
+# an announcement step reads a workflow enumeration from a file or input. The
 # first limb is the construct that caused the original defect — display names
-# typed by hand, matched exactly, with no wildcard and no failure signal when
-# they stop matching anything. The second limb closes the obvious workaround.
+# typed by hand, matched exactly, with no failure signal when they stop
+# matching anything. The second limb closes the obvious workaround.
 
 WORKFLOW_RUN_ENUM = """
 name: Pager
@@ -180,6 +183,47 @@ jobs:
     # It enumerates nothing, so rule C must stay silent. It is also not
     # push/schedule triggered, so rule A does not apply either.
     assert lint.check("pager.yml", src) == []
+
+
+ALL_WORKFLOWS = """
+name: Validation Summary Gate
+on:
+  workflow_run:
+    workflows: ["**", "!Validation Summary Gate"]
+    types: [completed, requested]
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo
+"""
+
+
+def test_all_workflows_glob_with_self_exclusion_is_not_an_enumeration():
+    # Selects every workflow; the only name is the file's own.
+    assert lint.check("gate.yml", ALL_WORKFLOWS) == []
+
+
+def test_all_workflows_glob_alone_is_not_an_enumeration():
+    src = ALL_WORKFLOWS.replace('["**", "!Validation Summary Gate"]', '["**"]')
+    assert lint.check("gate.yml", src) == []
+
+
+@pytest.mark.parametrize("workflows", [
+    '["**", "!Build"]',                        # excludes ANOTHER workflow by name
+    '["**", "!Validation Summary"]',           # stale self-name (renamed file)
+    '["Build*"]',                              # a prefix glob is still a name list
+    '["*"]',                                   # single star is not "every workflow"
+    '["**", "Build"]',                         # a name riding alongside the glob
+    '["!Validation Summary Gate", "**"]',      # a trailing ** re-includes everything
+    '["**", "!Validation Summary Gate", "**"]',
+    '["**", "**"]',
+    '[]',
+])
+def test_anything_but_the_all_workflows_filter_is_still_rejected(workflows):
+    src = ALL_WORKFLOWS.replace('["**", "!Validation Summary Gate"]', workflows)
+    violations = lint.check("gate.yml", src)
+    assert any("enumeration" in v for v in violations), workflows
 
 
 def test_enumeration_is_flagged_even_on_an_otherwise_conforming_workflow():

@@ -28,6 +28,8 @@ on:
       # cloud-run-resolve-serving-digest was added with a test suite but never
       # added here, so a post-merge change to the action ran no tests on main.
       - '.github/actions/cloud-run-resolve-serving-digest/**'
+      - '.github/actions/validation-summary-gate/**'
+      - '.github/actions/notify-failure-lint/**'
       - '.github/workflows/promote-template.yml'
       - '.github/workflows/readiness-checks.yml'
       - '.github/workflows/deploy-cloud-run.yml'
@@ -138,6 +140,30 @@ jobs:
         run: |
           set -euo pipefail
           pytest .github/actions/cloud-run-resolve-serving-digest/tests/ -v
+      # The gate action's tests run here, in a required check, rather than
+      # in a readiness job of their own: a new readiness job would need its
+      # own required context in hht_admin's ruleset (gate parity) before it
+      # could gate anything.
+      # Verifies: HHT-OPS-composite-action-library/A+D
+      - name: Run validation-summary-gate tests
+        run: |
+          set -euo pipefail
+          cd .github/actions/validation-summary-gate
+          PYTHONPATH=. pytest tests/ -v
+      # Run the composite itself on this pull_request event, which it must
+      # leave alone: no API call, no status posted, no verdict.
+      # Verifies: HHT-OPS-composite-action-library/D+F
+      - id: vsg-wiring
+        uses: ./.github/actions/validation-summary-gate
+        with:
+          github-token: unused-on-a-pull-request-event
+      - name: Assert the gate left a pull_request event alone
+        env:
+          VERDICT: ${{ steps.vsg-wiring.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          [ -z "$VERDICT" ] || { echo "::error::expected no verdict, got '$VERDICT'"; exit 1; }
+          echo "validation-summary-gate wiring OK"
       # Verifies: HSI-OPS-promotion-gate-qa/D. The source-health gate refuses on
       # states a live project will not produce on demand — a healthy service
       # cannot be asked to report `degraded` just to watch the refusal.

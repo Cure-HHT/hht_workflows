@@ -1,7 +1,7 @@
 # Fixture for assertion C: announcing failure off a hand-maintained list of
 # workflow display names. This is the shape of the original defect — the
-# names are matched exactly, no wildcard exists, and an entry that stops
-# matching anything reports nothing.
+# names are matched exactly, and an entry that stops matching anything
+# reports nothing.
 name: Fixture (workflow enumeration)
 on:
   workflow_run:
