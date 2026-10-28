@@ -239,11 +239,18 @@ runs:
           exit 1
         fi
 
-        # PyYAML — same pattern as validate-build-paths.yml in the
-        # sponsor repo. --user bypasses PEP 668's externally-managed
-        # marker on ubuntu-latest. yq's runner preinstall is undocumented
-        # and image-version-dependent, so we don't depend on it.
-        pip install --user --quiet pyyaml
+        # PyYAML, installed into the same interpreter the steps below run.
+        # A bare `pip` can belong to a different Python than `python3`
+        # (macOS runners, or after actions/setup-python), so the install
+        # lands where the import never looks. Skip it when the import
+        # already works; otherwise go through `python3 -m pip`, retrying
+        # past a PEP 668 externally-managed marker (Homebrew python3).
+        # yq's runner preinstall is undocumented and image-version-
+        # dependent, so we don't depend on it.
+        if ! python3 -c 'import yaml' 2>/dev/null; then
+          python3 -m pip install --user --quiet pyyaml \
+            || python3 -m pip install --user --quiet --break-system-packages pyyaml
+        fi
 
         # 1. Resolve the routing leaf to a list of role keys.
         # The leaf can be a string (single channel) or a list (fan-out).

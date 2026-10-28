@@ -31,6 +31,7 @@ on:
       - '.github/actions/validation-summary-gate/**'
       - '.github/actions/notify-failure-lint/**'
       - '.github/workflows/promote-template.yml'
+      - '.github/workflows/readiness-checks.yml'
       - '.github/workflows/deploy-cloud-run.yml'
       - '.github/workflows/reset-db.yml'
       - '.github/workflows/archive-deployment-logs.yml'
@@ -170,6 +171,13 @@ jobs:
         run: |
           set -euo pipefail
           pytest tests/test_promote_template.py -v
+      # Verifies: HHT-OPS-composite-action-library/D. The readiness path gate
+      # may skip an unaffected readiness job on a pull request, never on a
+      # failed decision, a non-PR event or an edit to the workflow itself.
+      - name: Run readiness path-gate tests
+        run: |
+          set -euo pipefail
+          pytest tests/test_readiness_path_gate.py -v
       # The deploy's identity read and environment cross-check refuse on
       # states a live run should never reach: another sponsor's identity, an
       # undeclared environment, or variables naming another environment.
