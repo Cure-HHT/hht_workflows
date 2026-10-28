@@ -58,7 +58,7 @@ ruleset's required status checks:
 | [`validate-pr-title`](.github/actions/validate-pr-title/) | `Validate PR Title` |
 | [`secrets-scan`](.github/actions/secrets-scan/) | `Security - Check for Secrets` |
 | [`validation-summary-gate`](.github/actions/validation-summary-gate/) | `Validation Summary` (event-driven; published as a commit status) |
-| [`validation-summary`](.github/actions/validation-summary/) | `Validation Summary` (polling; superseded by `validation-summary-gate`, kept for existing pins) |
+| [`validation-summary`](.github/actions/validation-summary/) | `Validation Summary` (polling; superseded by `validation-summary-gate`, kept for existing pins; no wrapper here) |
 
 Each of these is paired with a thin wrapper workflow that dogfoods it
 on this repo's own PRs.
