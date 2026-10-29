@@ -583,14 +583,12 @@ jobs:
       # Implements: DIARY-OPS-deploy-traffic-gating/A
       - name: Deploy canary (no traffic)
         id: canary
-        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@09b4546c25125787630074f84bde5c7e877ae078  # v1.17.0
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@3d9b218c541a05dce7d739c4ed5ac13081990607  # v2.0.0
         with:
           service: ${{ inputs.service-name }}
           region: ${{ env.GCP_REGION }}
           project: ${{ env.GCP_PROJECT_ID }}
           image: ${{ inputs.image_path }}
-          cloudsql_instances: ${{ env.CLOUD_SQL_CONNECTION }}
-          vpc_connector: ${{ env.VPC_CONNECTOR }}
           update_env_vars: ${{ steps.envvars.outputs.update_env_vars }}
           remove_env_vars: ${{ steps.envvars.outputs.remove_env_vars }}
 
