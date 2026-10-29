@@ -1,4 +1,8 @@
-# Validation Summary — composite action.
+# Validation Summary — composite action (POLLING; superseded).
+#
+# Superseded by .github/actions/validation-summary-gate, which publishes the
+# same check from workflow_run events instead of holding a runner. Kept so
+# consumers still pinned to it keep working during the transition.
 #
 # Polls all other check runs on the PR's head commit, waits for them
 # to finalize, and emits a PASS / FAIL summary. Used to satisfy the

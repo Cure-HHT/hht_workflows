@@ -1,0 +1,437 @@
+{
+ "source": "read-only GET of api.github.com, fields the gate reads only",
+ "repo": "Cure-HHT/event_sourcing",
+ "pr": 63,
+ "head_sha": "58346ac7e70365eadf2881cbb17aa12c2a08e960",
+ "polling_gate_state": "success",
+ "polling_gate_conclusion": "success",
+ "expected_verdict": "success",
+ "check_runs": [
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112197497939",
+   "id": 112197497939,
+   "name": "Traceability gate (Evidence Snapshot and elspais checks)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799243",
+   "id": 112191799243,
+   "name": "reaction/example analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799192",
+   "id": 112191799192,
+   "name": "canonical_json_jcs analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799157",
+   "id": 112191799157,
+   "name": "reaction_widgets analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799149",
+   "id": 112191799149,
+   "name": "event_sourcing/example analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799094",
+   "id": 112191799094,
+   "name": "event_sourcing/example_clinical_scopes analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799087",
+   "id": 112191799087,
+   "name": "event_sourcing/example_action_permissions analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799086",
+   "id": 112191799086,
+   "name": "Postgres suites (part 6 of 6)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799065",
+   "id": 112191799065,
+   "name": "reaction analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799064",
+   "id": 112191799064,
+   "name": "reaction_widgets_testing analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799044",
+   "id": 112191799044,
+   "name": "Postgres suites (part 5 of 6)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191799030",
+   "id": 112191799030,
+   "name": "event_sourcing analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798998",
+   "id": 112191798998,
+   "name": "provenance analyze + test",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798971",
+   "id": 112191798971,
+   "name": "Postgres suites (part 2 of 6)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798934",
+   "id": 112191798934,
+   "name": "Postgres suites (part 3 of 6)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798918",
+   "id": 112191798918,
+   "name": "Postgres suites (part 4 of 6)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798872",
+   "id": 112191798872,
+   "name": "event_sourcing browser tests",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798865",
+   "id": 112191798865,
+   "name": "Postgres suites (part 1 of 6)",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798821",
+   "id": 112191798821,
+   "name": "event_sourcing/example desktop integration",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191798807",
+   "id": 112191798807,
+   "name": "Postgres throughput guard against the baseline build",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214909
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184582/job/112191746021",
+   "id": 112191746021,
+   "name": "Security - Check for Secrets",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214543
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455/job/112191744832",
+   "id": 112191744832,
+   "name": "Tool pins",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214355
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184385/job/112191744796",
+   "id": 112191744796,
+   "name": "confidential-terms-scan",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214490
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184433/job/112191744748",
+   "id": 112191744748,
+   "name": "no-or-true-guard",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214327
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184371/job/112191743996",
+   "id": 112191743996,
+   "name": "Validate PR Title",
+   "status": "completed"
+  },
+  {
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 101412214347
+   },
+   "conclusion": "success",
+   "external_id": null,
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184387/job/112191743961",
+   "id": 112191743961,
+   "name": "Validation Summary",
+   "status": "completed"
+  }
+ ],
+ "workflow_runs": [
+  {
+   "check_suite_id": 101412214543,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184455",
+   "id": 37440184455,
+   "name": "Event sourcing tests",
+   "status": "completed",
+   "workflow_id": 365771670
+  },
+  {
+   "check_suite_id": 101412214909,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184582",
+   "id": 37440184582,
+   "name": "Security - Check for Secrets",
+   "status": "completed",
+   "workflow_id": 273873208
+  },
+  {
+   "check_suite_id": 101412214347,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184387",
+   "id": 37440184387,
+   "name": "Validation Summary",
+   "status": "completed",
+   "workflow_id": 273873207
+  },
+  {
+   "check_suite_id": 101412214327,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184371",
+   "id": 37440184371,
+   "name": "Validate PR Title",
+   "status": "completed",
+   "workflow_id": 273873209
+  },
+  {
+   "check_suite_id": 101412214355,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184385",
+   "id": 37440184385,
+   "name": "confidential-terms-scan",
+   "status": "completed",
+   "workflow_id": 317523401
+  },
+  {
+   "check_suite_id": 101412214490,
+   "conclusion": "success",
+   "event": "pull_request",
+   "html_url": "https://github.com/Cure-HHT/event_sourcing/actions/runs/37440184433",
+   "id": 37440184433,
+   "name": "no-or-true-guard",
+   "status": "completed",
+   "workflow_id": 309105832
+  }
+ ]
+}
