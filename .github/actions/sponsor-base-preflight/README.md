@@ -40,10 +40,10 @@ listen on PORT=8080` — an opaque message several minutes and one wasted deploy
 away from the real cause (the CUR-1624 incident). This check names the missing
 permissions at build time instead.
 
-**Transition:** a base image built before core started publishing
-`/app/PORTAL_ACTIONS` has no manifest. The action emits a warning and skips the
-capability check for that build; it does not fail. Every other extraction
-failure (auth, network, corrupt layer) is fatal.
+A base image with no manifest, or an empty one, fails the build: it cannot
+show that it declares any granted permission, so passing it would let exactly
+the boot failure this check exists to name through to a deploy. Every other
+extraction failure (auth, network, corrupt layer) is fatal too.
 
 ## Usage
 
