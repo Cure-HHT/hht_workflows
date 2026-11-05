@@ -644,6 +644,62 @@ jobs:
             ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
           portal-server-image: ${{ steps.seed.outputs.image }}
 
+      # The two cases below drive the composite action itself, not preflight.py.
+      # A capability check the action skips passes every direct call to the
+      # script, so only a failure observed through the action shows that the
+      # check runs at all.
+      - name: Seed an overreaching grant and a base with no manifest
+        id: seed-negative
+        run: |
+          set -euo pipefail
+          cat > /tmp/overreaching-action.yaml <<'EOF'
+          roles:
+            - CRA
+          grants:
+            CRA:
+              - portal.site.view
+              - portal.user.create
+          EOF
+          printf 'FROM busybox:1.36\nRUN mkdir -p /app\n' > Dockerfile.nomanifest
+          docker build -q -t readiness-portal-server:nomanifest -f Dockerfile.nomanifest .
+          echo "nomanifest=readiness-portal-server:nomanifest" >> "$GITHUB_OUTPUT"
+
+      - name: Action run with a grant the base does not declare (must fail)
+        id: undeclared
+        continue-on-error: true
+        uses: ./.github/actions/sponsor-base-preflight
+        with:
+          base-images: |
+            ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          portal-server-image: ${{ steps.seed.outputs.image }}
+          role-permissions: /tmp/overreaching-action.yaml
+
+      - name: Action run against a base with no manifest (must fail)
+        id: nomanifest
+        continue-on-error: true
+        uses: ./.github/actions/sponsor-base-preflight
+        with:
+          base-images: |
+            ghcr.io/cure-hht/portal-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          portal-server-image: ${{ steps.seed-negative.outputs.nomanifest }}
+
+      - name: Both action runs failed
+        env:
+          UNDECLARED: ${{ steps.undeclared.outcome }}
+          NOMANIFEST: ${{ steps.nomanifest.outcome }}
+        run: |
+          set -euo pipefail
+          ok=true
+          if [ "$UNDECLARED" != "failure" ]; then
+            echo "::error::the action passed a grant the base does not declare (outcome: ${UNDECLARED})"
+            ok=false
+          fi
+          if [ "$NOMANIFEST" != "failure" ]; then
+            echo "::error::the action passed a base that carries no permission manifest (outcome: ${NOMANIFEST})"
+            ok=false
+          fi
+          [ "$ok" = true ]
+
       - name: Preflight rejects a mutable tag and an undeclared grant
         env:
           IMAGE: ${{ steps.seed.outputs.image }}

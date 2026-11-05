@@ -66,9 +66,50 @@ runs:
         # catching: an input that resolved to nothing.
         python3 "${ACTION_PATH}/preflight.py" pins --images "$BASE_IMAGES"
 
+    # A base that carries no manifest cannot show that it declares anything,
+    # so its absence fails the build rather than skipping the check. Every
+    # other extraction failure (auth, network, corrupt layer) fails too.
+    - name: Extract the declared-permission manifest from the pinned base
+      id: extract
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.portal-server-image }}
+        MANIFEST: ${{ runner.temp }}/portal-actions.txt
+      run: |
+        set -euo pipefail
+
+        # Pull only what is not already local. An image built in an earlier
+        # step of the same job has no registry to pull from, and a redundant
+        # pull of a digest-pinned reference buys nothing.
+        if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+          echo "using locally-present ${IMAGE}"
+        else
+          docker pull -q "${IMAGE}"
+        fi
+        cid="$(docker create "${IMAGE}")"
+
+        rc=0
+        cp_out="$(docker cp "${cid}:/app/PORTAL_ACTIONS" "${MANIFEST}" 2>&1)" || rc=$?
+
+        if ! docker rm "${cid}" >/dev/null; then
+          echo "::warning::could not remove temporary container ${cid} (tolerated: runner cleanup reclaims it)"
+        fi
+
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::could not read /app/PORTAL_ACTIONS from ${IMAGE}: ${cp_out}"
+          echo "::error::Without the manifest no grant in the sponsor configuration can be shown to be declared."
+          exit "$rc"
+        fi
+        if [ ! -s "${MANIFEST}" ]; then
+          echo "::error::/app/PORTAL_ACTIONS in ${IMAGE} is empty, so it declares no permission."
+          exit 1
+        fi
+
+        echo "manifest=${MANIFEST}" >> "$GITHUB_OUTPUT"
+        echo "declared permissions: $(grep -c . "${MANIFEST}")"
+
     # Implements: HSI-OPS-image-promotion/H
     - name: Verify the pinned base declares every granted permission
-      if: steps.extract.outputs.present == 'true'
       shell: bash
       env:
         MANIFEST: ${{ steps.extract.outputs.manifest }}
