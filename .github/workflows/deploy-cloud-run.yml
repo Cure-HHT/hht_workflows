@@ -592,6 +592,34 @@ jobs:
           update_env_vars: ${{ steps.envvars.outputs.update_env_vars }}
           remove_env_vars: ${{ steps.envvars.outputs.remove_env_vars }}
 
+      # The candidate inherits its instance ceiling from the service template,
+      # which the sponsor's Terraform declares (sponsor-envs/portal-service.tf).
+      # A template changed outside that declaration (a manual gcloud update, or
+      # a billing-guard cap run with a floor above one) would otherwise reach
+      # live traffic unseen, so the created revision's own ceiling is read
+      # back, and anything but one fails the deploy before verification with
+      # the prior revision still serving all traffic.
+      # Implements: DIARY-OPS-portal-instance-ceiling/C
+      - name: Refuse a candidate whose instance ceiling is not one
+        env:
+          REVISION: ${{ steps.canary.outputs.revision_name }}
+        run: |
+          set -euo pipefail
+          if ! CEILING="$(gcloud run revisions describe "$REVISION" \
+              --region="$GCP_REGION" --project="$GCP_PROJECT_ID" \
+              --format='value(metadata.annotations."autoscaling.knative.dev/maxScale")')"; then
+            echo "::error::could not read the instance ceiling of candidate $REVISION; refusing to verify a revision whose ceiling is unknown."
+            exit 1
+          fi
+          if [ "$CEILING" != "1" ]; then
+            echo "::error::candidate $REVISION runs up to '${CEILING:-an unbounded number of}' instances; the portal runs one instance per revision."
+            echo "::error::Restore max_instance_count = 1 in the sponsor's sponsor-envs/portal-service.tf and apply it, then dispatch again."
+            echo "::error::A ceiling above one reopens what one instance defers: process-local sign-in state, policy values read once at boot,"
+            echo "::error::clock-driven jobs, self-provisioning races and cross-process subscriber delivery. The prior revision still serves all traffic."
+            exit 1
+          fi
+          echo "candidate $REVISION runs at most one instance"
+
       # The portal sits behind a public regional load balancer whose serverless
       # NEG invokes Cloud Run anonymously, so the service grants allUsers
       # run.invoker; application-layer auth is by identity-platform tokens. The

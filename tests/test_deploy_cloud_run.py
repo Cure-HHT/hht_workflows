@@ -471,3 +471,68 @@ def test_resolve_job_exposes_the_declared_region_and_audience():
     outputs = DOC["jobs"]["resolve"]["outputs"]
     assert outputs["region"] == "${{ steps.identity.outputs.region }}"
     assert outputs["doppler_audience"] == "${{ steps.identity.outputs.doppler_audience }}"
+
+
+# --- The candidate's instance ceiling --------------------------------------
+
+CEILING_STEP = "Refuse a candidate whose instance ceiling is not one"
+
+
+def _ceiling_check(tmp_path, gcloud_body):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls"
+    gcloud = bin_dir / "gcloud"
+    gcloud.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{log}"\n{gcloud_body}\n')
+    gcloud.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "REVISION": "portal-service-00042-xyz",
+        "GCP_PROJECT_ID": "example-proj-dev",
+        "GCP_REGION": "europe-west9",
+    }
+    r = subprocess.run(["bash", "-c", _run_body(TEXT, CEILING_STEP)],
+                       env=env, capture_output=True, text=True)
+    return r, (log.read_text() if log.exists() else "")
+
+
+# Verifies: DIARY-OPS-portal-instance-ceiling/C
+def test_candidate_of_one_instance_passes(tmp_path):
+    r, calls = _ceiling_check(tmp_path, "echo 1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "run revisions describe portal-service-00042-xyz" in calls
+    assert "--project=example-proj-dev" in calls
+
+
+# Verifies: DIARY-OPS-portal-instance-ceiling/C
+@pytest.mark.parametrize("body, shown", [
+    ("echo 2", "'2'"),
+    ("echo 100", "'100'"),
+    ("echo", "an unbounded number of"),
+])
+def test_candidate_of_another_ceiling_is_refused(tmp_path, body, shown):
+    r, _ = _ceiling_check(tmp_path, body)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert shown in r.stdout
+    assert "The prior revision still serves all traffic" in r.stdout
+
+
+# Verifies: DIARY-OPS-portal-instance-ceiling/C
+def test_unreadable_ceiling_is_refused(tmp_path):
+    r, _ = _ceiling_check(tmp_path, "exit 1")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "could not read the instance ceiling" in r.stdout
+
+
+# Verifies: DIARY-OPS-portal-instance-ceiling/C
+def test_ceiling_is_checked_before_verification_and_traffic():
+    """The refusal must come before the verification and the traffic shift,
+    so a refused candidate never takes traffic."""
+    names = [s.get("name") for s in DOC["jobs"]["deploy"]["steps"]]
+    at = names.index(CEILING_STEP)
+    assert names.index("Deploy canary (no traffic)") < at
+    assert at < names.index("Verify deployment")
+    shift = [i for i, s in enumerate(DOC["jobs"]["deploy"]["steps"])
+             if "cloud-run-migrate-traffic" in str(s.get("uses", ""))]
+    assert shift and at < shift[0]
