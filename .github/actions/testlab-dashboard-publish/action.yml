@@ -120,7 +120,7 @@ runs:
       id: dashboard-checkout
       if: steps.fetch.outputs.fetched == 'true'
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: ${{ inputs.dashboard_repository }}
         ref: ${{ inputs.dashboard_ref }}

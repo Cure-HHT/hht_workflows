@@ -6,7 +6,7 @@
 #
 # Example caller (in the consumer repo):
 #
-#   - uses: actions/checkout@v4
+#   - uses: actions/checkout@v7
 #     with: { path: primary }
 #   - uses: Cure-HHT/hht_workflows/.github/actions/build-urs@<commit>
 #     with:
@@ -111,7 +111,7 @@ runs:
   using: composite
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -203,7 +203,7 @@ runs:
           "${{ inputs.associate-root }}"
 
     - name: Upload URS artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: urs-deliverables
         path: |

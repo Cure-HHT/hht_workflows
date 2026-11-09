@@ -6,7 +6,7 @@
 #
 # Example caller (in the consumer repo):
 #
-#   - uses: actions/checkout@v4
+#   - uses: actions/checkout@v7
 #   - uses: Cure-HHT/hht_workflows/.github/actions/build-oq@<40-char commit SHA>
 #     with:
 #       elspais-version: ${{ env.ELSPAIS_VERSION }}  # from .github/versions.env
@@ -67,7 +67,7 @@ runs:
           exit 1
         fi
 
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -109,7 +109,7 @@ runs:
         echo "uat-case-count=${cases}" >> "$GITHUB_OUTPUT"
 
     - name: Upload the workbook
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: oq-report
         path: ${{ inputs.primary-root }}/promotion-evidence/_build/oq-report.xlsx

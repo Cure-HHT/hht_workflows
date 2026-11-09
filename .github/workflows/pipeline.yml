@@ -61,11 +61,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # tomllib. The floor is declared in pyproject.toml and must match.
           python-version: '3.11'
@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Nothing here reuses the token, and a credential written into
           # .git/config is a credential that can reach a build context.
@@ -161,7 +161,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -253,7 +253,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
         with:
           slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}
