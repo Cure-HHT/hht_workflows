@@ -615,7 +615,7 @@ jobs:
             echo "::error::candidate $REVISION runs up to '${CEILING:-an unbounded number of}' instances; the portal runs one instance per revision."
             echo "::error::Restore max_instance_count = 1 in the sponsor's sponsor-envs/portal-service.tf and apply it, then dispatch again."
             echo "::error::A ceiling above one reopens what one instance defers: process-local sign-in state, policy values read once at boot,"
-            echo "::error::clock-driven jobs, self-provisioning races and cross-process subscriber delivery. The prior revision still serves all traffic."
+            echo "::error::clock-driven jobs no lock admits, self-provisioning races and cross-process subscriber delivery. The prior revision still serves all traffic."
             exit 1
           fi
           echo "candidate $REVISION runs at most one instance"
