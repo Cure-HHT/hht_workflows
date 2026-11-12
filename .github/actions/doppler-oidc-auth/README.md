@@ -12,7 +12,7 @@ Fetches Doppler secrets for a job via OIDC; injects all secrets in the
           id-token: write   # required by the Doppler OIDC exchange
           contents: read
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v7
 
           - uses: Cure-HHT/hht_workflows/.github/actions/doppler-oidc-auth@<sha>
             with:

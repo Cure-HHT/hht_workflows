@@ -4,7 +4,7 @@
 # composite actions under .github/actions: the SHA-pinned upstreams wrapped by
 # the composite actions (docker/*, dopplerhq/*, google-github-actions/*,
 # sigstore/*) plus the tag-pinned `actions/*` used in workflows (e.g.
-# actions/checkout@v4). Dependabot opens a reviewed, grouped, weekly PR per
+# actions/checkout@v7). Dependabot opens a reviewed, grouped, weekly PR per
 # update and never auto-merges, preserving each ref's existing style (a
 # SHA-pinned ref is rewritten to the new SHA + version comment; a tag ref to
 # the new tag).

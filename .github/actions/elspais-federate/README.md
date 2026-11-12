@@ -10,7 +10,7 @@ Implements `HHT-OPS-repo-bootstrap/I`.
 ## Usage
 
 ```yaml
-- uses: actions/create-github-app-token@v1
+- uses: actions/create-github-app-token@v3
   id: app-token
   with:
     app-id: ${{ vars.OPS_BOT_APP_ID }}
@@ -53,7 +53,7 @@ Implements `HHT-OPS-repo-bootstrap/I`.
 ### Containerized usage (`link: false`)
 
 ```yaml
-- uses: actions/create-github-app-token@v1
+- uses: actions/create-github-app-token@v3
   id: app-token
   with:
     app-id: ${{ vars.OPS_BOT_APP_ID }}
