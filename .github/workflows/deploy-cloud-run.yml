@@ -601,6 +601,7 @@ jobs:
       # the prior revision still serving all traffic.
       # Implements: DIARY-OPS-portal-instance-ceiling/C
       - name: Refuse a candidate whose instance ceiling is not one
+        if: inputs.service-name == 'portal-service'
         env:
           REVISION: ${{ steps.canary.outputs.revision_name }}
         run: |

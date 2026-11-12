@@ -330,6 +330,16 @@ anything changes.
 The revision authenticates to Doppler with its runtime identity; there is no
 stored-token path.
 
+The portal runs one instance per revision. After the canary revision is
+created, the deploy reads that revision's own instance ceiling
+(`autoscaling.knative.dev/maxScale`) and refuses to verify it unless the
+ceiling is exactly 1; the prior revision keeps all traffic. The ceiling comes
+from the sponsor's Terraform (`max_instance_count` in
+`sponsor-envs/portal-service.tf`), not from this workflow. Before a sponsor
+advances its pin to a release that carries this check, each environment's
+Terraform must be applied at `max_instance_count = 1`; until it is, every
+deploy to that environment is refused.
+
 The workflow declares no concurrency group and no dispatch trigger: the caller
 serialises per environment and owns the dispatch form. The
 `SLACK_APP_OATH_TOKEN` secret is required: without it the deploy refuses

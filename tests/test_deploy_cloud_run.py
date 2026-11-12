@@ -536,3 +536,10 @@ def test_ceiling_is_checked_before_verification_and_traffic():
     shift = [i for i, s in enumerate(DOC["jobs"]["deploy"]["steps"])
              if "cloud-run-migrate-traffic" in str(s.get("uses", ""))]
     assert shift and at < shift[0]
+
+
+# Verifies: DIARY-OPS-portal-instance-ceiling/C
+def test_ceiling_check_runs_for_the_portal():
+    step = next(s for s in DOC["jobs"]["deploy"]["steps"]
+                if s.get("name") == CEILING_STEP)
+    assert step.get("if") == "inputs.service-name == 'portal-service'"
