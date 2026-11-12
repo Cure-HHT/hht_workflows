@@ -23,7 +23,7 @@ jobs:
       id-token: write   # Doppler OIDC
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # the scan diffs base..head
       - uses: Cure-HHT/hht_workflows/.github/actions/confidential-terms-scan@<sha>

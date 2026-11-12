@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@v7
   - id: notes
     uses: Cure-HHT/hht_workflows/.github/actions/release-notes-publish@<sha>
   - name: Post to Slack
