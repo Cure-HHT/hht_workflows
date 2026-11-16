@@ -30,7 +30,7 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    # Caller must `actions/checkout@v4` with `fetch-depth: 0` before
+    # Caller must `actions/checkout` with `fetch-depth: 0` before
     # invoking this action — gitleaks needs full history to scan.
     # The install is install-gitleaks's script, reached through this action's
     # own checkout (a composite action cannot `uses:` a sibling by relative

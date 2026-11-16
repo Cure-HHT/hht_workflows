@@ -50,8 +50,8 @@ extraction failure (auth, network, corrupt layer) is fatal too.
 The caller checks out the sponsor repo and authenticates to the registry first.
 
 ```yaml
-- uses: actions/checkout@v4
-- uses: docker/login-action@v3
+- uses: actions/checkout@v7
+- uses: docker/login-action@v4
   with:
     registry: ghcr.io
     username: ${{ github.actor }}

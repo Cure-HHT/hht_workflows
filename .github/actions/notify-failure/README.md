@@ -13,7 +13,7 @@ The single way a workflow announces its own failure to Slack.
         contents: read
         actions: read
       steps:
-        - uses: actions/checkout@v4
+        - uses: actions/checkout@v7
         - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@<sha>
           with:
             slack-token: ${{ secrets.SLACK_BOT_TOKEN }}

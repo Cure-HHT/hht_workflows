@@ -137,7 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # gitleaks needs full history
       - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@<commit-sha>  # SHA-pin; see "Pinning & versioning"
@@ -205,7 +205,7 @@ looking at the result.
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@<commit-sha>  # SHA-pin; see "Pinning & versioning"
         with:
           slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -293,8 +293,8 @@ workflow tree from the workspace.
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5      # optional; see below
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7      # optional; see below
         with:
           python-version: '3.12'
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure-lint@<commit-sha>  # SHA-pin; see "Pinning & versioning"
