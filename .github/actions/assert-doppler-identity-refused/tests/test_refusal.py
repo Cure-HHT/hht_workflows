@@ -206,7 +206,7 @@ class TestAssertDopplerIdentityRefused(unittest.TestCase):
         body = next(b for m, p, b in Fake.requests if p == "/v3/auth/oidc")
         assert body == {"identity": "11111111-2222-3333-4444-555555555555", "token": "github-oidc-jwt"}
         get = next(p for m, p, _ in Fake.requests if m == "GET")
-        assert get.endswith("&audience=https://github.com/Cure-HHT"), get
+        assert get.endswith("&audience=https%3A%2F%2Fgithub.com%2FCure-HHT"), get
 
     # Verifies: HHT-OPS-environment-bound-deploy-identity/A
     def test_an_issued_token_fails_the_step_and_is_revoked_unprinted(self):

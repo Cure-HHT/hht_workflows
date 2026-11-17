@@ -168,7 +168,7 @@ jobs:
         with:
           doppler_identity_id: ${{ vars.READINESS_DOPPLER_CLI_IDENTITY_ID || vars.READINESS_DOPPLER_IDENTITY_ID }}
           environment: readiness-nowhere
-          audience: https://github.com/Cure-HHT/readiness-wrong-audience
+          audience: cure-hht-readiness-wrong-audience
           fail_unless_refused: 'false'
       - name: Probe the readiness identity, which accepts this job
         id: issued

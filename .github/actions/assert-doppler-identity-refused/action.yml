@@ -179,9 +179,12 @@ runs:
           fi
         }
 
+        # The audience is a query parameter, so it is percent-encoded: an
+        # audience holding URL syntax must reach GitHub as one value.
+        audience_q="$(jq -rn --arg a "$OIDC_AUDIENCE" '$a | @uri')"
         oidc_status="$(http_call \
           -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience_q}")"
         if [ "$oidc_status" -lt 200 ] || [ "$oidc_status" -ge 300 ]; then
           finish error "GitHub OIDC token fetch failed (HTTP ${oidc_status}), so no refusal could be shown. Check the job grants id-token: write."
         fi
