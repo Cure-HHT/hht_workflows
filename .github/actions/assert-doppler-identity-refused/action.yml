@@ -1,0 +1,327 @@
+# Prove that a Doppler identity refuses the calling job.
+#
+# An environment-bound Doppler identity (HHT-OPS-environment-bound-deploy-
+# identity) is issued only to a job running inside one GitHub environment,
+# which a reviewer has to release. That binding lives in hht_admin Terraform,
+# where no change to the consuming repository can reach it -- but a binding
+# nobody exercises is a claim, not a control. This action turns it into a
+# recorded fact: the calling job, which binds no environment (or a different
+# one), asks Doppler for the identity and the run FAILS unless Doppler
+# refuses it.
+#
+# First consumer: hht_diary's mobile build workflows (CUR-2115), whose gate
+# jobs ask for the prod build identity on every run.
+#
+# The answer is classified by HTTP status first; Doppler's message only ever
+# narrows a refusal down to an unknown identity, never widens anything into
+# a refusal. The `outcome` output:
+#   refused          -- HTTP 401 or 403 that does not say the identity is
+#                       unknown. The refusal this action exists to record:
+#                       written to the job summary with the status, Doppler's
+#                       message and the raw (redacted) body, so the run page
+#                       is the evidence. The only passing outcome.
+#   unknown-identity -- HTTP 404 with a Doppler-shaped JSON body, or a 401/403
+#                       whose message says the identity itself is unknown. A
+#                       refusal of an identity that does not exist proves
+#                       nothing about the binding (the id variable is stale,
+#                       or the identity was deleted or replaced).
+#   issued           -- 2xx: the control is broken. Any token is masked,
+#                       revoked on the spot (the `revoked` output and the
+#                       summary say whether that worked) and never printed.
+#   error            -- everything else: no response, a 404 that is not
+#                       Doppler's API, 400, 408, 429, any other 4xx, 5xx,
+#                       a missing id-token permission. Nothing was proved
+#                       either way.
+#
+# Doppler's exact wording for these answers is not documented. The step
+# prints the raw status and body (token fields redacted) on every run, so the
+# first live run records it; the readiness job in this repository asserts the
+# classification of each answer it can provoke.
+#
+# The classifying step never fails on a classified answer; it sets the
+# outputs and a second step fails the action unless the outcome is `refused`.
+# That keeps the outputs readable by a caller that sets
+# `fail_unless_refused: false` (the readiness job, which provokes the failing
+# outcomes on purpose and asserts them). Consumers leave it at its default.
+#
+# It never writes the token to the environment, never prints a token, and
+# needs `id-token: write` on the calling job. Unlike doppler-cli-oidc-auth it
+# fetches nothing and leaves no credential behind. Because it fails on
+# silence, Doppler's availability gates every run that carries it; that is
+# the intended trade.
+#
+# Pin this action by SHA from consumer workflows; never by branch or tag.
+#
+# Implements: HHT-OPS-environment-bound-deploy-identity/A
+# Implements: HHT-OPS-composite-action-library/A+B+F
+#   The Doppler OIDC handshake is a cross-repo CI primitive; this is its
+#   negative form, kept here so no consumer re-implements the exchange.
+
+name: Assert a Doppler identity refuses this job
+description: >-
+  Ask Doppler for an identity this job must NOT be able to hold, record the
+  refusal, and fail if a token is issued or if nothing was proved.
+
+inputs:
+  doppler_identity_id:
+    description: >-
+      UUID of the Doppler service-account identity that must refuse this job.
+      Pass via vars.<NAME>; never hardcode.
+    required: true
+  environment:
+    description: >-
+      The GitHub environment the identity is bound to, for the summary and
+      the failure message. This job must not be running in it.
+    required: true
+  audience:
+    description: The OIDC audience the Doppler identity expects.
+    required: false
+    default: https://github.com/Cure-HHT
+  fail_unless_refused:
+    description: >-
+      'true' (default) fails the action on any outcome other than refused.
+      Only this repository's readiness job sets 'false', to assert the
+      failing outcomes through the outputs. A consumer that sets it has no
+      gate.
+    required: false
+    default: 'true'
+
+outputs:
+  outcome:
+    description: >-
+      One of refused, unknown-identity, issued, error. Only `refused` passes
+      the action; the others fail it, and the value says why.
+    value: ${{ steps.ask.outputs.outcome }}
+  http_status:
+    description: >-
+      Doppler's HTTP status for the identity request; 000 when there was no
+      response, empty when the request was never sent.
+    value: ${{ steps.ask.outputs.http_status }}
+  revoked:
+    description: >-
+      For outcome `issued`: `yes` when the issued token was revoked, `failed`
+      when the revoke was refused, `no-token` when the 2xx carried none.
+      `not-applicable` for every other outcome.
+    value: ${{ steps.ask.outputs.revoked }}
+  reason:
+    description: One line saying why the outcome is what it is.
+    value: ${{ steps.ask.outputs.reason }}
+
+runs:
+  using: composite
+  steps:
+    # Implements: HHT-OPS-environment-bound-deploy-identity/A
+    - name: Ask Doppler for the identity and classify the answer
+      id: ask
+      shell: bash
+      env:
+        DOPPLER_IDENTITY_ID: ${{ inputs.doppler_identity_id }}
+        BOUND_ENVIRONMENT: ${{ inputs.environment }}
+        OIDC_AUDIENCE: ${{ inputs.audience }}
+      run: |
+        set -euo pipefail
+        # Overridable so the offline test can drive this script against a
+        # local server; no workflow sets it.
+        DOPPLER_API_URL="${DOPPLER_API_URL:-https://api.doppler.com}"
+
+        BODY="$(mktemp)"
+        trap 'rm -f "$BODY"' EXIT
+        http_status=""
+        revoked="not-applicable"
+
+        # Every outcome ends here: the outputs are written once, and the
+        # step exits 0 so a caller can read them; the next step enforces.
+        finish() {
+          local reason
+          reason="$(printf '%s' "$2" | tr '\r\n' '  ')"
+          {
+            echo "outcome=$1"
+            echo "http_status=${http_status}"
+            echo "revoked=${revoked}"
+            echo "reason=${reason}"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        if [ -z "${DOPPLER_IDENTITY_ID//[[:space:]]/}" ]; then
+          finish error "No Doppler identity id was given, so there is nothing to prove a refusal against. Declare the identity variable before building."
+        fi
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          finish error "The runner offered no OIDC token endpoint (ACTIONS_ID_TOKEN_REQUEST_TOKEN/URL unset), so no refusal could be shown. Grant the calling job permissions: id-token: write."
+        fi
+
+        http_call() {
+          # Prints the HTTP status; the body lands in $BODY. A transport
+          # failure or timeout (no complete response) is a 000 status.
+          local rc=0 status
+          : > "$BODY"
+          status="$(curl -sS --connect-timeout 10 --max-time 30 -o "$BODY" -w '%{http_code}' "$@")" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "000"
+          else
+            echo "$status"
+          fi
+        }
+
+        # The raw answer, for the record: Doppler's wording is documented
+        # nowhere, so every run prints what it actually said. Any field whose
+        # name mentions a token is redacted, a 2xx body that is not JSON is
+        # withheld (it could be a bare token), and workflow commands are
+        # suspended so the body cannot issue any.
+        redacted_body() {
+          if jq -e . "$BODY" >/dev/null 2>&1; then
+            jq -c 'walk(if type == "object" then with_entries(if (.key | test("token"; "i")) then .value = "<redacted>" else . end) else . end)' "$BODY"
+          elif [ "${http_status:0:1}" = "2" ]; then
+            echo "<non-JSON 2xx body withheld>"
+          else
+            head -c 2000 "$BODY" | tr '\r\n' '  '
+            echo
+          fi
+        }
+
+        # The audience is a query parameter, so it is percent-encoded: an
+        # audience holding URL syntax must reach GitHub as one value.
+        audience_q="$(jq -rn --arg a "$OIDC_AUDIENCE" '$a | @uri')"
+        oidc_status="$(http_call \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience_q}")"
+        if [ "$oidc_status" -lt 200 ] || [ "$oidc_status" -ge 300 ]; then
+          finish error "GitHub OIDC token fetch failed (HTTP ${oidc_status}), so no refusal could be shown. Check the job grants id-token: write."
+        fi
+        OIDC_TOKEN="$(jq -r '.value // empty' "$BODY" 2>/dev/null)" || OIDC_TOKEN=""
+        if [ -z "$OIDC_TOKEN" ]; then
+          finish error "GitHub OIDC token fetch returned no token value, so no refusal could be shown."
+        fi
+
+        http_status="$(http_call \
+          -X POST \
+          -H 'accept: application/json' \
+          -H 'content-type: application/json' \
+          --data "$(jq -nc --arg id "$DOPPLER_IDENTITY_ID" --arg token "$OIDC_TOKEN" '{identity: $id, token: $token}')" \
+          "${DOPPLER_API_URL}/v3/auth/oidc")"
+
+        # Mask any token before anything about the answer is printed.
+        token=""
+        if [ "${http_status:0:1}" = "2" ]; then
+          token="$(jq -r '.token // empty' "$BODY" 2>/dev/null)" || token=""
+          if [ -n "$token" ]; then
+            printf '::add-mask::%s\n' "$token"
+          fi
+        fi
+
+        raw="$(redacted_body)"
+        stop="stop-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+        echo "::group::Doppler's raw answer to the identity request"
+        echo "::stop-commands::${stop}"
+        echo "HTTP ${http_status}"
+        printf '%s\n' "$raw"
+        echo "::${stop}::"
+        echo "::endgroup::"
+
+        message="$(jq -r '(.messages // []) | if type == "array" then map(tostring) | join("; ") else tostring end' "$BODY" 2>/dev/null | tr '\r\n' '  ')" || message=""
+        doppler_shaped=no
+        if jq -e 'type == "object" and (.messages | type) == "array"' "$BODY" >/dev/null 2>&1; then
+          doppler_shaped=yes
+        fi
+
+        # GITHUB_WORKFLOW_REF names the workflow that was triggered; for a
+        # reusable workflow that is the caller, not the called file.
+        run_of="${GITHUB_WORKFLOW_REF:-unknown}"
+        run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}"
+
+        record() {
+          # $1 heading, $2 closing sentence. Appends the evidence table.
+          {
+            echo "### $1"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Identity | \`${DOPPLER_IDENTITY_ID}\` |"
+            echo "| Identity bound to | \`${BOUND_ENVIRONMENT}\` |"
+            echo "| Job | \`${GITHUB_JOB:-?}\`, run of \`${run_of}\` |"
+            echo "| Doppler answered | HTTP ${http_status}${message:+: ${message}} |"
+            echo "| Run | ${run_url} |"
+            echo
+            echo "$2"
+            echo
+            echo "<details><summary>Raw answer (token fields redacted)</summary>"
+            echo
+            echo '```text'
+            printf '%s\n' "$raw"
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+        }
+
+        # A message that says the identity itself is unknown. Tight on
+        # purpose: "Invalid token: subject claim does not match identity" is
+        # a refusal of the claims and must not match.
+        unknown_identity_re='(identity|identities)( id)?( was| is)? (not found|does not exist|doesn.t exist|no longer exists)|(unknown|no such|nonexistent|non-existent) (service account )?identit(y|ies)|invalid (service account )?identity( id)?[[:space:]]*($|[.;,:])'
+
+        case "$http_status" in
+          2*)
+            # The control is broken. Do not let the token outlive this step.
+            revoked="no-token"
+            revoke_note="no token in the response"
+            if [ -n "$token" ]; then
+              revoke_status="$(http_call \
+                -X POST \
+                -H "authorization: Bearer $token" \
+                -H 'content-type: application/json' \
+                --data "$(jq -nc --arg t "$token" '{token: $t}')" \
+                "${DOPPLER_API_URL}/v3/auth/revoke")"
+              if [ "$revoke_status" -ge 200 ] && [ "$revoke_status" -lt 300 ]; then
+                revoked="yes"
+                revoke_note="revoked (HTTP ${revoke_status})"
+              else
+                revoked="failed"
+                revoke_note="revoke FAILED (HTTP ${revoke_status}); the token expires on its own within an hour"
+                echo "::warning::The issued token could not be revoked (HTTP ${revoke_status}); it expires on its own within an hour. The run still fails."
+              fi
+            fi
+            message="a token was issued; ${revoke_note}"
+            record "Doppler identity accepted a job outside \`${BOUND_ENVIRONMENT}\`" \
+              "The identity is not bound to the \`${BOUND_ENVIRONMENT}\` environment. Nothing was read; the run is stopped so the binding is fixed in hht_admin before any job relies on it."
+            finish issued "Doppler issued identity ${DOPPLER_IDENTITY_ID} to this job (HTTP ${http_status}), which does not run in '${BOUND_ENVIRONMENT}'. The identity must accept only jobs inside that environment; fix its claims in hht_admin Terraform. Token: ${revoke_note}."
+            ;;
+          401|403)
+            if printf '%s' "$message" | grep -qiE "$unknown_identity_re"; then
+              record "Doppler identity could not be proved refused: the identity is unknown" \
+                "Doppler does not know this identity, so its refusal says nothing about the \`${BOUND_ENVIRONMENT}\` binding. The identity id variable is stale, or the identity was deleted or replaced; apply hht_admin and re-run."
+              finish unknown-identity "Doppler does not know identity ${DOPPLER_IDENTITY_ID} (HTTP ${http_status}${message:+: ${message}}). A refusal of an unknown identity proves nothing about the '${BOUND_ENVIRONMENT}' binding; the id variable is stale or the identity was replaced. Apply hht_admin and re-run."
+            fi
+            record "Doppler identity refused outside \`${BOUND_ENVIRONMENT}\`" \
+              "What this identity reads stays unreadable from any job outside \`${BOUND_ENVIRONMENT}\`."
+            echo "::notice::Doppler refused identity ${DOPPLER_IDENTITY_ID} to this job as required (HTTP ${http_status}${message:+: ${message}})."
+            finish refused "Doppler refused identity ${DOPPLER_IDENTITY_ID} to this job (HTTP ${http_status}${message:+: ${message}})."
+            ;;
+          404)
+            if [ "$doppler_shaped" = yes ]; then
+              record "Doppler identity could not be proved refused: the identity is unknown" \
+                "Doppler does not know this identity, so its refusal says nothing about the \`${BOUND_ENVIRONMENT}\` binding. The identity id variable is stale, or the identity was deleted or replaced; apply hht_admin and re-run."
+              finish unknown-identity "Doppler does not know identity ${DOPPLER_IDENTITY_ID} (HTTP 404${message:+: ${message}}). A refusal of an unknown identity proves nothing about the '${BOUND_ENVIRONMENT}' binding; the id variable is stale or the identity was replaced. Apply hht_admin and re-run."
+            fi
+            finish error "The identity request answered HTTP 404 without a Doppler error body, so the endpoint, not the identity, is what was not found. Nothing was proved."
+            ;;
+          000)
+            finish error "Doppler gave no response to the identity request (connection failed or timed out), so neither a refusal nor an acceptance was shown. Re-run; if it persists, check api.doppler.com status."
+            ;;
+          *)
+            finish error "Doppler answered HTTP ${http_status}${message:+ (${message})} to the identity request, which is neither a refusal (401/403) nor an acceptance, so nothing was proved. Re-run; if it persists, read the raw answer above."
+            ;;
+        esac
+
+    # Implements: HHT-OPS-environment-bound-deploy-identity/A
+    - name: Fail unless Doppler refused the identity
+      if: inputs.fail_unless_refused != 'false'
+      shell: bash
+      env:
+        OUTCOME: ${{ steps.ask.outputs.outcome }}
+        REASON: ${{ steps.ask.outputs.reason }}
+      run: |
+        if [ "${OUTCOME:-}" = "refused" ]; then
+          exit 0
+        fi
+        echo "::error::[${OUTCOME:-no outcome}] ${REASON:-The classifying step recorded no outcome, so nothing was proved.}"
+        exit 1
