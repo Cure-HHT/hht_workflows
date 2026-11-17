@@ -1197,6 +1197,7 @@ jobs:
   notify-failure:
     name: Notify failure
     needs:
+      - assert-doppler-identity-refused
       - build-oq
       - build-urs
       - confidential-terms-gate
