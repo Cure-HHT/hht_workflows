@@ -543,3 +543,45 @@ def test_ceiling_check_runs_for_the_portal():
     step = next(s for s in DOC["jobs"]["deploy"]["steps"]
                 if s.get("name") == CEILING_STEP)
     assert step.get("if") == "inputs.service-name == 'portal-service'"
+
+
+AGENT_STEP = "Refuse an agent identity as starter or re-runner of a production deploy"
+AGENTS = ("curehht-agent-seth[bot]", "cure-hht-agent[bot]", "CureHHT-Agent-alice")
+
+
+def _agent_guard(target: str, actor: str, triggering: str) -> subprocess.CompletedProcess:
+    env = {**os.environ, "TARGET_ENV": target, "ACTOR": actor, "TRIGGERING_ACTOR": triggering}
+    return subprocess.run(["bash", "-c", _run_body(TEXT, AGENT_STEP)], env=env,
+                          capture_output=True, text=True)
+
+
+# Verifies: HHT-OPS-cicd-app-operations/R
+def test_agent_refusal_is_the_deploy_jobs_first_step():
+    step = DOC["jobs"]["deploy"]["steps"][0]
+    assert step["name"] == AGENT_STEP, "it must precede the post-approval recheck's credential"
+    assert step["env"] == {"ACTOR": "${{ github.actor }}", "TRIGGERING_ACTOR": "${{ github.triggering_actor }}"}
+    assert "${{" not in step["run"]
+
+
+# Verifies: HHT-OPS-cicd-app-operations/R
+@pytest.mark.parametrize("target", ["prod", "PROD", "example-prod"])
+@pytest.mark.parametrize("agent", AGENTS)
+def test_an_agent_neither_starts_nor_re_runs_a_production_deploy(target, agent):
+    started = _agent_guard(target, agent, agent)
+    assert started.returncode != 0 and "agent identity" in started.stdout
+    assert _agent_guard(target, "alice", agent).returncode != 0, "a re-run by an agent"
+
+
+# Verifies: HHT-OPS-cicd-app-operations/R
+@pytest.mark.parametrize("actor,triggering", [("alice", "alice"), ("alice", "bob"), ("alice", ""),
+                                              ("my-curehht-agent", "hht-agent-fan")])
+def test_a_person_deploys_production(actor, triggering):
+    r = _agent_guard("prod", actor, triggering)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+# Verifies: HHT-OPS-cicd-app-operations/R
+@pytest.mark.parametrize("target", ["dev", "qa", "uat", "production-like", "prodlike"])
+def test_an_agent_deploys_a_non_production_environment(target):
+    r = _agent_guard(target, AGENTS[0], AGENTS[0])
+    assert r.returncode == 0, r.stdout + r.stderr
