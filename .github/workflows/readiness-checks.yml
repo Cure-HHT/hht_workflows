@@ -44,7 +44,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Fetch Doppler secrets via doppler-oidc-auth
         uses: ./.github/actions/doppler-oidc-auth
         with:
@@ -83,7 +83,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install Doppler CLI
         # Pin Doppler CLI version. Mirrors hht_admin's canonical pin in
         # cure-hht/hht_admin/.github/versions.env (DOPPLER_CLI_VERSION) so
@@ -125,6 +125,93 @@ jobs:
           fi
           echo "doppler-cli-oidc-auth verified: CLI lists projects with the minted token."
 
+  assert-doppler-identity-refused:
+    # Implements: HHT-OPS-environment-bound-deploy-identity/A
+    # Implements: HHT-OPS-composite-action-library/A+B+F
+    #   Readiness of the recorded-refusal action against the real Doppler
+    #   API, on every outcome this repository can provoke live:
+    #
+    #   Probe 1: an identity that does not exist. The action must classify
+    #   Doppler's answer as `unknown-identity` -- the whole defence against a
+    #   stale identity variable passing as a refusal.
+    #   Probe 2: the readiness identity, which accepts this repository, asked
+    #   for with an audience it was not declared with. Doppler must refuse
+    #   the claims with a 401/403 and the action must classify it `refused`:
+    #   the passing outcome, observed live rather than invented.
+    #   Probe 3: the readiness identity with its real audience, which is
+    #   issued; the action must classify it `issued` and revoke the token.
+    #
+    #   Doppler's wording for these answers is documented nowhere. Each
+    #   probe prints Doppler's raw status and body (token fields redacted)
+    #   in its log group, so a run of this job is the record the action's
+    #   classification is checked against.
+    #
+    #   The probes set `fail_unless_refused: false`, so the action's
+    #   classifying step never fails and its outputs are always readable;
+    #   the last step asserts each probe's outputs and decides the job.
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required to ask Doppler at all
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Probe an identity that does not exist
+        id: unknown
+        uses: ./.github/actions/assert-doppler-identity-refused
+        with:
+          doppler_identity_id: 00000000-0000-4000-8000-000000000000
+          environment: readiness-nowhere
+          fail_unless_refused: 'false'
+      - name: Probe the readiness identity with an audience it does not accept
+        id: refused
+        uses: ./.github/actions/assert-doppler-identity-refused
+        with:
+          doppler_identity_id: ${{ vars.READINESS_DOPPLER_CLI_IDENTITY_ID || vars.READINESS_DOPPLER_IDENTITY_ID }}
+          environment: readiness-nowhere
+          audience: cure-hht-readiness-wrong-audience
+          fail_unless_refused: 'false'
+      - name: Probe the readiness identity, which accepts this job
+        id: issued
+        uses: ./.github/actions/assert-doppler-identity-refused
+        with:
+          doppler_identity_id: ${{ vars.READINESS_DOPPLER_CLI_IDENTITY_ID || vars.READINESS_DOPPLER_IDENTITY_ID }}
+          environment: readiness-nowhere
+          fail_unless_refused: 'false'
+      - name: Assert each probe was classified for exactly the right reason
+        env:
+          UNKNOWN_OUTCOME: ${{ steps.unknown.outputs.outcome }}
+          UNKNOWN_STATUS: ${{ steps.unknown.outputs.http_status }}
+          UNKNOWN_REASON: ${{ steps.unknown.outputs.reason }}
+          REFUSED_OUTCOME: ${{ steps.refused.outputs.outcome }}
+          REFUSED_STATUS: ${{ steps.refused.outputs.http_status }}
+          REFUSED_REASON: ${{ steps.refused.outputs.reason }}
+          ISSUED_OUTCOME: ${{ steps.issued.outputs.outcome }}
+          ISSUED_STATUS: ${{ steps.issued.outputs.http_status }}
+          ISSUED_REVOKED: ${{ steps.issued.outputs.revoked }}
+          ISSUED_REASON: ${{ steps.issued.outputs.reason }}
+        run: |
+          set -euo pipefail
+          failed=0
+          check() {
+            # $1 probe, $2 expected outcome, $3 actual outcome, $4 status, $5 reason
+            echo "${1}: outcome=${3:-<unset>} http_status=${4:-<unset>} (${5:-no reason})"
+            if [ "$3" != "$2" ]; then
+              echo "::error::Probe '${1}' was classified '${3:-<unset>}' (HTTP ${4:-?}), not '${2}'. Read Doppler's raw answer in that probe's log group; if Doppler's wording or status differs from what the action expects, the action's classification must follow it. Reason given: ${5:-none}"
+              failed=1
+            fi
+          }
+          check unknown unknown-identity "$UNKNOWN_OUTCOME" "$UNKNOWN_STATUS" "$UNKNOWN_REASON"
+          check refused refused "$REFUSED_OUTCOME" "$REFUSED_STATUS" "$REFUSED_REASON"
+          check issued issued "$ISSUED_OUTCOME" "$ISSUED_STATUS" "$ISSUED_REASON"
+          if [ "$ISSUED_OUTCOME" = "issued" ] && [ "$ISSUED_REVOKED" != "yes" ]; then
+            echo "::error::The issued token was not revoked (revoked=${ISSUED_REVOKED:-<unset>}). The action must be able to revoke what it is issued."
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "assert-doppler-identity-refused verified: unknown identity -> unknown-identity; wrong audience -> refused; accepted -> issued, token revoked."
+
   gcp-wif-auth:
     # Implements: HHT-OPS-identity-over-keys/A
     #   End-to-end readiness check of the WIF handshake via the composite action.
@@ -133,7 +220,7 @@ jobs:
       id-token: write   # required by the WIF auth exchange
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Auth to GCP via gcp-wif-auth
         id: auth
         uses: ./.github/actions/gcp-wif-auth
@@ -170,7 +257,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Seed RELEASE_NOTES.md and a pending fragment
         run: |
           set -euo pipefail
@@ -224,10 +311,10 @@ jobs:
       packages: write    # push to GHCR
       id-token: write    # keyless cosign sign (OIDC token)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -235,7 +322,7 @@ jobs:
 
       - name: Build and push fixture image
         id: build
-        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75  # v6.9.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .github/fixtures/cosign-verify
           push: true
@@ -379,7 +466,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Initialize fixture repos
         # elspais resolves a project root via `git rev-parse --show-toplevel`.
         # Inside this checkout the fixture dirs resolve to the hht_workflows
@@ -440,7 +527,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Initialize fixture repo
         # elspais resolves a project root via `git rev-parse --show-toplevel`;
         # the fixture needs its own toplevel. No commit required.
@@ -481,7 +568,7 @@ jobs:
       id-token: write   # required by the gated Doppler-path step below
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - name: Happy path - synthetic term absent from this PR
@@ -576,7 +663,7 @@ jobs:
       id-token: write   # required by the Doppler OIDC fetch inside the action
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0   # the scan diffs base..head
       - name: Scan four surfaces for confidential terms
@@ -603,7 +690,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Seed a stand-in base image and a sponsor config
         id: seed
@@ -764,8 +851,8 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.12'
       - name: Unit-test the context derivation
@@ -906,8 +993,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.12'
       - name: Unit-test the linter
@@ -975,7 +1062,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Refusal paths (offline)
         run: bash .github/actions/install-doppler-cli/tests/install_test.sh
       - name: Install a real release via the action
@@ -996,7 +1083,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Refusal paths (offline)
         run: bash .github/actions/install-gitleaks/tests/install_test.sh
       - name: Install a real release via the action
@@ -1060,7 +1147,7 @@ jobs:
       oq: ${{ steps.decide.outputs.oq }}
       preflight: ${{ steps.decide.outputs.preflight }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -1110,6 +1197,7 @@ jobs:
   notify-failure:
     name: Notify failure
     needs:
+      - assert-doppler-identity-refused
       - build-oq
       - build-urs
       - confidential-terms-gate
@@ -1131,7 +1219,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@4a7ad15496d2368acd0da1a3d6dd44b8a645ea5b  # v1.9.0
         with:
           slack-token: ${{ secrets.SLACK_APP_OATH_TOKEN }}

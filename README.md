@@ -75,6 +75,7 @@ each action's README for usage):
 | [`sponsor-base-preflight`](.github/actions/sponsor-base-preflight/) | Reject a sponsor build whose core base images are not digest-pinned, or whose pinned `portal-server` does not declare every permission the sponsor's `role-permissions.yaml` grants |
 | [`build-oq`](.github/actions/build-oq/) | Generate the OQ traceability deliverables (committed CSV extract plus a run-bound workbook) from the elspais graph of the calling repo and its associates; requires a pinned `elspais-version` input |
 | [`notify-failure`](.github/actions/notify-failure/) | The single way a workflow announces its own failure: derives the failed job/step from the run's own jobs API (no per-workflow config, no workflow-name list) and delegates the post to `slack-notify` |
+| [`assert-doppler-identity-refused`](.github/actions/assert-doppler-identity-refused/) | Ask Doppler for an identity the calling job must NOT be able to hold; record the refusal in the job summary and fail the run (revoking the token, unprinted) if one is issued. The negative form of the OIDC handshake, for environment-bound identities |
 | [`install-doppler-cli`](.github/actions/install-doppler-cli/) | Install the Doppler CLI from its GitHub release after verifying Doppler's signature against the pinned release key; replaces `install.sh \| sudo sh` |
 | [`install-gitleaks`](.github/actions/install-gitleaks/) | Install gitleaks after checking the tarball against the digest recorded for its version; the one gitleaks install path (`secrets-scan` uses it) |
 | [`download-integrity-check`](.github/actions/download-integrity-check/) | Run the `download-integrity` hook over the whole repository in CI, so a bypassed local hook still cannot land an unverified download |
@@ -133,7 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # gitleaks needs full history
       - uses: Cure-HHT/hht_workflows/.github/actions/secrets-scan@<commit-sha>  # SHA-pin; see "Pinning & versioning"
@@ -201,7 +202,7 @@ looking at the result.
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure@<commit-sha>  # SHA-pin; see "Pinning & versioning"
         with:
           slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -289,8 +290,8 @@ workflow tree from the workspace.
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5      # optional; see below
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7      # optional; see below
         with:
           python-version: '3.12'
       - uses: Cure-HHT/hht_workflows/.github/actions/notify-failure-lint@<commit-sha>  # SHA-pin; see "Pinning & versioning"
@@ -325,6 +326,16 @@ data-residency choice; none, several, or one elsewhere refuses before
 anything changes.
 The revision authenticates to Doppler with its runtime identity; there is no
 stored-token path.
+
+The portal runs one instance per revision. After the canary revision is
+created, the deploy reads that revision's own instance ceiling
+(`autoscaling.knative.dev/maxScale`) and refuses to verify it unless the
+ceiling is exactly 1; the prior revision keeps all traffic. The ceiling comes
+from the sponsor's Terraform (`max_instance_count` in
+`sponsor-envs/portal-service.tf`), not from this workflow. Before a sponsor
+advances its pin to a release that carries this check, each environment's
+Terraform must be applied at `max_instance_count = 1`; until it is, every
+deploy to that environment is refused.
 
 The workflow declares no concurrency group and no dispatch trigger: the caller
 serialises per environment and owns the dispatch form. The

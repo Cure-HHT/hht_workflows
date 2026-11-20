@@ -22,7 +22,7 @@ description: "Run the no-or-true-guard pre-commit hook against all files in CI"
 runs:
   using: 'composite'
   steps:
-    # Caller must `actions/checkout@v4` before invoking this action —
+    # Caller must `actions/checkout` before invoking this action —
     # pre-commit needs the working tree to scan.
     - name: Install pre-commit
       shell: bash

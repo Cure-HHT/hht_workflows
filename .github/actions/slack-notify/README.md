@@ -93,7 +93,7 @@ omitted, `routing.<event>` (must be a leaf, not a dict).
 ## Usage
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
 
 - name: Notify Slack on deploy success
   if: success()

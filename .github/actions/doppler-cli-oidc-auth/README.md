@@ -19,7 +19,7 @@ projects (audit / manifest / enumeration use cases).
           id-token: write   # required for the OIDC exchange
           contents: read
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v7
 
           - uses: Cure-HHT/hht_workflows/.github/actions/doppler-cli-oidc-auth@<sha>
             with:

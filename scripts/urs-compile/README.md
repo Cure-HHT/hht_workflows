@@ -202,9 +202,9 @@ Prerequisites:
 In a consumer-repo workflow:
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with: { path: primary }
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with:
     repository: Cure-HHT/hht_diary
     path: associate
