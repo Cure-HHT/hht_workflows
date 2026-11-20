@@ -106,6 +106,23 @@ inputs:
       associate-commits. Required when that input is set.
     required: false
     default: ""
+  source-date-epoch:
+    description: |
+      SOURCE_DATE_EPOCH for the compile: fixes the build date and every
+      timestamp the toolchain writes, so compiling the same inputs again
+      writes the same bytes. Empty takes the commit time of primary-root's
+      HEAD, which is a property of the inputs rather than of when the run
+      happened.
+    required: false
+    default: ""
+  compile-image:
+    description: |
+      The image the compile runs in, as <name>@sha256:<64 hex>, recorded in
+      the deliverables' provenance. A tag is refused: it can move after the
+      deliverable is written. Empty records that the compile ran on the
+      runner's toolchain, not a pinned image.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -183,12 +200,44 @@ runs:
       run: |
         "${{ github.action_path }}/obtain-associates.sh"
 
+    # The epoch is a property of the inputs: the primary commit's time. A
+    # clock-derived epoch would make two compiles of one commit differ.
+    - name: Fix the source date
+      id: epoch
+      shell: bash
+      env:
+        EPOCH_INPUT: ${{ inputs.source-date-epoch }}
+        PRIMARY: ${{ inputs.primary-root }}
+      run: |
+        set -euo pipefail
+        epoch="${EPOCH_INPUT}"
+        if [ -z "$epoch" ]; then
+          if ! epoch="$(git -C "$PRIMARY" log -1 --format=%ct 2>/dev/null)" || [ -z "$epoch" ]; then
+            echo "::error::source-date-epoch is empty and ${PRIMARY} has no commit to take it from; pass source-date-epoch" >&2
+            exit 1
+          fi
+          # A pipeline image's repository is fabricated over the tree when the
+          # image is built, so its commit time is the build's clock, not a
+          # property of the inputs (scripts/urs-compile/source-identity.sh).
+          if [ "$(git -C "$PRIMARY" log -1 --format=%ae)" = "pipeline@invalid" ]; then
+            echo "::error::${PRIMARY}'s history was fabricated by a pipeline image, so its commit time is not the source's; pass source-date-epoch" >&2
+            exit 1
+          fi
+        fi
+        if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then
+          echo "::error::source-date-epoch must be whole seconds, got '${epoch}'" >&2
+          exit 1
+        fi
+        echo "epoch=${epoch}" >> "$GITHUB_OUTPUT"
+
     - name: Run URS compile
       shell: bash
       env:
         MANIFEST: ${{ inputs.manifest }}
         ASSOCIATE_ROOTS: ${{ steps.associates.outputs.roots || inputs.associate-roots }}
         OUTPUT_BASENAME: ${{ inputs.output-basename }}
+        SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
+        COMPILE_IMAGE: ${{ inputs.compile-image }}
         # The provenance record names the tool by the reference that invoked it.
         # Named here so the value a reviewer reads in the caller's `uses:` line
         # is visible where the compile is configured. Under its own name rather

@@ -42,14 +42,32 @@ source_slug() {
   printf 'unidentified (no .upstream-repo stamp, no git origin remote at %s)\n' "$root"
 }
 
+# The author a pipeline image gives the repository it initialises over a tree,
+# for the tools that require one. That commit names nothing upstream: asking it
+# which revision this is returns a plausible wrong answer rather than an error.
+PIPELINE_FABRICATED_AUTHOR="pipeline@invalid"
+
+# True when the tree's git history is the one a pipeline image fabricated.
+_fabricated_history() {
+  local email
+  email="$(git -C "$1" log -1 --format=%ae 2>/dev/null)" || return 1
+  [ "$email" = "$PIPELINE_FABRICATED_AUTHOR" ]
+}
+
 # The revision a tree holds: the pinned commit where one was stamped, and git's
-# description of the working tree otherwise.
+# description of the working tree otherwise. A history the pipeline fabricated
+# is refused rather than described: its commit is not the source's.
 source_version() {
   local root="$1" stamped described
   stamped="$(_stamped "$root/.upstream-commit")"
   if [ -n "$stamped" ]; then
     printf '%s\n' "$stamped"
     return 0
+  fi
+
+  if _fabricated_history "$root"; then
+    echo "error: $root carries a history the pipeline fabricated (author $PIPELINE_FABRICATED_AUTHOR) and no .upstream-commit stamp; its git revision names nothing upstream, so it is not reported as one" >&2
+    return 1
   fi
 
   described="$(git -C "$root" describe --tags --always --dirty 2>/dev/null)" || described=""
@@ -59,6 +77,38 @@ source_version() {
   fi
 
   printf 'unidentified (no .upstream-commit stamp, no git description at %s)\n' "$root"
+}
+
+# The full commit a tree holds, for a record that names commits rather than
+# descriptions: the stamp where there is one, git's HEAD otherwise, and nothing
+# (status 1) where neither answers. A fabricated history is refused as above.
+source_commit() {
+  local root="$1" stamped sha
+  stamped="$(_stamped "$root/.upstream-commit")"
+  if [ -n "$stamped" ]; then
+    printf '%s\n' "$stamped"
+    return 0
+  fi
+  if _fabricated_history "$root"; then
+    echo "error: $root carries a history the pipeline fabricated (author $PIPELINE_FABRICATED_AUTHOR) and no .upstream-commit stamp; its git revision names nothing upstream, so it is not reported as one" >&2
+    return 2
+  fi
+  sha="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || return 1
+  printf '%s\n' "$sha"
+}
+
+# The image the compile ran in, by digest, or nothing when it ran on a host
+# toolchain. A value that is set must name a digest: a tag can move after the
+# deliverable is written, and then names a different toolchain than the one
+# that produced it.
+compile_image() {
+  local image="${COMPILE_IMAGE:-}"
+  [ -z "$image" ] && return 0
+  if ! printf '%s' "$image" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'; then
+    echo "error: COMPILE_IMAGE must name an image by digest (<name>@sha256:<64 hex>), got '$image'" >&2
+    return 1
+  fi
+  printf '%s\n' "$image"
 }
 
 # The compile pipeline's own identity.

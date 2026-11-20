@@ -67,6 +67,10 @@ class Provenance:
     #: sponsor_name -- a file naming this but not the others yields only
     #: this row.
     protocol_version: str | None = None
+    #: The image the report was compiled in, as <name>@sha256:<hex>. Empty when
+    #: it was compiled on a host toolchain, which the sheet then says outright
+    #: rather than leaving a blank a reader could take for an omission.
+    compile_image: str = ""
 
 
 def _headers(columns: tuple[str, ...], width: int) -> list[str]:
@@ -188,6 +192,7 @@ def _provenance_rows(manifest: Manifest, prov: Provenance) -> list[list[str]]:
         *[["Associate repository commit", c] for c in prov.associate_commits],
         ["elspais version", prov.elspais_version],
         ["Generator version", prov.tool_version],
+        ["Compile image", prov.compile_image or "none recorded (host toolchain, not pinned by digest)"],
         [],
         *_column_definition_rows(manifest),
         [],
@@ -393,9 +398,11 @@ def write_workbook(
 ) -> None:
     """Write the three-sheet workbook, provenance first.
 
-    Not committed: a workbook embeds creation and modification times and
-    per-entry archive timestamps, so two with identical content differ byte
-    for byte. It is uploaded as an artifact bound to the run instead.
+    Not committed: it is uploaded as an artifact bound to the run instead.
+    openpyxl embeds creation and modification times and per-entry archive
+    timestamps; oq-compile.sh fixes them afterwards (scripts/reproducible/),
+    so two compiles of the same inputs under one SOURCE_DATE_EPOCH write the
+    same bytes.
     """
     wb = Workbook()
 
