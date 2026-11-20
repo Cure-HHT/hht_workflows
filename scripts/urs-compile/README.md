@@ -170,6 +170,15 @@ The stamp wins where both exist. A stamped tree that someone also ran `git init`
 in holds the artifact's content whatever its working history says, and only the
 stamp names what the compile actually read.
 
+A history the pipeline fabricated is refused rather than described. A pipeline
+image initialises a repository over the tree it holds, for tools that need
+one, and authors that commit as `pipeline@invalid`; its revision names nothing
+upstream. Such a tree must carry a stamp, or the compile stops.
+
+Where `COMPILE_IMAGE` names the image the compile ran in, by digest, the record
+names it too. A tag is refused: it can be moved to another image after the
+deliverable is written.
+
 The third row is deliberately not the word `unknown`. A row reading `unknown`
 looks like a value, and a reader cannot tell from it whether the source was
 unstamped, unversioned, or simply absent.
@@ -183,6 +192,14 @@ idea of now:
 ```bash
 SOURCE_DATE_EPOCH=1788998400 ./compile-urs.sh /path/to/consumer/worktree
 ```
+
+After rendering, the compile fixes the two things the epoch does not: the PDF
+trailer identifier and the DOCX archive timestamps
+(`../reproducible/normalise.py`, measured in
+`docs/urs-reproducibility-findings.md`). So under one epoch, in one toolchain,
+a recompile writes the same bytes for every deliverable. The `build-urs`
+action sets the epoch to the commit time of `primary-root`'s HEAD unless
+`source-date-epoch` is given.
 
 Unset, the date comes from the clock. That means a recompile from identical
 sources produces a different provenance file the next day, so two builds cannot

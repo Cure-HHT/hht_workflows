@@ -46,6 +46,23 @@ inputs:
     description: Python version used to run the generator.
     required: false
     default: '3.11'
+  source-date-epoch:
+    description: |
+      SOURCE_DATE_EPOCH for the compile: fixes the build date and every
+      timestamp the toolchain writes, so compiling the same inputs again
+      writes the same bytes. Empty takes the commit time of primary-root's
+      HEAD, which is a property of the inputs rather than of when the run
+      happened.
+    required: false
+    default: ""
+  compile-image:
+    description: |
+      The image the compile runs in, as <name>@sha256:<64 hex>, recorded in
+      the deliverables' provenance. A tag is refused: it can move after the
+      deliverable is written. Empty records that the compile ran on the
+      runner's toolchain, not a pinned image.
+    required: false
+    default: ""
 
 outputs:
   requirement-count:
@@ -78,12 +95,37 @@ runs:
         pip install --quiet -r "${{ github.action_path }}/../../../scripts/oq-compile/requirements-oq.txt"
         pip install --quiet "elspais==${{ inputs.elspais-version }}"
 
+    # The epoch is a property of the inputs: the primary commit's time. A
+    # clock-derived epoch would make two compiles of one commit differ.
+    - name: Fix the source date
+      id: epoch
+      shell: bash
+      env:
+        EPOCH_INPUT: ${{ inputs.source-date-epoch }}
+        PRIMARY: ${{ inputs.primary-root }}
+      run: |
+        set -euo pipefail
+        epoch="${EPOCH_INPUT}"
+        if [ -z "$epoch" ]; then
+          if ! epoch="$(git -C "$PRIMARY" log -1 --format=%ct 2>/dev/null)" || [ -z "$epoch" ]; then
+            echo "::error::source-date-epoch is empty and ${PRIMARY} has no commit to take it from; pass source-date-epoch" >&2
+            exit 1
+          fi
+        fi
+        if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then
+          echo "::error::source-date-epoch must be whole seconds, got '${epoch}'" >&2
+          exit 1
+        fi
+        echo "epoch=${epoch}" >> "$GITHUB_OUTPUT"
+
     - name: Compile the OQ report
       id: compile
       shell: bash
       env:
         ASSOCIATE_ROOTS: ${{ inputs.associate-roots }}
         MANIFEST: ${{ inputs.manifest }}
+        SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
+        COMPILE_IMAGE: ${{ inputs.compile-image }}
         # The generator identity for the provenance sheet. A remote `uses:`
         # unpacks this action as a tarball with no .git, so the script's own
         # git derivation would resolve to "unknown" on every consumer run.

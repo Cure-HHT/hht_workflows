@@ -212,3 +212,66 @@ def test_an_empty_action_context_does_not_blank_the_runners_value(tmp_path):
     slug, version = _tool_identity(env, tmp_path)
     assert slug == "Cure-HHT/hht_workflows"
     assert version == "ec2de47775ad86d146b79c5f80f6bdda2e181064"
+
+
+# --- a history the pipeline fabricated, and the compile image -----------------
+
+
+def _call_status(function: str, root: pathlib.Path, env: dict | None = None) -> subprocess.CompletedProcess:
+    script = f'. "{HELPER}"\n{function} "{root}"\n'
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                          env={"PATH": "/usr/bin:/bin", **(env or {})})
+
+
+def _fabricated(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A tree as a pipeline image leaves it: content with a repository
+    initialised over it, authored by the pipeline."""
+    root = tmp_path / "fabricated"
+    root.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=pipeline", "-c", "user.email=pipeline@invalid",
+         "commit", "-q", "--allow-empty", "-m", "pipeline: initialised tree"],
+        check=True,
+    )
+    return root
+
+
+def test_a_fabricated_history_is_not_reported_as_a_revision(tmp_path):
+    """Its commit names nothing upstream: a plausible wrong answer is worse than
+    a refusal."""
+    for function in ("source_version", "source_commit"):
+        r = _call_status(function, _fabricated(tmp_path / function))
+        assert r.returncode != 0, function
+        assert r.stdout == "", function
+        assert "fabricated" in r.stderr, function
+
+
+def test_a_stamp_wins_over_a_fabricated_history(tmp_path):
+    root = _fabricated(tmp_path)
+    (root / ".upstream-commit").write_text(COMMIT + "\n")
+    assert _call("source_version", root) == COMMIT
+    assert _call("source_commit", root) == COMMIT
+
+
+def test_source_commit_reports_a_checkout_s_full_head(tmp_path):
+    root = _checkout(tmp_path)
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert _call("source_commit", root) == head
+
+
+def test_the_compile_image_is_empty_when_unset(tmp_path):
+    r = _call_status("compile_image", tmp_path)
+    assert r.returncode == 0 and r.stdout == ""
+
+
+def test_a_compile_image_by_digest_is_reported(tmp_path):
+    image = "ghcr.io/example/pipeline@sha256:" + "0" * 64
+    r = _call_status("compile_image", tmp_path, {"COMPILE_IMAGE": image})
+    assert r.returncode == 0 and r.stdout.strip() == image
+
+
+def test_a_compile_image_by_tag_is_refused(tmp_path):
+    r = _call_status("compile_image", tmp_path, {"COMPILE_IMAGE": "ghcr.io/example/pipeline:commit-abc"})
+    assert r.returncode == 1 and "by digest" in r.stderr
