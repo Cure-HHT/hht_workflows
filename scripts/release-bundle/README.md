@@ -50,8 +50,10 @@ bundle.py pack --bundle DIR --out bundle.tar   # prints the archive's SHA-256
 ```
 
 `rebuild.sh` checks the bundle against its manifest, loads the toolchain from
-the bundle (never from a registry), and runs `rebuild` with no network and the
-bundle mounted read-only. It writes the verdict and exits 0 whatever the
+the bundle (never from a registry), and runs `rebuild` with no network, shown
+only the bundle's inputs (`rebuild`, `MANIFEST`, `source/`, `evidence/`)
+read-only. It is not shown `deliverables/`: a rebuild that could read what
+shipped could copy it and reproduce nothing. It writes the verdict and exits 0 whatever the
 verdict says. `admit` is the refusal: it passes only for a verdict bound to
 this bundle's manifest in which every deliverable reproduced. The writer of the
 locked store runs it, so the store refuses a bundle that did not rebuild.

@@ -11,10 +11,12 @@
 #    loaded image must be the one the manifest names (image-id). Nothing is
 #    pulled: an image fetched from a registry would prove the registry, not
 #    the bundle.
-# 3. The bundle's `rebuild` runs inside that image with --network none, the
-#    bundle mounted read-only, under the manifest's SOURCE_DATE_EPOCH, writing
-#    to an empty directory. Denying the network is the only way to show the
-#    bundle does not reach outside itself.
+# 3. The bundle's `rebuild` runs inside that image with --network none, under
+#    the manifest's SOURCE_DATE_EPOCH, writing to an empty directory. It sees
+#    the bundle's inputs only -- rebuild, MANIFEST, source/ and evidence/, all
+#    read-only -- and not deliverables/: a rebuild that could read what shipped
+#    could copy it and "reproduce" it without compiling anything. Denying the
+#    network is the only way to show the bundle does not reach outside itself.
 # 4. bundle.py compare writes the verdict. This script exits 0 when a verdict
 #    was written, whatever it says: refusing is `bundle.py admit`'s job, so a
 #    failed rebuild still leaves its evidence.
@@ -59,15 +61,31 @@ if [ "$loaded" != "$IMAGE_ID" ]; then
 fi
 
 OUT="$(mktemp -d)"
-trap 'rm -rf "$OUT"' EXIT
+INPUTS="$(mktemp -d)"
+trap 'rm -rf "$OUT" "$INPUTS"' EXIT
 chmod 0777 "$OUT"
+
+# What the rebuild is shown: its inputs, never the deliverables it must
+# reproduce. `rebuild` is copied with its executable bit set, because an
+# actions artifact download drops file modes and the bundle's own copy may
+# have lost it; its bytes were verified against the manifest above.
+install -m 0755 "${BUNDLE}/rebuild" "${INPUTS}/rebuild"
+install -m 0644 "${BUNDLE}/MANIFEST" "${INPUTS}/MANIFEST"
+declare -a MOUNTS=(--volume "${INPUTS}:/bundle:ro")
+for section in source evidence; do
+  if [ -d "${BUNDLE}/${section}" ]; then
+    mkdir "${INPUTS}/${section}"   # the mountpoint, inside a read-only mount
+    MOUNTS+=(--volume "${BUNDLE}/${section}:/bundle/${section}:ro")
+  fi
+done
+chmod 0755 "$INPUTS"
 
 # The rebuild's own exit status is recorded, not acted on: a rebuild that
 # fails produces no deliverables, and compare reports each as not reproduced.
 status=0
 "$DOCKER" run --rm \
   --network none \
-  --volume "${BUNDLE}:/bundle:ro" \
+  "${MOUNTS[@]}" \
   --volume "${OUT}:/rebuilt" \
   --env "SOURCE_DATE_EPOCH=${EPOCH}" \
   --env "BUNDLE=/bundle" \

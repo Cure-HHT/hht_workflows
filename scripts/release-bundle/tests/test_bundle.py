@@ -41,17 +41,28 @@ case "$1" in
     bundle_host=""; out_host=""
     envs=()
     entry=""
+    subs=()
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --volume)
           IFS=: read -r host ctr _ <<< "$2"
-          case "$ctr" in /bundle) bundle_host="$host" ;; /rebuilt) out_host="$host" ;; esac
+          case "$ctr" in
+            /bundle) bundle_host="$host" ;;
+            /bundle/*) subs+=("${ctr#/bundle/}=$host") ;;
+            /rebuilt) out_host="$host" ;;
+          esac
           shift 2 ;;
         --env) envs+=("$2"); shift 2 ;;
         --entrypoint) entry="$2"; shift 2 ;;
         --network|--rm) [ "$1" = --network ] && shift; shift ;;
         *) shift ;;
       esac
+    done
+    # A nested mount, as the container sees it: the section's host directory
+    # appears at its mountpoint inside the /bundle mount.
+    for sub in "${subs[@]:-}"; do
+      [ -z "$sub" ] && continue
+      rmdir "$bundle_host/${sub%%=*}" && ln -s "${sub#*=}" "$bundle_host/${sub%%=*}"
     done
     env -i PATH="$PATH" "${envs[@]}" BUNDLE="$bundle_host" REBUILD_OUT="$out_host" "$bundle_host${entry#/bundle}"
     ;;
@@ -186,7 +197,9 @@ def test_the_rebuild_is_denied_the_network_and_runs_the_bundled_image(tmp_path):
     _, _, log = _rebuild(tmp_path, b)
     run = next(line for line in log.splitlines() if line.startswith("run "))
     assert "--network none" in run
-    assert f"{b}:/bundle:ro" in run
+    assert f"{b}/source:/bundle/source:ro" in run
+    assert f"{b}/evidence:/bundle/evidence:ro" in run
+    assert "deliverables" not in run and "toolchain" not in run
     assert run.rstrip().endswith(IMAGE_ID)
     assert not any(line.startswith("pull") for line in log.splitlines())
 
@@ -206,6 +219,27 @@ def test_a_bundle_missing_an_input_does_not_reproduce_and_is_refused(tmp_path):
     refused = _cli("admit", "--bundle", str(b), "--verdict", str(verdict))
     assert refused.returncode == 1
     assert "did not reproduce" in refused.stderr and "deliverables/urs.md" in refused.stderr
+
+
+def test_a_rebuild_that_copies_what_shipped_does_not_reproduce(tmp_path):
+    """The deliverables are what the rebuild must reproduce, so it is not shown
+    them: a rebuild that copies them proves nothing and must not pass."""
+    b = _make_bundle(tmp_path, {"urs": "one"})
+    (b / "rebuild").write_text('#!/usr/bin/env bash\ncp "$BUNDLE"/deliverables/* "$REBUILD_OUT"/\n')
+    (b / "rebuild").chmod(0o755)
+    bd.write_manifest(b, "2026-11.1", IMAGE, IMAGE_ID, EPOCH)
+    r, verdict, _ = _rebuild(tmp_path, b)
+    assert r.returncode == 0
+    assert json.loads(verdict.read_text())["reproduced"] is False
+
+
+def test_a_rebuild_that_lost_its_executable_bit_still_runs(tmp_path):
+    """An actions artifact download drops file modes."""
+    b = _make_bundle(tmp_path, {"urs": "one"})
+    (b / "rebuild").chmod(0o644)
+    r, verdict, _ = _rebuild(tmp_path, b)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(verdict.read_text())["reproduced"] is True
 
 
 def test_a_rebuild_that_fails_outright_still_leaves_a_verdict(tmp_path):
