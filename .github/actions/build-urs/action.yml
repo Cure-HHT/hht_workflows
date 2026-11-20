@@ -216,6 +216,13 @@ runs:
             echo "::error::source-date-epoch is empty and ${PRIMARY} has no commit to take it from; pass source-date-epoch" >&2
             exit 1
           fi
+          # A pipeline image's repository is fabricated over the tree when the
+          # image is built, so its commit time is the build's clock, not a
+          # property of the inputs (scripts/urs-compile/source-identity.sh).
+          if [ "$(git -C "$PRIMARY" log -1 --format=%ae)" = "pipeline@invalid" ]; then
+            echo "::error::${PRIMARY}'s history was fabricated by a pipeline image, so its commit time is not the source's; pass source-date-epoch" >&2
+            exit 1
+          fi
         fi
         if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then
           echo "::error::source-date-epoch must be whole seconds, got '${epoch}'" >&2

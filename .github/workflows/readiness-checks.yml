@@ -27,6 +27,7 @@ on:
       - '.github/fixtures/**'
       - 'scripts/urs-compile/**'
       - 'scripts/oq-compile/**'
+      - 'scripts/reproducible/**'
       - '.github/workflows/readiness-checks.yml'
   pull_request: {}    # always run on PR so the required status check always reports
   workflow_dispatch: {}
@@ -471,9 +472,18 @@ jobs:
         # elspais resolves a project root via `git rev-parse --show-toplevel`.
         # Inside this checkout the fixture dirs resolve to the hht_workflows
         # root (no .elspais.toml there), so each fixture repo needs its own
-        # git toplevel. No commit required.
+        # git toplevel. The primary gets one commit at a fixed date: the action
+        # takes SOURCE_DATE_EPOCH from primary-root's HEAD when none is given,
+        # and refuses a primary with no commit to take it from.
+        env:
+          GIT_AUTHOR_DATE: '2026-09-10T00:00:00Z'
+          GIT_COMMITTER_DATE: '2026-09-10T00:00:00Z'
         run: |
-          git init -q scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          set -euo pipefail
+          primary=scripts/urs-compile/test_compile_urs/fixtures/readiness/primary
+          git init -q "$primary"
+          git -C "$primary" -c user.name=readiness -c user.email=readiness@example.invalid \
+            commit -q --allow-empty -m "readiness fixture"
           git init -q scripts/urs-compile/test_compile_urs/fixtures/readiness/associate
       - name: Compile the readiness fixture
         uses: ./.github/actions/build-urs
@@ -510,7 +520,10 @@ jobs:
             exit 1
           fi
           grep -q "fedcba9876543210fedcba9876543210fedcba98" "$record"
-          echo "provenance names the stamped source commit."
+          # The default epoch is the primary commit's time, not the clock.
+          grep -q "^Built: 2026-09-10$" "$record"
+          grep -q "^Source date epoch: 1788998400\.$" "$record"
+          echo "provenance names the stamped source commit and the commit's date."
 
   build-oq:
     # End-to-end readiness check for the build-oq composite action: compiles
@@ -530,11 +543,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Initialize fixture repo
         # elspais resolves a project root via `git rev-parse --show-toplevel`;
-        # the fixture needs its own toplevel. No commit required.
+        # the fixture needs its own toplevel. No commit, so the epoch is given
+        # explicitly: with neither, the action refuses rather than use the clock.
         run: git init -q scripts/oq-compile/test_oq_compile/fixtures/readiness/primary
       - name: Compile the readiness fixture
         uses: ./.github/actions/build-oq
         with:
+          source-date-epoch: '1788998400'
           # Tracks the estate-wide elspais pin (consumers' .github/versions.env).
           elspais-version: "0.123.0"
           primary-root: scripts/oq-compile/test_oq_compile/fixtures/readiness/primary
@@ -1183,10 +1198,11 @@ jobs:
             echo "${key}: ${value}"
           }
           decide cosign    '^\.github/(actions|fixtures)/cosign-verify/'
-          decide urs       '^(\.github/actions/build-urs|scripts/urs-compile)/'
+          # Both compiles run scripts/reproducible/normalise.py on what they write.
+          decide urs       '^(\.github/actions/build-urs|scripts/urs-compile|scripts/reproducible)/'
           # oq_compile imports urs_compile (scripts/oq-compile/oq_compile/urs_sections.py),
           # so urs-compile is an input of build-oq as well.
-          decide oq        '^(\.github/actions/build-oq|scripts/(oq|urs)-compile)/'
+          decide oq        '^(\.github/actions/build-oq|scripts/(oq|urs)-compile|scripts/reproducible)/'
           decide preflight '^\.github/actions/sponsor-base-preflight/'
 
   # Implements: HHT-OPS-failure-notification-routing/A
