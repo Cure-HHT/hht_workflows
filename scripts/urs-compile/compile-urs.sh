@@ -28,6 +28,10 @@
 #                       "urs.yaml"). Affects all four deliverable filenames.
 #   PYTHON              Python interpreter (default: python3).
 #   ELSPAIS             elspais CLI (default: elspais).
+#   SOURCE_DATE_EPOCH   Fixes the build date and every timestamp the toolchain
+#                       writes. Set it to rebuild byte-identical deliverables.
+#   COMPILE_IMAGE       The image this compile runs in, as <name>@sha256:<hex>.
+#                       Recorded in the provenance file; a tag is refused.
 #
 # Associate sources are resolved in this order (first non-empty wins):
 #   1. ASSOCIATE_ROOTS env — newline-delimited paths, blank lines skipped.
@@ -56,11 +60,14 @@
 #      LaTeX include-in-header overriding the template's sponsor macros,
 #      assembles the markdown, and runs pandoc once per format.
 #   5. Emits a stand-alone term-index PDF + DOCX alongside the URS body.
-#   6. Writes docs/<name>-build-provenance.md naming the revision of every
+#   6. Normalises the deliverables' PDF identifiers and archive timestamps so
+#      their bytes follow from their content (scripts/reproducible/).
+#   7. Writes docs/<name>-build-provenance.md naming the revision of every
 #      out-of-repo input the deliverables were compiled from: the pinned
 #      commit where a source was obtained from its published artifact, and
-#      git's description where it was a working tree. That record is what
-#      ties a committed deliverable to the source it enumerates.
+#      git's description where it was a working tree, plus the image the
+#      compile ran in when COMPILE_IMAGE names one by digest. That record is
+#      what ties a committed deliverable to the source it enumerates.
 
 set -euo pipefail
 
@@ -207,7 +214,21 @@ pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
 pandoc "${PRIMARY_ROOT}/build/_generated/term-index.md" \
   -o "${PRIMARY_ROOT}/docs/${NAME}-term-index.docx"
 
-# 5) Build-provenance record. Stamp the out-of-repo input versions alongside
+# 5) Make the deliverables' bytes a function of their content. Under one
+#    SOURCE_DATE_EPOCH the content is already reproducible; the PDF trailer
+#    identifier and the DOCX archive timestamps are not, and nothing else
+#    moves (docs/urs-reproducibility-findings.md). Without this a rebuild from
+#    the same inputs cannot be compared byte for byte, so it cannot prove
+#    anything. Unset, the epoch falls back to the ZIP floor rather than the
+#    clock: the archive stamps are not a date anyone reads.
+"${PYTHON}" "${SCRIPT_DIR}/../reproducible/normalise.py" \
+  --epoch "${SOURCE_DATE_EPOCH:-315532800}" \
+  "${PRIMARY_ROOT}/docs/${NAME}.pdf" \
+  "${PRIMARY_ROOT}/docs/${NAME}.docx" \
+  "${PRIMARY_ROOT}/docs/${NAME}-term-index.pdf" \
+  "${PRIMARY_ROOT}/docs/${NAME}-term-index.docx"
+
+# 6) Build-provenance record. Stamp the out-of-repo input versions alongside
 #    the committed deliverables. Versions are derived from git so the script
 #    stays sponsor-agnostic (no repo names baked in).
 PROVENANCE="${PRIMARY_ROOT}/docs/${NAME}-build-provenance.md"
@@ -227,6 +248,19 @@ if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
   BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%d)"
 else
   BUILD_DATE="$(date -u +%Y-%m-%d)"
+fi
+# Identities are resolved before the record is opened, so a refusal (an image
+# named by tag, a history the pipeline fabricated) stops the compile rather
+# than leaving a half-written record.
+IMAGE_REF="$(compile_image)"
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+  EPOCH_TEXT="${SOURCE_DATE_EPOCH}"
+else
+  EPOCH_TEXT="unset, so the build date above is the clock's"
+fi
+if [ -n "${ASSOCIATE_ROOT:-}" ]; then
+  ASSOC_SLUG="$(source_slug "${ASSOCIATE_ROOT}")"
+  ASSOC_VERSION="$(source_version "${ASSOCIATE_ROOT}")"
 fi
 PANDOC_VERSION="$(pandoc --version 2>/dev/null | head -1)" || PANDOC_VERSION=""
 XETEX_VERSION="$(xelatex --version 2>/dev/null | head -1)" || XETEX_VERSION=""
@@ -257,9 +291,14 @@ Built: ${BUILD_DATE}
 | URS compile scripts (\`scripts/urs-compile/\`) | \`${WF_SLUG}\` (external) | \`${WF_VERSION}\` |
 EOF
 
+  if [ -n "${IMAGE_REF}" ]; then
+    # shellcheck disable=SC2016  # literal backticks in the printf format; %s are args
+    printf '| Compile toolchain image | `%s` | `%s` |\n' "${IMAGE_REF%@*}" "${IMAGE_REF#*@}"
+  else
+    printf '| Compile toolchain image | (none: host toolchain) | not pinned by digest |\n'
+  fi
+
   if [ -n "${ASSOCIATE_ROOT:-}" ]; then
-    ASSOC_SLUG="$(source_slug "${ASSOCIATE_ROOT}")"
-    ASSOC_VERSION="$(source_version "${ASSOCIATE_ROOT}")"
     # shellcheck disable=SC2016  # literal backticks in the printf format; %s are args
     printf '| Associate spec source | `%s` (external) | `%s` |\n' "${ASSOC_SLUG}" "${ASSOC_VERSION}"
   fi
@@ -271,6 +310,10 @@ commit that adds these deliverables, so its SHA is not yet known when this file
 is written, and it is implicit in that repo's own history regardless.
 
 Tooling: ${PANDOC_VERSION}, ${XETEX_VERSION}.
+
+Source date epoch: ${EPOCH_TEXT}.
+Compiled again from the same inputs, in the same image, under the same epoch,
+every deliverable listed above is byte-identical.
 EOF
 } > "${PROVENANCE}"
 

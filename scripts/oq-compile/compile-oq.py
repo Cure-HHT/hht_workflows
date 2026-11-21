@@ -143,10 +143,8 @@ def build(
         tool_version=overrides.get("tool_version", ""),
         scope_name=manifest.scope,
         scope_lines=tuple(overrides.get("scope_lines", scope_lines)),
-        generated_at=overrides.get(
-            "generated_at",
-            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        ),
+        generated_at=overrides.get("generated_at") or _generated_at(overrides.get("source_date_epoch")),
+        compile_image=overrides.get("compile_image", ""),
         req_count=len(rows_req),
         uat_count=len(rows_uat),
         sponsor_name=sponsor_name,
@@ -166,6 +164,16 @@ def build(
     return len(rows_req), len(rows_uat)
 
 
+def _generated_at(source_date_epoch: int | None) -> str:
+    """The generated-at stamp: the epoch when one is given, so two compiles of
+    the same inputs write the same sheet, and the clock otherwise."""
+    if source_date_epoch is None:
+        moment = datetime.now(timezone.utc)
+    else:
+        moment = datetime.fromtimestamp(source_date_epoch, tz=timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path)
@@ -177,6 +185,17 @@ def main() -> int:
     parser.add_argument("--associate-commit", action="append", default=[])
     parser.add_argument("--elspais-version", default="")
     parser.add_argument("--tool-version", default="")
+    parser.add_argument(
+        "--compile-image",
+        default="",
+        help="The image this report is compiled in, by digest; empty on a host toolchain.",
+    )
+    parser.add_argument(
+        "--source-date-epoch",
+        type=int,
+        default=None,
+        help="SOURCE_DATE_EPOCH: the generated-at stamp, so a rebuild is byte-identical.",
+    )
     parser.add_argument(
         "--primary-root",
         type=Path,
@@ -210,6 +229,8 @@ def main() -> int:
             "associate_commits": tuple(args.associate_commit),
             "elspais_version": args.elspais_version,
             "tool_version": args.tool_version,
+            "compile_image": args.compile_image,
+            "source_date_epoch": args.source_date_epoch,
         },
         allow_empty=args.allow_empty,
         primary_root=args.primary_root,

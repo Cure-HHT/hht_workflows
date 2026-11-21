@@ -401,6 +401,31 @@ jobs:
       DB_BOOT_LOCK_WAIT_SECONDS: "60"
 
     steps:
+      # Implements: HHT-OPS-cicd-app-operations/R
+      #   A developer-workstation authoring identity (curehht-agent-*, or the
+      #   earlier cure-hht-agent) holds Actions: write so it can re-run failed
+      #   CI jobs; that permission also dispatches the caller. It neither
+      #   starts nor re-runs a production deploy. First, and in this job
+      #   itself, because "Re-run jobs" runs this job alone, without asking the
+      #   environment's reviewers again, and github.triggering_actor is then
+      #   the re-runner. Non-production targets stay open to an agent.
+      - name: Refuse an agent identity as starter or re-runner of a production deploy
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          shopt -s nocasematch
+          # Bare `prod` or `<anything>-prod`, as reset-db.yml reads production.
+          if ! [[ "$TARGET_ENV" =~ ^(.+-)?prod$ ]]; then echo "not production: nothing to refuse"; exit 0; fi
+          for who in "$ACTOR" "$TRIGGERING_ACTOR"; do
+            if [[ "$who" =~ ^cure-?hht-agent ]]; then
+              echo "::error::'$who' is an agent identity. An agent may not start or re-run a production deploy; a person dispatches it."
+              exit 1
+            fi
+          done
+          echo "Starter '$ACTOR', re-runner '${TRIGGERING_ACTOR:-none}': not agent identities."
+
       # The first thing that runs after a reviewer approves. An approval is
       # granted against a digest, and the source environment is free to move
       # while a reviewer decides; without this the approval for one artifact

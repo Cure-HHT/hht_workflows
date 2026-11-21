@@ -21,11 +21,19 @@
 #   TOOL_VERSION        Generator identity for the provenance sheet. Set by
 #                       the composite action to the resolved action ref;
 #                       falls back to this checkout's commit SHA.
+#   PRIMARY_COMMIT      The primary repository's commit, for a tree without
+#                       its history (default: stamp, then git HEAD).
+#   SOURCE_DATE_EPOCH   Fixes the generated-at stamp and the workbook's
+#                       timestamps, so a rebuild is byte-identical.
+#   COMPILE_IMAGE       The image this compile runs in, <name>@sha256:<hex>.
 #   PYTHON              Python interpreter (default: python3).
 #   ELSPAIS             elspais CLI (default: elspais).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# One answer to "which revision is this tree", shared with the URS compile.
+# shellcheck source=scripts/urs-compile/source-identity.sh
+. "${SCRIPT_DIR}/../urs-compile/source-identity.sh"
 PRIMARY_ROOT="${1:-${PRIMARY_ROOT:-$PWD}}"
 ASSOCIATE_ROOT="${2:-${ASSOCIATE_ROOT:-}}"
 MANIFEST="${MANIFEST:-spec/OQ-manifest/oq.yaml}"
@@ -88,7 +96,21 @@ ELSPAIS_VERSION="$("$ELSPAIS" --version | head -1)"
 # SHA to stamp, so this states an explicit "unknown" rather than aborting —
 # unlike the associate/federation steps above, where failure means the
 # report itself would be wrong.
-PRIMARY_COMMIT="$(git -C "$PRIMARY_ROOT" rev-parse HEAD 2>/dev/null)" || PRIMARY_COMMIT="unknown"
+#
+# PRIMARY_COMMIT, when the caller sets it, wins: a pipeline image holds the
+# primary tree without its history and passes the commit it was built for.
+# Otherwise a stamp wins over git, and a history the pipeline fabricated is
+# refused (source_commit returns 2) rather than reported as a revision.
+if [ -z "${PRIMARY_COMMIT:-}" ]; then
+  rc=0
+  PRIMARY_COMMIT="$(source_commit "$PRIMARY_ROOT")" || rc=$?
+  if [ "$rc" -eq 2 ]; then exit 1; fi
+  if [ "$rc" -ne 0 ]; then PRIMARY_COMMIT="unknown"; fi
+fi
+
+# The image this report is compiled in, by digest; empty on a host toolchain.
+# A value naming a tag is refused (compile_image returns 1).
+COMPILE_IMAGE_REF="$(compile_image)"
 
 # TOOL_VERSION identifies the generator on the provenance sheet. A remote
 # `uses:` unpacks this action as a tarball with no .git, so the git derivation
@@ -143,7 +165,13 @@ PYEOF
 declare -a ASSOC_ARGS=()
 for root in "${ROOTS[@]:-}"; do
   [ -z "$root" ] && continue
-  sha="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || sha="unknown"
+  # The stamp an obtained tree carries wins over git. Before, an obtained tree
+  # (no .git) reported "unknown", and one inside a pipeline image reported the
+  # commit the image fabricated over it, which names nothing upstream.
+  rc=0
+  sha="$(source_commit "$root")" || rc=$?
+  if [ "$rc" -eq 2 ]; then exit 1; fi
+  if [ "$rc" -ne 0 ]; then sha="unknown"; fi
   ASSOC_ARGS+=(--associate-commit "$(associate_identity "$root")@${sha}")
 done
 
@@ -158,8 +186,21 @@ declare -a CMD=(
   --primary-commit "$PRIMARY_COMMIT"
   --elspais-version "$ELSPAIS_VERSION"
   --tool-version "$TOOL_VERSION"
+  --compile-image "$COMPILE_IMAGE_REF"
 )
+# The generated-at stamp follows SOURCE_DATE_EPOCH when it is set, so two
+# compiles of the same inputs write the same provenance sheet.
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+  CMD+=(--source-date-epoch "$SOURCE_DATE_EPOCH")
+fi
 if [ "${#ASSOC_ARGS[@]}" -gt 0 ]; then
   CMD+=("${ASSOC_ARGS[@]}")
 fi
 "${CMD[@]}"
+
+# The workbook's archive timestamps and Office clock properties are the only
+# bytes that move between two compiles of the same inputs; fix them so a
+# rebuild can be compared byte for byte.
+"$PYTHON" "${SCRIPT_DIR}/../reproducible/normalise.py" \
+  --epoch "${SOURCE_DATE_EPOCH:-315532800}" \
+  "${PRIMARY_ROOT}/${BUILD_DIR}/oq-report.xlsx"

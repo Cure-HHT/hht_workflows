@@ -41,6 +41,11 @@ on:
       # failure sat unnoticed because nothing ever executed it.
       - 'scripts/urs-compile/**'
       - 'scripts/oq-compile/**'
+      # The normaliser both compiles run on their deliverables.
+      - 'scripts/reproducible/**'
+      # The release evidence bundle: manifest, offline rebuild and admission.
+      - 'scripts/release-bundle/**'
+      - '.github/actions/prove-release-bundle/**'
       # The pipeline mechanism: the wrapper, the ledger and the refusal
       # program. Added WITH the suite rather than after it, because the
       # comment two entries up records what happens otherwise.
@@ -260,6 +265,8 @@ jobs:
         run: |
           set -euo pipefail
           pytest scripts/oq-compile/test_oq_compile/ -v
+          pytest scripts/reproducible/tests/ -v
+          pytest scripts/release-bundle/tests/ -v
 
   # Implements: HHT-OPS-failure-notification-routing/A
   #   The standard job, verbatim — notify-failure-lint checks it literally.

@@ -20,6 +20,31 @@ say exactly the same thing in bytes that are not equal.
 | `docs/urs.pdf` | no | the `/ID` trailer only |
 | `docs/urs-term-index.pdf` | no | same as above |
 
+## What the compile does about it now
+
+Both differences are now removed after rendering, by
+`scripts/reproducible/normalise.py`, which `compile-urs.sh` and `oq-compile.sh`
+run on every deliverable they write:
+
+- **PDF**: each `/ID` pair is replaced by a digest of the file with the
+  identifier blanked. The replacement has the same length, so the
+  cross-reference offsets stay correct, and two documents that say different
+  things keep different identifiers.
+- **DOCX / XLSX**: every archive entry is rewritten with the epoch's timestamp,
+  in a fixed order (`[Content_Types].xml` first, then by name), with fixed
+  attributes; the Office `created` / `modified` properties are set to the epoch.
+
+The cause of the DOCX inconsistency below is python-docx: `compile-urs.py`
+re-saves `urs.docx` after pandoc writes it, and that save stamps the wall
+clock. `urs-term-index.docx` is never re-saved, which is why it came out stable.
+openpyxl does the same to the OQ workbook, and also writes the clock into the
+workbook's own properties.
+
+So under one `SOURCE_DATE_EPOCH`, in one toolchain image, every deliverable is
+byte-identical, and a rebuild can be compared with `cmp`. The table above
+describes the renderer's raw output and is kept as the measurement that
+motivated the normaliser.
+
 ## What the PDF difference actually is
 
 Both files are 58928 bytes and their extracted text is identical. They diverge
