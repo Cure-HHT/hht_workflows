@@ -42,7 +42,6 @@ look — they live under the same `Cure-HHT` GitHub organization:
   branding, specs, and IaC.
 - **`event_sourcing`**, **`dart_opentimestamps`** (public) — shared Dart
   libraries.
-- **`testlab-dashboard`** (private) — Firebase Test Lab dashboard data.
 
 Confidential infrastructure — Terraform, secrets, and any customer-identifying
 configuration — lives only in the private repos. The public repos (this one,
@@ -73,9 +72,6 @@ each action's README for usage):
 | [`previous-run-conclusion`](.github/actions/previous-run-conclusion/) | Report the previous completed run's conclusion for the current workflow/branch, so pager workflows can post green "recovered" messages after red runs |
 | [`release-notes-publish`](.github/actions/release-notes-publish/) | Slice the current version's section from `RELEASE_NOTES.md` + pending fragments and emit as step outputs for downstream Slack/release tooling |
 | [`confidential-terms-scan`](.github/actions/confidential-terms-scan/) | Four-surface confidential-terms scan (content, names, paths, PR metadata); prohibit list fetched at scan time from the consumer's scan-* Doppler project |
-| [`firebase-test-lab-android`](.github/actions/firebase-test-lab-android/) | Run an Android instrumentation matrix on Firebase Test Lab; capture evidence + catalog, expose the matrix exit code as an output |
-| [`firebase-test-lab-ios`](.github/actions/firebase-test-lab-ios/) | Run an iOS XCTest matrix on Firebase Test Lab with catalog-aware device fallback and exit-15 retries; expose the matrix exit code as an output |
-| [`testlab-dashboard-publish`](.github/actions/testlab-dashboard-publish/) | Recover Test Lab run IDs from evidence, fetch Tool Results, and commit `dashboard_data.json` to the dashboard repo via a per-job App token |
 | [`sponsor-base-preflight`](.github/actions/sponsor-base-preflight/) | Reject a sponsor build whose core base images are not digest-pinned, or whose pinned `portal-server` does not declare every permission the sponsor's `role-permissions.yaml` grants |
 | [`build-oq`](.github/actions/build-oq/) | Generate the OQ traceability deliverables (committed CSV extract plus a run-bound workbook) from the elspais graph of the calling repo and its associates; requires a pinned `elspais-version` input |
 | [`notify-failure`](.github/actions/notify-failure/) | The single way a workflow announces its own failure: derives the failed job/step from the run's own jobs API (no per-workflow config, no workflow-name list) and delegates the post to `slack-notify` |
