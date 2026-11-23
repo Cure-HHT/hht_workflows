@@ -608,7 +608,7 @@ jobs:
       # Implements: DIARY-OPS-deploy-traffic-gating/A
       - name: Deploy canary (no traffic)
         id: canary
-        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@3d9b218c541a05dce7d739c4ed5ac13081990607  # v2.0.0
+        uses: Cure-HHT/hht_workflows/.github/actions/cloud-run-deploy-no-traffic@3d6eee08ad5fed7f99731a05254deea5d3b7037a  # v2.2.0
         with:
           service: ${{ inputs.service-name }}
           region: ${{ env.GCP_REGION }}
@@ -973,7 +973,7 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
 
       - name: Generate SBOM (CycloneDX) for the deployed image
         env:
